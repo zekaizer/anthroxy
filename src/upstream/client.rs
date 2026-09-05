@@ -53,7 +53,8 @@ pub enum UpstreamError {
     },
 }
 
-fn describe(error: &reqwest::Error) -> String {
+/// The error with its full source chain, e.g. `error sending request: ... : Connection refused`.
+pub fn describe(error: &reqwest::Error) -> String {
     let mut text = error.to_string();
     let mut source = std::error::Error::source(error);
     while let Some(inner) = source {

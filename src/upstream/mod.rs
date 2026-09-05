@@ -3,6 +3,7 @@
 mod backend;
 mod client;
 mod headers;
+pub mod probe;
 mod retry;
 
 #[cfg(test)]
