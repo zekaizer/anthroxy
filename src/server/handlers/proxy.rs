@@ -90,25 +90,17 @@ async fn handle(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or("/");
-    let mut recorder = match &state.body_log {
-        Some(log) => Some(
-            log.begin(
-                request_record(
-                    request_id,
-                    &parts,
-                    path_and_query,
-                    &requested_model,
-                    route,
-                    backend,
-                    peek.stream,
-                )
-                .await,
-                &body,
-                started,
-            ),
-        ),
-        None => None,
-    };
+    let mut recorder = state.body_log.as_ref().map(|log| {
+        let record = request_record(
+            request_id,
+            &parts,
+            &requested_model,
+            route,
+            backend,
+            peek.stream,
+        );
+        log.begin(record, &body, started)
+    });
     let upstream = state
         .upstream
         .send(UpstreamRequest {
@@ -176,34 +168,32 @@ async fn handle(
     Ok(response)
 }
 
-/// Snapshot for the body log. Headers are recorded as they go upstream; the
-/// credential value is redacted through its sensitive flag.
-#[allow(clippy::too_many_arguments)]
-async fn request_record(
+/// Snapshot for the body log. Headers are recorded as they go upstream minus
+/// the credential header, which is added at send time and never written.
+fn request_record(
     request_id: &RequestId,
     parts: &http::request::Parts,
-    path_and_query: &str,
     requested_model: &str,
     route: &crate::routing::Route,
     backend: &crate::upstream::Backend,
     stream: bool,
 ) -> RequestRecord {
-    let credential = backend.credential.credential().await.ok().flatten();
     RequestRecord {
         request_id: request_id.as_str().to_owned(),
         received_at: jiff::Timestamp::now().to_string(),
         method: parts.method.to_string(),
-        path: path_and_query.to_owned(),
+        path: parts
+            .uri
+            .path_and_query()
+            .map(|p| p.as_str())
+            .unwrap_or("/")
+            .to_owned(),
         requested_model: requested_model.to_owned(),
         model: route.id.clone(),
         upstream_model: route.upstream_model.clone(),
         backend: backend.name.clone(),
         stream,
-        request_headers: headers_for_record(&upstream_headers(
-            &parts.headers,
-            backend,
-            credential.as_ref(),
-        )),
+        request_headers: headers_for_record(&upstream_headers(&parts.headers, backend, None)),
     }
 }
 

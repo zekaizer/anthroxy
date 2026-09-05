@@ -122,9 +122,11 @@ async fn records_request_and_json_response() {
         meta["request_headers"]["anthropic-beta"],
         "x-beta,oauth-2025-04-20"
     );
-    assert_eq!(
-        meta["request_headers"]["authorization"], "<redacted>",
-        "credentials never land on disk"
+    assert!(
+        meta["request_headers"].get("authorization").is_none()
+            && meta["request_headers"].get("x-api-key").is_none(),
+        "credentials never land on disk: {}",
+        meta["request_headers"]
     );
     assert_eq!(meta["response_headers"]["content-type"], "application/json");
 }
