@@ -4,3 +4,31 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
+axum = "0.8"
+bytes = "1.12.1"
+clap = { version = "4.6.6", features = ["derive", "env", "wrap_help"] }
+dirs = "7.0.0"
+futures-util = "0.3.34"
+http = "1.5.0"
+http-body-util = "0.1.5"
+humantime = "2.4.0"
+humantime-serde = "1.1.1"
+jiff = "0.2.35"
+rand = "0.10.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+subtle = "2.6.1"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["full"] }
+toml = "1.1.5"
+tower = "0.5.3"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
+uuid = { version = "1.26.0", features = ["v4"] }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+tempfile = "3.27.0"
