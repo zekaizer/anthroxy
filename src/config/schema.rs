@@ -1,0 +1,236 @@
+//! Serde types mirroring the configuration file. Field defaults live here;
+//! cross-field rules live in `validate`.
+
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+use super::byte_size;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub server: ServerConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
+    #[serde(default)]
+    pub upstream: UpstreamConfig,
+    #[serde(default)]
+    pub backends: BTreeMap<String, BackendConfig>,
+    #[serde(default)]
+    pub models: Vec<ModelConfig>,
+    #[serde(default)]
+    pub routing: RoutingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerConfig {
+    /// Socket the router listens on. `0.0.0.0` so the Windows host can reach a
+    /// WSL2 instance under both NAT and mirrored networking.
+    #[serde(default = "ServerConfig::default_listen")]
+    pub listen: SocketAddr,
+    /// Static token Claude Code must present (`x-api-key` or bearer).
+    pub token: String,
+    /// Largest accepted request body.
+    #[serde(default = "ServerConfig::default_max_body", with = "byte_size")]
+    pub max_body_bytes: usize,
+}
+
+impl ServerConfig {
+    pub fn default_listen() -> SocketAddr {
+        "0.0.0.0:8787".parse().expect("valid literal")
+    }
+    pub const fn default_max_body() -> usize {
+        64 * 1024 * 1024
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoggingConfig {
+    /// `tracing` filter directive, e.g. `info` or `claude_router=debug,info`.
+    #[serde(default = "LoggingConfig::default_level")]
+    pub level: String,
+    #[serde(default)]
+    pub format: LogFormat,
+    /// When set, every proxied request and response body is written under this
+    /// directory.
+    #[serde(default)]
+    pub body_dir: Option<PathBuf>,
+}
+
+impl LoggingConfig {
+    pub fn default_level() -> String {
+        "info".to_owned()
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: Self::default_level(),
+            format: LogFormat::default(),
+            body_dir: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamConfig {
+    #[serde(
+        default = "UpstreamConfig::default_connect_timeout",
+        with = "humantime_serde"
+    )]
+    pub connect_timeout: Duration,
+    /// Maximum silence between two chunks of an upstream response.
+    #[serde(
+        default = "UpstreamConfig::default_read_timeout",
+        with = "humantime_serde"
+    )]
+    pub read_timeout: Duration,
+    /// Additional attempts after a connection failure.
+    #[serde(default = "UpstreamConfig::default_retries")]
+    pub retries: u32,
+    /// Delay before the first retry; doubles on each further attempt.
+    #[serde(
+        default = "UpstreamConfig::default_retry_backoff",
+        with = "humantime_serde"
+    )]
+    pub retry_backoff: Duration,
+    /// Upstream status codes that are retried like a connection failure.
+    #[serde(default)]
+    pub retry_on_status: Vec<u16>,
+}
+
+impl UpstreamConfig {
+    pub const fn default_connect_timeout() -> Duration {
+        Duration::from_secs(10)
+    }
+    pub const fn default_read_timeout() -> Duration {
+        Duration::from_secs(300)
+    }
+    pub const fn default_retries() -> u32 {
+        2
+    }
+    pub const fn default_retry_backoff() -> Duration {
+        Duration::from_millis(200)
+    }
+}
+
+impl Default for UpstreamConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Self::default_connect_timeout(),
+            read_timeout: Self::default_read_timeout(),
+            retries: Self::default_retries(),
+            retry_backoff: Self::default_retry_backoff(),
+            retry_on_status: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendConfig {
+    /// Origin of the backend, e.g. `http://127.0.0.1:8000`. The request path is
+    /// appended unchanged.
+    pub url: String,
+    #[serde(default)]
+    pub credential: CredentialConfig,
+    /// Headers set on every upstream request, overriding the client's value.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    /// Beta flags merged into the client's `anthropic-beta` header.
+    #[serde(default)]
+    pub anthropic_beta: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CredentialConfig {
+    #[default]
+    None,
+    Static {
+        value: String,
+        #[serde(default)]
+        header: CredentialHeader,
+    },
+    Env {
+        name: String,
+        #[serde(default)]
+        header: CredentialHeader,
+    },
+    /// `command` runs through `sh -c`; trimmed stdout is the credential.
+    Command {
+        command: String,
+        #[serde(
+            default = "CredentialConfig::default_refresh",
+            with = "humantime_serde"
+        )]
+        refresh: Duration,
+        #[serde(
+            default = "CredentialConfig::default_timeout",
+            with = "humantime_serde"
+        )]
+        timeout: Duration,
+        #[serde(default)]
+        header: CredentialHeader,
+    },
+}
+
+impl CredentialConfig {
+    pub const fn default_refresh() -> Duration {
+        Duration::from_secs(300)
+    }
+    pub const fn default_timeout() -> Duration {
+        Duration::from_secs(10)
+    }
+}
+
+/// How a credential is presented to the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialHeader {
+    /// `Authorization: Bearer <credential>`
+    #[default]
+    Bearer,
+    /// `x-api-key: <credential>`
+    XApiKey,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelConfig {
+    /// Identifier Claude Code sees and sends in `model`.
+    pub id: String,
+    pub backend: String,
+    /// Model name sent upstream; defaults to `id`.
+    #[serde(default)]
+    pub upstream_model: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Further identifiers routed to this model.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingConfig {
+    /// Model that receives requests naming an unknown model. Unset rejects them.
+    #[serde(default)]
+    pub default_model: Option<String>,
+}
