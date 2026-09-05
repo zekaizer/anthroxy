@@ -60,6 +60,9 @@ pub struct Recorder {
     started: Instant,
     response: Vec<u8>,
     response_ext: &'static str,
+    /// The initial write; the final write is ordered after it so `meta.json`
+    /// always ends in its complete form.
+    pending: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl BodyLog {
@@ -89,12 +92,13 @@ impl BodyLog {
             response_bytes: None,
             duration_ms: None,
         };
-        write_files(
+        let pending = write_files(
             dir.clone(),
             vec![
                 ("request.json", body.to_vec()),
                 ("meta.json", to_pretty_json(&meta)),
             ],
+            None,
         );
         Recorder {
             dir,
@@ -102,6 +106,7 @@ impl BodyLog {
             started,
             response: Vec::new(),
             response_ext: "bin",
+            pending,
         }
     }
 }
@@ -120,8 +125,14 @@ fn to_pretty_json(value: &impl Serialize) -> Vec<u8> {
     serde_json::to_vec_pretty(value).expect("records serialize")
 }
 
-/// Writes off the request path; failures are logged, never propagated.
-fn write_files(dir: PathBuf, files: Vec<(&'static str, Vec<u8>)>) {
+/// Writes off the request path, after `after` when given; failures are
+/// logged, never propagated. Each file is written to a temporary name and
+/// renamed, so readers never observe a partial file.
+fn write_files(
+    dir: PathBuf,
+    files: Vec<(&'static str, Vec<u8>)>,
+    after: Option<tokio::task::JoinHandle<()>>,
+) -> Option<tokio::task::JoinHandle<()>> {
     let span = tracing::Span::current();
     let write = move || {
         let _guard = span.enter();
@@ -131,16 +142,25 @@ fn write_files(dir: PathBuf, files: Vec<(&'static str, Vec<u8>)>) {
         }
         for (name, bytes) in files {
             let path = dir.join(name);
-            if let Err(error) = std::fs::write(&path, bytes) {
+            let temp = dir.join(format!("{name}.tmp"));
+            if let Err(error) =
+                std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, &path))
+            {
                 tracing::error!(path = %path.display(), %error, "cannot write body log file");
             }
         }
     };
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn_blocking(write);
+        Ok(handle) => Some(handle.spawn(async move {
+            if let Some(previous) = after {
+                let _ = previous.await;
+            }
+            let _ = tokio::task::spawn_blocking(write).await;
+        })),
+        Err(_) => {
+            write();
+            None
         }
-        Err(_) => write(),
     }
 }
 
@@ -205,6 +225,7 @@ impl RelayObserver for Recorder {
                 (response_name, std::mem::take(&mut self.response)),
                 ("meta.json", to_pretty_json(&self.meta)),
             ],
+            self.pending.take(),
         );
         tracing::debug!(dir = %self.dir.display(), "exchange recorded");
     }

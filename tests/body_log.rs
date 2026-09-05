@@ -15,22 +15,25 @@ fn body(model: &str, stream: bool) -> Value {
     json!({"model": model, "max_tokens": 8, "stream": stream, "messages": [{"role": "user", "content": "hi"}]})
 }
 
-/// Waits for the asynchronous writer to finish `count` request directories.
+/// Waits until `count` request directories carry a finished `meta.json`
+/// (one with `outcome`). Files are renamed into place, so a present file is a
+/// complete file.
 async fn wait_for_entries(dir: &Path, count: usize) -> Vec<PathBuf> {
     for _ in 0..100 {
         let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
             .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
             .unwrap_or_default();
         entries.sort();
-        let complete = entries
+        let finished = entries
             .iter()
-            .filter(|e| e.join("meta.json").exists() && e.join("request.json").exists())
+            .filter(|e| {
+                std::fs::read(e.join("meta.json"))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                    .is_some_and(|m| m.get("outcome").is_some())
+            })
             .count();
-        if complete >= count
-            && entries
-                .iter()
-                .all(|e| std::fs::read_dir(e).unwrap().count() >= 3)
-        {
+        if finished >= count {
             return entries;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
