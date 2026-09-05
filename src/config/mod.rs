@@ -7,6 +7,7 @@
 mod byte_size;
 mod env;
 mod error;
+pub mod example;
 mod schema;
 mod validate;
 
