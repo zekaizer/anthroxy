@@ -1,8 +1,8 @@
 //! Router configuration: schema, loading and validation.
 //!
-//! A configuration is a TOML document (see ADR-0002). `${NAME}` references are
-//! replaced with environment variables before parsing; `$${NAME}` yields a
-//! literal `${NAME}`.
+//! A configuration is a TOML document (see ADR-0002). `${NAME}` inside any
+//! string value is replaced with the environment variable `NAME`; `$${NAME}`
+//! yields a literal `${NAME}`. Keys and comments are never expanded.
 
 mod byte_size;
 mod env;
@@ -42,14 +42,18 @@ impl Config {
         Config::parse(&text, |name| std::env::var(name).ok())
     }
 
-    /// Parses `text`, resolving `${NAME}` through `lookup`, then validates.
+    /// Parses `text`, resolving `${NAME}` in string values through `lookup`,
+    /// then validates.
     pub fn parse(
         text: &str,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, ConfigError> {
-        let expanded = env::expand(text, lookup)?;
-        let mut config: Config =
-            toml::from_str(&expanded).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let mut document: toml::Value =
+            toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        env::expand_value(&mut document, &lookup)?;
+        let mut config: Config = document
+            .try_into()
+            .map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))?;
         normalize(&mut config);
         validate::validate(&config)?;
         Ok(config)

@@ -158,6 +158,24 @@ fn env_expansion_reports_missing_variable() {
 }
 
 #[test]
+fn env_expansion_ignores_comments_and_keys() {
+    let text = r#"
+# a comment mentioning ${NOT_SET}
+[server]
+token = "t"
+
+[backends."b-${LITERAL_KEY}"]
+url = "http://x"
+
+[[models]]
+id = "m"
+backend = "b-$${LITERAL_KEY}"
+"#;
+    let c = parse(text).unwrap();
+    assert!(c.backends.contains_key("b-${LITERAL_KEY}"));
+}
+
+#[test]
 fn env_expansion_leaves_bare_dollar_alone() {
     let text = MINIMAL.to_owned() + "\n[backends.local.headers]\nx = \"cost $5 and $x\"\n";
     let c = parse(&text).unwrap();

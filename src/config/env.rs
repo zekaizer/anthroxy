@@ -1,10 +1,35 @@
-//! `${NAME}` expansion over the raw configuration text.
+//! `${NAME}` expansion over string values of a parsed TOML document. Keys and
+//! comments are never touched.
 
 use super::ConfigError;
 
+/// Expands every string value in `value`, recursively.
+pub fn expand_value(
+    value: &mut toml::Value,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<(), ConfigError> {
+    match value {
+        toml::Value::String(text) => {
+            *text = expand(text, lookup)?;
+        }
+        toml::Value::Array(items) => {
+            for item in items {
+                expand_value(item, lookup)?;
+            }
+        }
+        toml::Value::Table(table) => {
+            for (_, item) in table.iter_mut() {
+                expand_value(item, lookup)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Replaces every `${NAME}` with `lookup(NAME)`. `$${NAME}` emits a literal
 /// `${NAME}`. A `$` not followed by `{` is copied unchanged.
-pub fn expand(text: &str, lookup: impl Fn(&str) -> Option<String>) -> Result<String, ConfigError> {
+pub fn expand(text: &str, lookup: &impl Fn(&str) -> Option<String>) -> Result<String, ConfigError> {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(pos) = rest.find('$') {
