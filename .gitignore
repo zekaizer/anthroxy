@@ -16,34 +16,11 @@ Thumbs.db
 *.pem
 *.key
 
-# Local-only config (never committed)
+# Local-only config and notes (never committed)
 CLAUDE.local.md
 .local/
 .claude/settings.local.json
 
-# Node
-node_modules/
-dist/
-build/
-coverage/
-*.log
-npm-debug.log*
-yarn-error.log*
-
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Rust / Go
+# Rust
 target/
-bin/
-
-# Temp
-tmp/
-*.tmp
+*.log
