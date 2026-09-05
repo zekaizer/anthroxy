@@ -253,3 +253,43 @@ fn load_reports_unreadable_path() {
     assert!(matches!(err, ConfigError::Read { .. }), "{err}");
     assert!(err.to_string().contains("/definitely/not/here.toml"));
 }
+
+#[test]
+fn validation_rejects_header_values_and_beta_flags_that_cannot_be_sent() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+headers = { "x-ok" = "fine", "x-bad" = "line\nbreak" }
+anthropic_beta = ["fine-2026-01-01", "has,comma", "line\nbreak"]
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    assert!(joined.contains("backends.a.headers: `x-bad`"), "{joined}");
+    assert!(
+        joined.contains("anthropic_beta") && joined.contains("has,comma"),
+        "{joined}"
+    );
+    assert!(joined.contains("line\\nbreak"), "{joined}");
+    assert_eq!(p.len(), 3, "{joined}");
+}
+
+#[test]
+fn body_dir_tilde_expands_to_home() {
+    let text = MINIMAL.to_owned() + "\n[logging]\nbody_dir = \"~/state/bodies\"\n";
+    let c = parse(&text).unwrap();
+    let home = dirs::home_dir().unwrap();
+    assert_eq!(c.logging.body_dir.unwrap(), home.join("state/bodies"));
+
+    let text = MINIMAL.to_owned() + "\n[logging]\nbody_dir = \"/abs/path\"\n";
+    assert_eq!(
+        parse(&text).unwrap().logging.body_dir.unwrap(),
+        std::path::PathBuf::from("/abs/path")
+    );
+}

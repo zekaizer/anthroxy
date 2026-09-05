@@ -62,11 +62,18 @@ impl Config {
 }
 
 /// Canonical forms that later layers rely on: backend URLs carry no trailing
-/// slash, so `url + path` never produces `//`.
+/// slash, so `url + path` never produces `//`; a leading `~/` in paths means
+/// the home directory.
 fn normalize(config: &mut Config) {
     for backend in config.backends.values_mut() {
         while backend.url.ends_with('/') {
             backend.url.pop();
         }
+    }
+    if let Some(dir) = &config.logging.body_dir
+        && let Ok(rest) = dir.strip_prefix("~")
+        && let Some(home) = dirs::home_dir()
+    {
+        config.logging.body_dir = Some(home.join(rest));
     }
 }

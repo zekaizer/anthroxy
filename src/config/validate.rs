@@ -43,10 +43,22 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             }
             _ => {}
         }
-        for header in backend.headers.keys() {
+        for (header, value) in &backend.headers {
             if http::HeaderName::from_bytes(header.as_bytes()).is_err() {
                 problems.push(format!(
                     "backends.{name}.headers: `{header}` is not a valid header name"
+                ));
+            } else if http::HeaderValue::from_str(value).is_err() {
+                problems.push(format!(
+                    "backends.{name}.headers: `{header}` has a value that cannot be sent in a header"
+                ));
+            }
+        }
+        for flag in &backend.anthropic_beta {
+            if flag.contains(',') || http::HeaderValue::from_str(flag).is_err() {
+                problems.push(format!(
+                    "backends.{name}.anthropic_beta: `{}` is not a single header-safe flag",
+                    flag.escape_debug()
                 ));
             }
         }
