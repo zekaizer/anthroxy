@@ -100,6 +100,10 @@ impl CredentialSource for CommandCredential {
         *self.cache.lock().await = None;
     }
 
+    fn is_refreshable(&self) -> bool {
+        true
+    }
+
     fn describe(&self) -> String {
         format!(
             "command `{}` (refresh {}, timeout {})",

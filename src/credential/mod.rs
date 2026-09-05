@@ -110,6 +110,12 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
     /// Forgets any cached value so the next call re-acquires it.
     async fn invalidate(&self);
 
+    /// Whether `invalidate` can yield a different credential. Callers skip the
+    /// 401-refresh cycle when it cannot.
+    fn is_refreshable(&self) -> bool {
+        false
+    }
+
     /// One-line human description for status output.
     fn describe(&self) -> String;
 }
