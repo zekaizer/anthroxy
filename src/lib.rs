@@ -4,6 +4,7 @@
 //! All behaviour lives here. `src/main.rs` only parses the command line and
 //! calls into this crate.
 
+pub mod anthropic;
 pub mod config;
 pub mod credential;
 pub mod routing;
