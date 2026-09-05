@@ -15,11 +15,13 @@ pub struct Probe {
 
 #[derive(Debug)]
 pub enum ModelsProbe {
-    /// The backend answered; `ids` is filled when the body listed models.
+    /// The backend answered; `ids` is filled when the body listed models,
+    /// `detail` when it carried an error message.
     Answered {
         status: u16,
         latency: Duration,
         ids: Vec<String>,
+        detail: Option<String>,
     },
     Unreachable(String),
 }
@@ -41,7 +43,17 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
             models: None,
         };
     };
-    let headers = upstream_headers(&http::HeaderMap::new(), backend, credential_value.as_ref());
+    // What Claude Code always sends; backend `headers` still override.
+    let mut base = http::HeaderMap::new();
+    base.insert(
+        "anthropic-version",
+        http::HeaderValue::from_static("2023-06-01"),
+    );
+    base.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+    let headers = upstream_headers(&base, backend, credential_value.as_ref());
     let started = Instant::now();
     let models = match http
         .get(format!("{}/v1/models", backend.url))
@@ -52,17 +64,19 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
         Ok(response) => {
             let status = response.status().as_u16();
             let latency = started.elapsed();
-            let ids = response
-                .bytes()
-                .await
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .map(model_ids)
-                .unwrap_or_default();
+            let body = response.bytes().await.unwrap_or_default();
+            let json = serde_json::from_slice::<serde_json::Value>(&body).ok();
+            let ids = json.as_ref().map(model_ids).unwrap_or_default();
+            let detail = if (200..300).contains(&status) {
+                None
+            } else {
+                Some(error_detail(json.as_ref(), &body))
+            };
             ModelsProbe::Answered {
                 status,
                 latency,
                 ids,
+                detail,
             }
         }
         Err(error) => ModelsProbe::Unreachable(super::client::describe(&error)),
@@ -73,8 +87,24 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
     }
 }
 
+/// `error.message` of an Anthropic error, else the first line of the body.
+fn error_detail(json: Option<&serde_json::Value>, body: &[u8]) -> String {
+    json.and_then(|j| j.pointer("/error/message"))
+        .and_then(|m| m.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            let text = String::from_utf8_lossy(body);
+            text.lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(160)
+                .collect()
+        })
+}
+
 /// `data[].id` of either an Anthropic or an OpenAI model list.
-fn model_ids(body: serde_json::Value) -> Vec<String> {
+fn model_ids(body: &serde_json::Value) -> Vec<String> {
     body.get("data")
         .and_then(|d| d.as_array())
         .map(|items| {
@@ -95,8 +125,18 @@ mod tests {
         let anthropic =
             serde_json::json!({"data": [{"id": "a", "type": "model"}], "has_more": false});
         let openai = serde_json::json!({"object": "list", "data": [{"id": "x", "object": "model"}, {"id": "y"}]});
-        assert_eq!(model_ids(anthropic), vec!["a"]);
-        assert_eq!(model_ids(openai), vec!["x", "y"]);
-        assert!(model_ids(serde_json::json!({"error": "nope"})).is_empty());
+        assert_eq!(model_ids(&anthropic), vec!["a"]);
+        assert_eq!(model_ids(&openai), vec!["x", "y"]);
+        assert!(model_ids(&serde_json::json!({"error": "nope"})).is_empty());
+    }
+
+    #[test]
+    fn error_detail_prefers_anthropic_message() {
+        let json = serde_json::json!({"type":"error","error":{"type":"invalid_request_error","message":"anthropic-version header is required"}});
+        assert_eq!(
+            error_detail(Some(&json), b"{}"),
+            "anthropic-version header is required"
+        );
+        assert_eq!(error_detail(None, b"<html>\nnope"), "<html>");
     }
 }

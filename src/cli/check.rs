@@ -151,6 +151,7 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
             status,
             latency,
             ids,
+            detail,
         }) => {
             let count = if ids.is_empty() {
                 String::new()
@@ -161,11 +162,12 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
                 "GET /v1/models → HTTP {status} in {} ms{count}",
                 latency.as_millis()
             );
-            let line = if (200..300).contains(status) {
-                style.ok(&text)
-            } else {
-                ok = false;
-                style.err(&text)
+            let line = match detail {
+                None => style.ok(&text),
+                Some(detail) => {
+                    ok = false;
+                    style.err(&format!("{text}: {detail}"))
+                }
             };
             (line, Some(ids.clone()))
         }
