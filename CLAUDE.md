@@ -21,7 +21,17 @@ cargo fmt
 
 - `src/lib.rs` — the library. All behaviour lives here; integration tests target this crate.
 - `src/main.rs` — the `claude-router` binary. Thin entry point: parse the command line, call the library. No logic.
-- Module structure below `lib.rs` is not designed yet; do not invent one ahead of the design step.
+- One module per responsibility, one file per concern; add a file rather than growing one:
+  - `config/` — TOML schema, `${ENV}` expansion, validation, the `init` example.
+  - `anthropic/` — wire types the router emits or inspects (errors, model list, `model` peek/rewrite).
+  - `routing/` — model id/alias → backend + upstream model.
+  - `credential/` — `CredentialSource` trait; fixed and command-backed sources.
+  - `upstream/` — backend registry, header translation, retry policy, HTTP client, probe.
+  - `server/` — axum app: request id span, client auth, handlers (`health`, `models`, `proxy`), relay stream, error mapping.
+  - `observability/` — tracing subscriber, per-request body capture (a relay observer).
+  - `service/` — systemd user unit.
+  - `cli/` — clap grammar and one file per subcommand.
+- `tests/` — black-box tests: `proxy.rs`/`body_log.rs` against a mock backend in `tests/support/`, `cli.rs` against the binary.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed docs.
 
