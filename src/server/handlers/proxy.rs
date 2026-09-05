@@ -10,11 +10,14 @@ use http::HeaderValue;
 use http_body_util::LengthLimitError;
 
 use crate::anthropic;
+use crate::observability::RequestRecord;
+use crate::observability::body_log::headers_for_record;
 use crate::server::annotate::annotate_upstream_error;
 use crate::server::relay::{Relay, TracingObserver};
 use crate::server::{AppState, RequestId, RouterError};
 use crate::upstream::{
     UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, response_headers,
+    upstream_headers,
 };
 
 pub async fn proxy(
@@ -87,6 +90,25 @@ async fn handle(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or("/");
+    let mut recorder = match &state.body_log {
+        Some(log) => Some(
+            log.begin(
+                request_record(
+                    request_id,
+                    &parts,
+                    path_and_query,
+                    &requested_model,
+                    route,
+                    backend,
+                    peek.stream,
+                )
+                .await,
+                &body,
+                started,
+            ),
+        ),
+        None => None,
+    };
     let upstream = state
         .upstream
         .send(UpstreamRequest {
@@ -103,6 +125,15 @@ async fn handle(
         latency_ms = upstream.latency.as_millis() as u64,
         "upstream responded"
     );
+
+    if let Some(recorder) = recorder.as_mut() {
+        recorder.response_started(
+            upstream.status,
+            &upstream.headers,
+            upstream.attempts,
+            upstream.latency.as_millis() as u64,
+        );
+    }
 
     let mut headers = response_headers(&upstream.headers);
     headers.insert(X_ROUTER_BACKEND.clone(), header_value(&backend.name));
@@ -123,13 +154,19 @@ async fn handle(
             bytes = raw.len(),
             "upstream returned an error"
         );
+        if let Some(recorder) = recorder.take() {
+            recorder.finish_with_body(&raw);
+        }
         match annotate_upstream_error(&raw, &backend.name, upstream.status, request_id.as_str()) {
             Some(annotated) => Body::from(annotated),
             None => Body::from(raw),
         }
     } else {
-        let relay =
+        let mut relay =
             Relay::new(upstream.body.bytes_stream(), span).observe(TracingObserver::new(started));
+        if let Some(recorder) = recorder.take() {
+            relay = relay.observe(recorder);
+        }
         Body::from_stream(relay)
     };
 
@@ -137,6 +174,37 @@ async fn handle(
     *response.status_mut() = upstream.status;
     *response.headers_mut() = headers;
     Ok(response)
+}
+
+/// Snapshot for the body log. Headers are recorded as they go upstream; the
+/// credential value is redacted through its sensitive flag.
+#[allow(clippy::too_many_arguments)]
+async fn request_record(
+    request_id: &RequestId,
+    parts: &http::request::Parts,
+    path_and_query: &str,
+    requested_model: &str,
+    route: &crate::routing::Route,
+    backend: &crate::upstream::Backend,
+    stream: bool,
+) -> RequestRecord {
+    let credential = backend.credential.credential().await.ok().flatten();
+    RequestRecord {
+        request_id: request_id.as_str().to_owned(),
+        received_at: jiff::Timestamp::now().to_string(),
+        method: parts.method.to_string(),
+        path: path_and_query.to_owned(),
+        requested_model: requested_model.to_owned(),
+        model: route.id.clone(),
+        upstream_model: route.upstream_model.clone(),
+        backend: backend.name.clone(),
+        stream,
+        request_headers: headers_for_record(&upstream_headers(
+            &parts.headers,
+            backend,
+            credential.as_ref(),
+        )),
+    }
 }
 
 async fn read_body(body: Body, limit: usize) -> Result<Bytes, RouterError> {

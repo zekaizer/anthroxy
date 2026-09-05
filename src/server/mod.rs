@@ -4,7 +4,7 @@ mod annotate;
 mod auth;
 mod error;
 mod handlers;
-mod relay;
+pub mod relay;
 mod request_id;
 mod routes;
 mod state;
@@ -16,6 +16,7 @@ use axum::Router;
 use tokio::net::TcpListener;
 
 use crate::config::Config;
+use crate::observability::BodyLog;
 use crate::routing::Registry;
 use crate::upstream::{Backends, UpstreamClient};
 
@@ -30,6 +31,12 @@ pub enum ServerBuildError {
     Backend(#[from] crate::upstream::BackendBuildError),
     #[error("cannot build HTTP client: {0}")]
     Client(#[from] reqwest::Error),
+    #[error("cannot open body log directory {dir}: {source}")]
+    BodyLog {
+        dir: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// A configured but not yet listening router.
@@ -39,6 +46,15 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: &Config) -> Result<Self, ServerBuildError> {
+        let body_log = match &config.logging.body_dir {
+            Some(dir) => Some(Arc::new(BodyLog::open(dir).map_err(|source| {
+                ServerBuildError::BodyLog {
+                    dir: dir.clone(),
+                    source,
+                }
+            })?)),
+            None => None,
+        };
         let state = AppState {
             registry: Arc::new(Registry::from_config(config)),
             backends: Arc::new(Backends::from_config(config)?),
@@ -46,6 +62,7 @@ impl Server {
             client_token: Arc::new(ClientToken::new(&config.server.token)),
             max_body_bytes: config.server.max_body_bytes,
             started_at: jiff::Timestamp::now(),
+            body_log,
         };
         Ok(Self {
             app: routes::build(state),

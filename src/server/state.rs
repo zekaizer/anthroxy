@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::ClientToken;
+use crate::observability::BodyLog;
 use crate::routing::Registry;
 use crate::upstream::{Backends, UpstreamClient};
 
@@ -14,4 +15,6 @@ pub struct AppState {
     pub max_body_bytes: usize,
     /// Reported as `created_at` of every model.
     pub started_at: jiff::Timestamp,
+    /// Set when `logging.body_dir` is configured.
+    pub body_log: Option<Arc<BodyLog>>,
 }

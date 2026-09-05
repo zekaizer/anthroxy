@@ -7,6 +7,7 @@
 pub mod anthropic;
 pub mod config;
 pub mod credential;
+pub mod observability;
 pub mod routing;
 pub mod server;
 pub mod upstream;
