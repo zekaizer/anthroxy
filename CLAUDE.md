@@ -19,7 +19,9 @@ cargo fmt
 
 ## Layout
 
-- `src/` — crate source. Module structure is not designed yet; do not invent one ahead of the design step.
+- `src/lib.rs` — the library. All behaviour lives here; integration tests target this crate.
+- `src/main.rs` — the `claude-router` binary. Thin entry point: parse the command line, call the library. No logic.
+- Module structure below `lib.rs` is not designed yet; do not invent one ahead of the design step.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed docs.
 
