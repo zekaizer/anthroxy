@@ -9,9 +9,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 use crate::config::LogFormat;
 
 /// Picks the filter: explicit command-line value, then `RUST_LOG`, then the
-/// configuration file.
+/// configuration file. A bare `debug` or `trace` applies to the router only;
+/// dependencies stay at `info` unless named explicitly (`h2=debug`).
 pub fn resolve_directives(cli: Option<&str>, env: Option<&str>, config: &str) -> String {
-    cli.or(env).unwrap_or(config).to_owned()
+    let chosen = cli.or(env).unwrap_or(config).trim();
+    match chosen.to_ascii_lowercase().as_str() {
+        "debug" | "trace" => format!("claude_router={chosen},info"),
+        _ => chosen.to_owned(),
+    }
 }
 
 /// Installs the global subscriber writing to stderr. Returns an error when
@@ -43,4 +48,35 @@ pub fn init(
             .try_init()?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_directives;
+
+    #[test]
+    fn precedence_is_cli_then_env_then_file() {
+        assert_eq!(
+            resolve_directives(Some("warn"), Some("info"), "error"),
+            "warn"
+        );
+        assert_eq!(resolve_directives(None, Some("info"), "error"), "info");
+        assert_eq!(resolve_directives(None, None, "error"), "error");
+    }
+
+    #[test]
+    fn verbose_bare_levels_scope_to_the_router() {
+        assert_eq!(
+            resolve_directives(None, None, "debug"),
+            "claude_router=debug,info"
+        );
+        assert_eq!(
+            resolve_directives(Some("trace"), None, "info"),
+            "claude_router=trace,info"
+        );
+        assert_eq!(
+            resolve_directives(None, None, "h2=debug,info"),
+            "h2=debug,info"
+        );
+    }
 }
