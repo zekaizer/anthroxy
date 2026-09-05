@@ -5,3 +5,4 @@
 //! calls into this crate.
 
 pub mod config;
+pub mod routing;
