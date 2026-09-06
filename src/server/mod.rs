@@ -100,13 +100,18 @@ impl Server {
     }
 }
 
+/// The sweep walks the directory synchronously, so it runs on the blocking
+/// pool rather than a worker thread.
 async fn prune_loop(state: AppState) {
     loop {
-        if let Some(log) = &state.snapshot().body_log {
-            let removed = log.prune(jiff::Timestamp::now());
-            if removed > 0 {
-                tracing::info!(removed, dir = %log.root().display(), "pruned body log entries");
-            }
+        if let Some(log) = state.snapshot().body_log.clone() {
+            let _ = tokio::task::spawn_blocking(move || {
+                let removed = log.prune(jiff::Timestamp::now());
+                if removed > 0 {
+                    tracing::info!(removed, dir = %log.root().display(), "pruned body log entries");
+                }
+            })
+            .await;
         }
         tokio::time::sleep(PRUNE_INTERVAL).await;
     }

@@ -108,7 +108,7 @@ impl BodyLog {
             let Some(stamp) = name.to_str().and_then(entry_stamp) else {
                 continue;
             };
-            if stamp < cutoff && entry.path().is_dir() {
+            if stamp < cutoff && entry.file_type().is_ok_and(|t| t.is_dir()) {
                 match std::fs::remove_dir_all(entry.path()) {
                     Ok(()) => removed += 1,
                     Err(error) => {
