@@ -71,7 +71,7 @@ pub struct Recorder {
     response_file: &'static str,
     /// The initial write; the final write is ordered after it so `meta.json`
     /// always ends in its complete form.
-    pending: Option<tokio::task::JoinHandle<()>>,
+    pending: tokio::task::JoinHandle<()>,
 }
 
 impl BodyLog {
@@ -180,12 +180,13 @@ fn to_pretty_json(value: &impl Serialize) -> Vec<u8> {
 
 /// Writes off the request path, after `after` when given; failures are
 /// logged, never propagated. Each file is written to a temporary name and
-/// renamed, so readers never observe a partial file.
+/// renamed, so readers never observe a partial file. Called from inside the
+/// runtime: a handler, or the relay stream's poll and drop.
 fn write_files(
     dir: PathBuf,
     files: Vec<(&'static str, Vec<u8>)>,
     after: Option<tokio::task::JoinHandle<()>>,
-) -> Option<tokio::task::JoinHandle<()>> {
+) -> tokio::task::JoinHandle<()> {
     let span = tracing::Span::current();
     let write = move || {
         let _guard = span.enter();
@@ -203,18 +204,12 @@ fn write_files(
             }
         }
     };
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => Some(handle.spawn(async move {
-            if let Some(previous) = after {
-                let _ = previous.await;
-            }
-            let _ = tokio::task::spawn_blocking(write).await;
-        })),
-        Err(_) => {
-            write();
-            None
+    tokio::spawn(async move {
+        if let Some(previous) = after {
+            let _ = previous.await;
         }
-    }
+        let _ = tokio::task::spawn_blocking(write).await;
+    })
 }
 
 /// File name for the response body, by content type.
@@ -277,7 +272,7 @@ impl Recorder {
                 (self.response_file, std::mem::take(&mut self.response)),
                 ("meta.json", to_pretty_json(&self.meta)),
             ],
-            self.pending.take(),
+            Some(self.pending),
         );
         tracing::debug!(dir = %self.dir.display(), "exchange recorded");
     }
