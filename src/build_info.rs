@@ -1,6 +1,6 @@
 //! Version and build provenance shown by `--version`, the serve banner and
 //! `/healthz`.
 
-/// `0.1.0 (28c942a)`, `0.1.0 (28c942a-dirty)` or `0.1.0 (unknown)` when built
+/// `0.2.0 (28c942a)`, `0.2.0 (28c942a-dirty)` or `0.2.0 (unknown)` when built
 /// outside a git checkout. `ANTHROXY_GIT` is set by `build.rs`.
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("ANTHROXY_GIT"), ")");
