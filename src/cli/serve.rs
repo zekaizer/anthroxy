@@ -6,7 +6,7 @@ use clap::Args;
 use super::{Cli, Style, display_path};
 use crate::config::Config;
 use crate::routing::Registry;
-use crate::server::Server;
+use crate::server::{AppState, Server};
 use crate::upstream::Backends;
 
 #[derive(Debug, Clone, Args)]
@@ -37,21 +37,13 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     let config = load_effective(cli, args)?;
     cli.init_tracing(Some(&config), "info")?;
 
-    let server = Server::new(&config)?;
-    let bound = server
-        .bind(config.server.listen)
-        .await
-        .map_err(|e| anyhow::anyhow!("cannot listen on {}: {e}", config.server.listen))?;
-    let addr = bound.local_addr();
+    let server = Server::bind(&config).await?;
+    let addr = server.local_addr();
     print_banner(&config, &path, addr, style);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
-    let reloader = tokio::spawn(reload_on_hangup(
-        bound.reload_handle(),
-        cli.clone(),
-        args.clone(),
-    ));
-    let result = bound.serve(shutdown_signal()).await;
+    let reloader = tokio::spawn(reload_on_hangup(server.state(), cli.clone(), args.clone()));
+    let result = server.serve(shutdown_signal()).await;
     reloader.abort();
     result?;
     tracing::info!("anthroxy stopped");
@@ -61,7 +53,7 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
 /// Re-reads the configuration on SIGHUP. A file that fails to load or build
 /// leaves the running configuration untouched.
 #[cfg(unix)]
-async fn reload_on_hangup(handle: crate::server::ReloadHandle, cli: Cli, args: ServeArgs) {
+async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
     let Ok(mut hangup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
     else {
         return;
@@ -69,7 +61,7 @@ async fn reload_on_hangup(handle: crate::server::ReloadHandle, cli: Cli, args: S
     let path = cli.config_path();
     while hangup.recv().await.is_some() {
         tracing::info!(config = %path.display(), "SIGHUP received, reloading configuration");
-        match load_effective(&cli, &args).and_then(|c| Ok(handle.apply(&c)?)) {
+        match load_effective(&cli, &args).and_then(|c| Ok(state.apply(&c)?)) {
             Ok(report) => {
                 tracing::info!(
                     backends = report.backends,
@@ -90,7 +82,7 @@ async fn reload_on_hangup(handle: crate::server::ReloadHandle, cli: Cli, args: S
 }
 
 #[cfg(not(unix))]
-async fn reload_on_hangup(_: crate::server::ReloadHandle, _: Cli, _: ServeArgs) {
+async fn reload_on_hangup(_: AppState, _: Cli, _: ServeArgs) {
     std::future::pending::<()>().await
 }
 

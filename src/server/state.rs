@@ -46,7 +46,16 @@ impl Snapshot {
     }
 }
 
-/// Shared handle handed to every handler and to [`super::ReloadHandle`].
+/// Outcome of a successful [`AppState::apply`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReloadReport {
+    pub backends: usize,
+    pub models: usize,
+    /// The new file names a different `server.listen`; that needs a restart.
+    pub listen_changed: bool,
+}
+
+/// Shared handle handed to every handler and to the reload task.
 #[derive(Clone)]
 pub struct AppState {
     current: Arc<RwLock<Arc<Snapshot>>>,
@@ -73,14 +82,19 @@ impl AppState {
             .clone()
     }
 
-    pub fn replace(&self, snapshot: Snapshot) {
+    /// Builds a new snapshot from `config` and makes it current. On error the
+    /// previous snapshot stays in place.
+    pub fn apply(&self, config: &Config) -> Result<ReloadReport, ServerBuildError> {
+        let snapshot = Snapshot::from_config(config)?;
+        let report = ReloadReport {
+            backends: snapshot.backends.len(),
+            models: snapshot.registry.len(),
+            listen_changed: config.server.listen != self.listen,
+        };
         *self
             .current
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(snapshot);
-    }
-
-    pub fn listen(&self) -> SocketAddr {
-        self.listen
+        Ok(report)
     }
 }

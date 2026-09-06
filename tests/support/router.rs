@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anthroxy::config::Config;
-use anthroxy::server::{ReloadHandle, Server};
+use anthroxy::server::{AppState, Server};
 
 pub const TOKEN: &str = "router-test-token";
 
@@ -9,7 +9,7 @@ pub const TOKEN: &str = "router-test-token";
 pub struct TestRouter {
     pub addr: SocketAddr,
     pub http: reqwest::Client,
-    pub reload: ReloadHandle,
+    pub reload: AppState,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -17,15 +17,11 @@ impl TestRouter {
     pub async fn start(config_toml: &str) -> Self {
         let config =
             Config::parse(config_toml, |name| std::env::var(name).ok()).expect("valid test config");
-        let server = Server::new(&config).expect("server builds");
-        let bound = server
-            .bind("127.0.0.1:0".parse().unwrap())
-            .await
-            .expect("bind");
-        let addr = bound.local_addr();
-        let reload = bound.reload_handle();
+        let server = Server::bind(&config).await.expect("server binds");
+        let addr = server.local_addr();
+        let reload = server.state();
         let task = tokio::spawn(async move {
-            bound.serve(std::future::pending::<()>()).await.unwrap();
+            server.serve(std::future::pending::<()>()).await.unwrap();
         });
         Self {
             addr,
