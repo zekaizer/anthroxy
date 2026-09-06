@@ -5,9 +5,7 @@ use clap::Args;
 
 use super::{Cli, Style, display_path};
 use crate::config::Config;
-use crate::routing::Registry;
-use crate::server::{AppState, Server};
-use crate::upstream::Backends;
+use crate::server::{AppState, Server, Snapshot};
 
 #[derive(Debug, Clone, Args)]
 pub struct ServeArgs {
@@ -39,7 +37,7 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
 
     let server = Server::bind(&config).await?;
     let addr = server.local_addr();
-    print_banner(&config, &path, addr, style);
+    print_banner(&server.state().snapshot(), &path, addr, style);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
     let reloader = tokio::spawn(reload_on_hangup(server.state(), cli.clone(), args.clone()));
@@ -86,8 +84,7 @@ async fn reload_on_hangup(_: AppState, _: Cli, _: ServeArgs) {
     std::future::pending::<()>().await
 }
 
-fn print_banner(config: &Config, path: &std::path::Path, addr: SocketAddr, style: &Style) {
-    let registry = Registry::from_config(config);
+fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, style: &Style) {
     println!(
         "{} {}",
         style.bold(&format!("anthroxy {}", crate::build_info::VERSION)),
@@ -105,21 +102,15 @@ fn print_banner(config: &Config, path: &std::path::Path, addr: SocketAddr, style
         format!("http://{addr}")
     };
     println!("  listening on {shown}");
-    let backends = Backends::from_config(config).ok();
-    for (name, backend) in &config.backends {
-        let credential = backends
-            .as_ref()
-            .and_then(|b| b.get(name))
-            .map(|b| b.credential.describe())
-            .unwrap_or_default();
+    for backend in snapshot.backends.iter() {
         println!(
             "  backend  {}  {}  {}",
-            style.bold(name),
+            style.bold(&backend.name),
             backend.url,
-            style.dim(&format!("credential: {credential}"))
+            style.dim(&format!("credential: {}", backend.credential.describe()))
         );
     }
-    for route in registry.routes() {
+    for route in snapshot.registry.routes() {
         let aliases = if route.aliases.is_empty() {
             String::new()
         } else {
@@ -133,11 +124,11 @@ fn print_banner(config: &Config, path: &std::path::Path, addr: SocketAddr, style
             style.dim(&aliases)
         );
     }
-    if let Some(route) = registry.default_route() {
+    if let Some(route) = snapshot.registry.default_route() {
         println!("  unknown model ids → {}", route.id);
     }
-    match &config.logging.body_dir {
-        Some(dir) => println!("  body log {}", display_path(dir)),
+    match &snapshot.body_log {
+        Some(log) => println!("  body log {}", display_path(log.root())),
         None => println!(
             "  body log {}",
             style.dim("off (logging.body_dir or --body-dir)")
