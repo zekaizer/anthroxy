@@ -88,10 +88,6 @@ impl BodyLog {
         &self.root
     }
 
-    pub fn retention(&self) -> Option<Duration> {
-        self.retention
-    }
-
     /// Deletes entries whose stamp is older than `now - retention`. Returns
     /// how many were removed. Names that do not carry a stamp are left alone.
     pub fn prune(&self, now: jiff::Timestamp) -> usize {
@@ -366,7 +362,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("20200101T000000.000Z-rtr_ancient")).unwrap();
         let log = BodyLog::open(dir.path(), Duration::ZERO).unwrap();
-        assert_eq!(log.retention(), None);
         assert_eq!(log.prune(ts("2026-09-06T12:00:00Z")), 0);
         assert!(dir.path().join("20200101T000000.000Z-rtr_ancient").exists());
     }
