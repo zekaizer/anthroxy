@@ -50,41 +50,26 @@ impl ServerConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
     /// `tracing` filter directive, e.g. `info` or `anthroxy=debug,info`.
-    #[serde(default = "LoggingConfig::default_level")]
     pub level: String,
-    #[serde(default)]
     pub format: LogFormat,
     /// When set, every proxied request and response body is written under this
     /// directory.
-    #[serde(default)]
     pub body_dir: Option<PathBuf>,
     /// Recorded exchanges older than this are deleted; `0` keeps them forever.
-    #[serde(
-        default = "LoggingConfig::default_body_retention",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub body_retention: Duration,
-}
-
-impl LoggingConfig {
-    pub fn default_level() -> String {
-        "info".to_owned()
-    }
-    pub const fn default_body_retention() -> Duration {
-        Duration::from_secs(7 * 24 * 3600)
-    }
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
-            level: Self::default_level(),
+            level: "info".to_owned(),
             format: LogFormat::default(),
             body_dir: None,
-            body_retention: Self::default_body_retention(),
+            body_retention: Duration::from_secs(7 * 24 * 3600),
         }
     }
 }
@@ -98,55 +83,29 @@ pub enum LogFormat {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct UpstreamConfig {
-    #[serde(
-        default = "UpstreamConfig::default_connect_timeout",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
     /// Maximum silence between two chunks of an upstream response.
-    #[serde(
-        default = "UpstreamConfig::default_read_timeout",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub read_timeout: Duration,
     /// Additional attempts after a connection failure.
-    #[serde(default = "UpstreamConfig::default_retries")]
     pub retries: u32,
     /// Delay before the first retry; doubles on each further attempt.
-    #[serde(
-        default = "UpstreamConfig::default_retry_backoff",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub retry_backoff: Duration,
     /// Upstream status codes that are retried like a connection failure.
-    #[serde(default)]
     pub retry_on_status: Vec<u16>,
-}
-
-impl UpstreamConfig {
-    pub const fn default_connect_timeout() -> Duration {
-        Duration::from_secs(10)
-    }
-    pub const fn default_read_timeout() -> Duration {
-        Duration::from_secs(300)
-    }
-    pub const fn default_retries() -> u32 {
-        2
-    }
-    pub const fn default_retry_backoff() -> Duration {
-        Duration::from_millis(200)
-    }
 }
 
 impl Default for UpstreamConfig {
     fn default() -> Self {
         Self {
-            connect_timeout: Self::default_connect_timeout(),
-            read_timeout: Self::default_read_timeout(),
-            retries: Self::default_retries(),
-            retry_backoff: Self::default_retry_backoff(),
+            connect_timeout: Duration::from_secs(10),
+            read_timeout: Duration::from_secs(300),
+            retries: 2,
+            retry_backoff: Duration::from_millis(200),
             retry_on_status: Vec::new(),
         }
     }
