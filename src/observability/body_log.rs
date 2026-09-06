@@ -39,20 +39,27 @@ pub struct RequestRecord {
 struct Meta {
     #[serde(flatten)]
     request: RequestRecord,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attempts: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    latency_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_headers: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    outcome: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_bytes: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<u64>,
+    /// Present once response headers arrived.
+    #[serde(flatten)]
+    response: Option<ResponseMeta>,
+    /// Present once the body ended.
+    #[serde(flatten)]
+    end: Option<EndMeta>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ResponseMeta {
+    status: u16,
+    attempts: u32,
+    latency_ms: u64,
+    response_headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EndMeta {
+    outcome: String,
+    response_bytes: usize,
+    duration_ms: u64,
 }
 
 /// Accumulates one exchange and writes it out when the response ends.
@@ -61,7 +68,7 @@ pub struct Recorder {
     meta: Meta,
     started: Instant,
     response: Vec<u8>,
-    response_ext: &'static str,
+    response_file: &'static str,
     /// The initial write; the final write is ordered after it so `meta.json`
     /// always ends in its complete form.
     pending: Option<tokio::task::JoinHandle<()>>,
@@ -126,13 +133,8 @@ impl BodyLog {
         ));
         let meta = Meta {
             request: record,
-            status: None,
-            attempts: None,
-            latency_ms: None,
-            response_headers: None,
-            outcome: None,
-            response_bytes: None,
-            duration_ms: None,
+            response: None,
+            end: None,
         };
         let pending = write_files(
             dir.clone(),
@@ -147,7 +149,7 @@ impl BodyLog {
             meta,
             started,
             response: Vec::new(),
-            response_ext: "bin",
+            response_file: "response.bin",
             pending,
         }
     }
@@ -219,17 +221,18 @@ fn write_files(
     }
 }
 
-fn extension_for(headers: &HeaderMap) -> &'static str {
+/// File name for the response body, by content type.
+fn response_file(headers: &HeaderMap) -> &'static str {
     let content_type = headers
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if content_type.starts_with("text/event-stream") {
-        "sse"
+        "response.sse"
     } else if content_type.starts_with("application/json") {
-        "json"
+        "response.json"
     } else {
-        "bin"
+        "response.bin"
     }
 }
 
@@ -242,11 +245,13 @@ impl Recorder {
         attempts: u32,
         latency_ms: u64,
     ) {
-        self.meta.status = Some(status.as_u16());
-        self.meta.attempts = Some(attempts);
-        self.meta.latency_ms = Some(latency_ms);
-        self.meta.response_headers = Some(headers_for_record(headers));
-        self.response_ext = extension_for(headers);
+        self.meta.response = Some(ResponseMeta {
+            status: status.as_u16(),
+            attempts,
+            latency_ms,
+            response_headers: headers_for_record(headers),
+        });
+        self.response_file = response_file(headers);
     }
 
     /// Records a fully buffered body and finishes.
@@ -262,22 +267,19 @@ impl RelayObserver for Recorder {
     }
 
     fn on_end(&mut self, outcome: &RelayOutcome) {
-        self.meta.outcome = Some(match outcome {
-            RelayOutcome::Complete => "complete".to_owned(),
-            RelayOutcome::UpstreamError(error) => format!("upstream_error: {error}"),
-            RelayOutcome::ClientDisconnected => "client_disconnected".to_owned(),
+        self.meta.end = Some(EndMeta {
+            outcome: match outcome {
+                RelayOutcome::Complete => "complete".to_owned(),
+                RelayOutcome::UpstreamError(error) => format!("upstream_error: {error}"),
+                RelayOutcome::ClientDisconnected => "client_disconnected".to_owned(),
+            },
+            response_bytes: self.response.len(),
+            duration_ms: self.started.elapsed().as_millis() as u64,
         });
-        self.meta.response_bytes = Some(self.response.len());
-        self.meta.duration_ms = Some(self.started.elapsed().as_millis() as u64);
-        let response_name: &'static str = match self.response_ext {
-            "sse" => "response.sse",
-            "json" => "response.json",
-            _ => "response.bin",
-        };
         write_files(
             self.dir.clone(),
             vec![
-                (response_name, std::mem::take(&mut self.response)),
+                (self.response_file, std::mem::take(&mut self.response)),
                 ("meta.json", to_pretty_json(&self.meta)),
             ],
             self.pending.take(),
