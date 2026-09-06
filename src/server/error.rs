@@ -24,8 +24,6 @@ pub enum RouterError {
     NoRoute { method: String, path: String },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
-    #[error("cannot rewrite request body: {0}")]
-    Rewrite(#[from] serde_json::Error),
 }
 
 impl RouterError {
@@ -48,7 +46,7 @@ impl RouterError {
             RouterError::UnknownModel { .. } | RouterError::NoRoute { .. } => {
                 ErrorType::NotFoundError
             }
-            RouterError::Upstream(_) | RouterError::Rewrite(_) => ErrorType::ApiError,
+            RouterError::Upstream(_) => ErrorType::ApiError,
         }
     }
 

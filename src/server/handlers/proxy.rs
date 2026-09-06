@@ -66,7 +66,7 @@ async fn handle(
     let body = if requested_model == route.upstream_model {
         body
     } else {
-        Bytes::from(anthropic::rewrite_model(&body, &route.upstream_model)?)
+        Bytes::from(anthropic::rewrite_model(&body, &route.upstream_model))
     };
 
     let path_and_query = parts

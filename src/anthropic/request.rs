@@ -29,14 +29,14 @@ pub fn peek(body: &[u8]) -> Result<RequestPeek, PeekError> {
 }
 
 /// Returns `body` with `model` replaced, all other fields and their order
-/// intact. `body` must already have passed [`peek`].
-pub fn rewrite_model(body: &[u8], model: &str) -> Result<Vec<u8>, serde_json::Error> {
-    let mut value: serde_json::Value = serde_json::from_slice(body)?;
-    if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "model".to_owned(),
-            serde_json::Value::String(model.to_owned()),
-        );
-    }
-    serde_json::to_vec(&value)
+/// intact. `body` must already have passed [`peek`], which proves it is a
+/// JSON object.
+pub fn rewrite_model(body: &[u8], model: &str) -> Vec<u8> {
+    let mut value: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(body).expect("peek accepted this body");
+    value.insert(
+        "model".to_owned(),
+        serde_json::Value::String(model.to_owned()),
+    );
+    serde_json::to_vec(&value).expect("a parsed document serializes")
 }

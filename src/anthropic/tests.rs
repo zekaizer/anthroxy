@@ -70,7 +70,7 @@ fn peek_rejects_missing_model_and_non_json() {
 #[test]
 fn rewrite_model_preserves_everything_else_in_order() {
     let body = br#"{"model":"exposed","max_tokens":1024,"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"x"}],"metadata":{"user_id":"u"},"temperature":1.0,"big":12345678901234567890}"#;
-    let out = rewrite_model(body, "upstream-name").unwrap();
+    let out = rewrite_model(body, "upstream-name");
     let text = String::from_utf8(out).unwrap();
     assert_eq!(
         text,
