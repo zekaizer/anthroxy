@@ -47,11 +47,17 @@ jobs:
         run: cargo build --release --locked --target "$TARGET"
 
       - name: Verify the binary is static and runs
+        # musl targets link as static-pie; `file` says "static-pie linked" and
+        # `ldd` says "statically linked". Any `=>` in ldd output means a
+        # shared library got in.
         run: |
           bin="target/$TARGET/release/claude-router"
           file "$bin"
-          file "$bin" | grep -q 'statically linked'
-          ldd "$bin" 2>&1 | grep -q 'not a dynamic executable'
+          file "$bin" | grep -Eq 'static(-pie)? linked'
+          if ldd "$bin" 2>&1 | grep -q '=>'; then
+            echo "::error::binary depends on shared libraries"
+            exit 1
+          fi
           "$bin" --version
 
       - name: Package
