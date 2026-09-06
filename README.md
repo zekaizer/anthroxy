@@ -63,11 +63,12 @@ Backends
        GET /v1/models → HTTP 200 in 4 ms, 5 model(s)
 
 Models
-     id            backend   upstream model      picker label
-  ✓  gemma-local   lmstudio  gemma-4-e2b-it-qat  Gemma 4 E2B (LM Studio)
-  !  typo-model    lmstudio  does-not-exist      typo-model
-  ✓  sonnet        claude    claude-sonnet-5     Sonnet 5
+     id           backend   upstream model      picker label             aliases
+  ✓  gemma-local  lmstudio  gemma-4-e2b-it-qat  Gemma 4 E2B (LM Studio)  claude-haiku-4-5
+  !  typo-model   lmstudio  does-not-exist      typo-model               -
+  ✓  sonnet       claude    claude-sonnet-5     Sonnet 5                 -
   ✓ upstream model listed by the backend, ! not listed (check the name), - backend gave no list
+  unknown model ids → gemma-local
 ```
 
 Then, in the shell that runs Claude Code:
