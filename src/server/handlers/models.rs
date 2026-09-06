@@ -30,19 +30,8 @@ pub async fn get_one(
     Path(id): Path<String>,
 ) -> Response {
     let snapshot = state.snapshot();
-    match snapshot.registry.resolve(&id) {
-        Some(resolution) if resolution.matched != crate::routing::Match::Default => {
-            Json(object(&state, resolution.route)).into_response()
-        }
-        _ => RouterError::UnknownModel {
-            model: id,
-            known: snapshot
-                .registry
-                .known_names()
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-        }
-        .into_response(&request_id),
+    match snapshot.registry.lookup(&id) {
+        Some(resolution) => Json(object(&state, resolution.route)).into_response(),
+        None => RouterError::unknown_model(id, &snapshot.registry).into_response(&request_id),
     }
 }

@@ -73,6 +73,17 @@ fn unknown_model_falls_back_to_default() {
 }
 
 #[test]
+fn lookup_ignores_the_default() {
+    let r = registry(
+        TWO_MODELS,
+        "[routing]\ndefault_model = \"claude-haiku-4-5\"",
+    );
+    assert!(r.lookup("claude-opus-5").is_none());
+    assert_eq!(r.lookup("claude-haiku-4-5").unwrap().matched, Match::Alias);
+    assert_eq!(r.lookup("smart").unwrap().matched, Match::Exact);
+}
+
+#[test]
 fn known_names_lists_ids_and_aliases_in_order() {
     let r = registry(TWO_MODELS, "");
     assert_eq!(

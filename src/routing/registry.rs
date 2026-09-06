@@ -77,19 +77,25 @@ impl Registry {
         &self.routes
     }
 
-    pub fn resolve(&self, model: &str) -> Option<Resolution<'_>> {
-        if let Some(&index) = self.by_name.get(model) {
-            let route = &self.routes[index];
-            let matched = if route.id == model {
-                Match::Exact
-            } else {
-                Match::Alias
-            };
-            return Some(Resolution { route, matched });
-        }
-        self.default.map(|index| Resolution {
-            route: &self.routes[index],
-            matched: Match::Default,
+    /// Route named by id or alias; the default never applies here.
+    pub fn lookup(&self, name: &str) -> Option<Resolution<'_>> {
+        let &index = self.by_name.get(name)?;
+        let route = &self.routes[index];
+        let matched = if route.id == name {
+            Match::Exact
+        } else {
+            Match::Alias
+        };
+        Some(Resolution { route, matched })
+    }
+
+    /// [`lookup`](Self::lookup), else the default route when one is configured.
+    pub fn resolve(&self, name: &str) -> Option<Resolution<'_>> {
+        self.lookup(name).or_else(|| {
+            self.default.map(|index| Resolution {
+                route: &self.routes[index],
+                matched: Match::Default,
+            })
         })
     }
 

@@ -47,19 +47,10 @@ async fn handle(
 
     let peek = anthropic::peek(&body)?;
     let requested_model = peek.model.expect("peek guarantees a model");
-    let resolution =
-        state
-            .registry
-            .resolve(&requested_model)
-            .ok_or_else(|| RouterError::UnknownModel {
-                model: requested_model.clone(),
-                known: state
-                    .registry
-                    .known_names()
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect(),
-            })?;
+    let resolution = state
+        .registry
+        .resolve(&requested_model)
+        .ok_or_else(|| RouterError::unknown_model(&requested_model, &state.registry))?;
     let route = resolution.route;
     let span = tracing::Span::current();
     span.record("model", route.id.as_str());

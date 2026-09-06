@@ -5,6 +5,7 @@ use http::StatusCode;
 
 use super::RequestId;
 use crate::anthropic::{ErrorResponse, ErrorType, PeekError};
+use crate::routing::Registry;
 use crate::upstream::UpstreamError;
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +31,17 @@ pub enum RouterError {
 }
 
 impl RouterError {
+    pub fn unknown_model(model: impl Into<String>, registry: &Registry) -> Self {
+        RouterError::UnknownModel {
+            model: model.into(),
+            known: registry
+                .known_names()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        }
+    }
+
     pub fn error_type(&self) -> ErrorType {
         match self {
             RouterError::Unauthorized => ErrorType::AuthenticationError,
