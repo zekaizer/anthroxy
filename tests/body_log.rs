@@ -6,13 +6,15 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::response::Response;
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::Value;
 use support::mock_upstream::echo;
-use support::router::config_with_backend;
+use support::router::{config_with_backend, messages_body};
 use support::{MockUpstream, TestRouter};
 
 fn body(model: &str, stream: bool) -> Value {
-    json!({"model": model, "max_tokens": 8, "stream": stream, "messages": [{"role": "user", "content": "hi"}]})
+    let mut body = messages_body(model);
+    body["stream"] = Value::Bool(stream);
+    body
 }
 
 /// Waits until `count` request directories carry a finished `meta.json`

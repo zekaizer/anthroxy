@@ -25,6 +25,11 @@ pub use schema::{
 /// Environment variable naming the configuration file.
 pub const CONFIG_ENV: &str = "ANTHROXY_CONFIG";
 
+/// The `lookup` for [`Config::parse`] that reads the process environment.
+pub fn process_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
 /// Default configuration path: `$XDG_CONFIG_HOME/anthroxy/config.toml`.
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
@@ -40,7 +45,7 @@ impl Config {
             path: path.to_path_buf(),
             source,
         })?;
-        Config::parse(&text, |name| std::env::var(name).ok())
+        Config::parse(&text, process_env)
     }
 
     /// Parses `text`, resolving `${NAME}` in string values through `lookup`,
