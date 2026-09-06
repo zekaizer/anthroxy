@@ -32,3 +32,4 @@ Claude Code talks to exactly one `ANTHROPIC_BASE_URL`. Since v2.1.129 it can lis
 - Every request body is buffered in memory once to read `model`; `server.max_body_bytes` (default 64 MiB) bounds that.
 - A model can be reached under several names (aliases), which lets Claude Code's hard-coded fallback model ids land on a configured backend.
 - `count_tokens` is routed to the same backend; a backend that lacks it returns its own error, relayed as-is.
+- `thinking` blocks pass through untouched as well. When a session switches backends, the history carries thinking blocks whose signatures the new backend cannot verify; recovering from that is the client's job, and Claude Code ≥ 2.1.152 does it by retrying without those blocks. One 400 followed by a 200 right after a switch is therefore normal. Should the client stop recovering, the answer is a new ADR superseding this one with a rewriting rule, not an ad-hoc filter.
