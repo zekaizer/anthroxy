@@ -1,9 +1,11 @@
 //! `POST /v1/messages` (and siblings): route by `model`, forward, relay.
 
+use std::sync::Arc;
 use std::time::Instant;
 
+use axum::Extension;
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::Request;
 use axum::response::Response;
 use bytes::Bytes;
 use http_body_util::LengthLimitError;
@@ -13,18 +15,18 @@ use crate::observability::RequestRecord;
 use crate::observability::body_log::headers_for_record;
 use crate::server::annotate::annotate_upstream_error;
 use crate::server::relay::Relay;
-use crate::server::{AppState, RequestId, RouterError};
+use crate::server::{RequestId, RouterError, Snapshot};
 use crate::upstream::{
     UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
     header_value, response_headers, upstream_headers,
 };
 
 pub async fn proxy(
-    State(state): State<AppState>,
+    Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
     request: Request,
 ) -> Response {
-    match handle(&state, &request_id, request).await {
+    match handle(&snapshot, &request_id, request).await {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(error = %error, status = error.status().as_u16(), "request failed in router");
@@ -34,12 +36,10 @@ pub async fn proxy(
 }
 
 async fn handle(
-    state: &AppState,
+    state: &Snapshot,
     request_id: &RequestId,
     request: Request,
 ) -> Result<Response, RouterError> {
-    // One snapshot per request: a reload mid-flight does not mix configurations.
-    let state = state.snapshot();
     let started = Instant::now();
     let (parts, body) = request.into_parts();
     let body = read_body(body, state.max_body_bytes).await?;

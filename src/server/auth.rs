@@ -1,13 +1,16 @@
 //! Client authentication: one static token, accepted as `x-api-key` or
 //! `Authorization: Bearer`.
 
-use axum::extract::{Request, State};
+use std::sync::Arc;
+
+use axum::Extension;
+use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use http::header::AUTHORIZATION;
 use subtle::ConstantTimeEq;
 
-use super::{AppState, RequestId, RouterError};
+use super::{RequestId, RouterError, Snapshot};
 use crate::credential::X_API_KEY;
 
 #[derive(Clone)]
@@ -32,7 +35,7 @@ impl std::fmt::Debug for ClientToken {
 /// Rejects requests whose token is missing or wrong with an Anthropic-shaped
 /// 401.
 pub async fn require_client_token(
-    State(state): State<AppState>,
+    Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
     request: Request,
     next: Next,
@@ -48,7 +51,7 @@ pub async fn require_client_token(
                 .and_then(|v| v.as_bytes().strip_prefix(b"Bearer "))
         });
     match presented {
-        Some(token) if state.snapshot().client_token.matches(token) => next.run(request).await,
+        Some(token) if snapshot.client_token.matches(token) => next.run(request).await,
         Some(_) => {
             tracing::warn!("rejected request: client token mismatch");
             RouterError::Unauthorized.into_response(&request_id)

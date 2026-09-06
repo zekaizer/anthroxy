@@ -1,14 +1,16 @@
-//! Per-request identifier and tracing span.
+//! Per-request identifier, tracing span and configuration snapshot.
 
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, FromRequestParts, Request};
+use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use http::HeaderValue;
 use http::header::HeaderName;
 use http::request::Parts;
 use tracing::Instrument;
+
+use super::AppState;
 
 pub static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
@@ -44,8 +46,10 @@ impl<S: Send + Sync> FromRequestParts<S> for RequestId {
 }
 
 /// Assigns an id, opens the `request` span every downstream log line lives
-/// in, and echoes the id in `x-request-id`.
-pub async fn assign(mut request: Request, next: Next) -> Response {
+/// in, and echoes the id in `x-request-id`. Also pins the configuration:
+/// the current [`super::Snapshot`] goes in as an extension so authentication
+/// and routing of one request never see two different reloads.
+pub async fn assign(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let id = RequestId::generate();
     let peer = request
         .extensions()
@@ -62,6 +66,7 @@ pub async fn assign(mut request: Request, next: Next) -> Response {
         backend = tracing::field::Empty,
     );
     request.extensions_mut().insert(id.clone());
+    request.extensions_mut().insert(state.snapshot());
     async move {
         let started = std::time::Instant::now();
         let mut response = next.run(request).await;
