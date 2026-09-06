@@ -15,8 +15,8 @@ use crate::server::annotate::annotate_upstream_error;
 use crate::server::relay::Relay;
 use crate::server::{AppState, RequestId, RouterError};
 use crate::upstream::{
-    UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, header_value,
-    response_headers, upstream_headers,
+    UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
+    header_value, response_headers, upstream_headers,
 };
 
 pub async fn proxy(
@@ -128,7 +128,10 @@ async fn handle(
             .response
             .bytes()
             .await
-            .map_err(|e| RouterError::BodyRead(e.to_string()))?;
+            .map_err(|source| UpstreamError::Body {
+                backend: backend.name.clone(),
+                source,
+            })?;
         tracing::warn!(
             status = status.as_u16(),
             bytes = raw.len(),

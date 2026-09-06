@@ -62,8 +62,11 @@ impl RouterError {
     /// Backend involved, for the `x-anthroxy-backend` header.
     pub fn backend(&self) -> Option<&str> {
         match self {
-            RouterError::Upstream(UpstreamError::Credential { backend, .. })
-            | RouterError::Upstream(UpstreamError::Transport { backend, .. }) => Some(backend),
+            RouterError::Upstream(
+                UpstreamError::Credential { backend, .. }
+                | UpstreamError::Transport { backend, .. }
+                | UpstreamError::Body { backend, .. },
+            ) => Some(backend),
             _ => None,
         }
     }

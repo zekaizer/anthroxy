@@ -492,6 +492,42 @@ async fn non_json_upstream_error_passes_through_verbatim() {
 }
 
 #[tokio::test]
+async fn upstream_error_body_that_breaks_off_is_a_502() {
+    // Headers and a first chunk go out, then the body breaks off.
+    let upstream = MockUpstream::start(|_| {
+        let chunks = futures_util::stream::iter(0..2).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(50 * i)).await;
+            if i == 0 {
+                Ok("partial")
+            } else {
+                Err(std::io::Error::other("connection reset"))
+            }
+        });
+        Response::builder()
+            .status(500)
+            .header("content-type", "text/plain")
+            .body(Body::from_stream(chunks))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 502, "the backend failed, not the client");
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "api_error");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("mock") && message.contains("body"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
 async fn retries_configured_statuses() {
     let upstream = MockUpstream::start({
         let calls = std::sync::atomic::AtomicUsize::new(0);

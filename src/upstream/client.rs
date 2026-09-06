@@ -50,6 +50,13 @@ pub enum UpstreamError {
         #[source]
         source: reqwest::Error,
     },
+    /// The backend answered but its error body broke off before the end.
+    #[error("backend `{backend}` failed while sending its error body: {}", describe(.source))]
+    Body {
+        backend: String,
+        #[source]
+        source: reqwest::Error,
+    },
 }
 
 /// The error with its full source chain, e.g. `error sending request: ... : Connection refused`.
