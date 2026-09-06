@@ -78,7 +78,7 @@ impl RouterError {
         if let Some(backend) = self.backend() {
             response.headers_mut().insert(
                 crate::upstream::X_ROUTER_BACKEND.clone(),
-                http::HeaderValue::from_str(backend).expect("backend names are header-safe"),
+                crate::upstream::header_value(backend),
             );
         }
         response

@@ -26,6 +26,12 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     }
 
     for (name, backend) in &config.backends {
+        if !header_safe(name) {
+            problems.push(format!(
+                "backends.{}: the name is sent in `x-anthroxy-backend` and must be header-safe",
+                name.escape_debug()
+            ));
+        }
         check_url(&format!("backends.{name}.url"), &backend.url, &mut problems);
         match &backend.credential {
             CredentialConfig::Command { command, .. } if command.trim().is_empty() => {
@@ -68,6 +74,19 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     for (index, model) in config.models.iter().enumerate() {
         if model.id.trim().is_empty() {
             problems.push(format!("models[{index}].id must not be empty"));
+        } else if !header_safe(&model.id) {
+            problems.push(format!(
+                "models[{index}].id: `{}` is sent in `x-anthroxy-model` and must be header-safe",
+                model.id.escape_debug()
+            ));
+        }
+        if let Some(upstream_model) = &model.upstream_model
+            && !header_safe(upstream_model)
+        {
+            problems.push(format!(
+                "models[{index}].upstream_model: `{}` is sent in `x-anthroxy-upstream-model` and must be header-safe",
+                upstream_model.escape_debug()
+            ));
         }
         if !config.backends.contains_key(&model.backend) {
             problems.push(format!(
@@ -97,6 +116,10 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     } else {
         Err(ConfigError::Invalid(problems))
     }
+}
+
+fn header_safe(text: &str) -> bool {
+    http::HeaderValue::from_str(text).is_ok()
 }
 
 fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {

@@ -6,7 +6,6 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::response::Response;
 use bytes::Bytes;
-use http::HeaderValue;
 use http_body_util::LengthLimitError;
 
 use crate::anthropic;
@@ -16,8 +15,8 @@ use crate::server::annotate::annotate_upstream_error;
 use crate::server::relay::{Relay, TracingObserver};
 use crate::server::{AppState, RequestId, RouterError};
 use crate::upstream::{
-    UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, response_headers,
-    upstream_headers,
+    UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, header_value,
+    response_headers, upstream_headers,
 };
 
 pub async fn proxy(
@@ -190,8 +189,4 @@ async fn read_body(body: Body, limit: usize) -> Result<Bytes, RouterError> {
             RouterError::BodyRead(boxed.to_string())
         }
     })
-}
-
-fn header_value(text: &str) -> HeaderValue {
-    HeaderValue::from_str(text).unwrap_or_else(|_| HeaderValue::from_static("invalid"))
 }

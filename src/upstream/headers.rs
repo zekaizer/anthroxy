@@ -16,6 +16,12 @@ pub static X_ROUTER_UPSTREAM_MODEL: HeaderName =
 static KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 static PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 
+/// A backend name or model id as a header value. Validation guarantees they
+/// are header-safe.
+pub fn header_value(text: &str) -> HeaderValue {
+    HeaderValue::from_str(text).expect("validated header-safe")
+}
+
 /// Hop-by-hop headers belong to one connection and are never relayed.
 fn is_hop_by_hop(name: &HeaderName) -> bool {
     *name == CONNECTION

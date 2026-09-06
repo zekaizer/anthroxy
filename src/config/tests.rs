@@ -288,6 +288,28 @@ backend = "a"
 }
 
 #[test]
+fn validation_rejects_names_that_cannot_travel_in_a_header() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends."line\nbreak"]
+url = "http://a"
+
+[[models]]
+id = "id\nbreak"
+backend = "line\nbreak"
+upstream_model = "up\nbreak"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    assert!(joined.contains("backends.line\\nbreak"), "{joined}");
+    assert!(joined.contains("models[0].id"), "{joined}");
+    assert!(joined.contains("models[0].upstream_model"), "{joined}");
+    assert_eq!(p.len(), 3, "{joined}");
+}
+
+#[test]
 fn body_dir_tilde_expands_to_home() {
     let text = MINIMAL.to_owned() + "\n[logging]\nbody_dir = \"~/state/bodies\"\n";
     let c = parse(&text).unwrap();
