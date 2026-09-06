@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
 
-use super::{Backend, Decision, RetryPolicy, upstream_headers};
+use super::{Backend, Decision, RetryPolicy};
 use crate::config::UpstreamConfig;
 use crate::credential::CredentialError;
 
@@ -20,7 +20,9 @@ pub struct UpstreamRequest<'a> {
     pub method: Method,
     /// Path and query exactly as the client sent them, e.g. `/v1/messages`.
     pub path_and_query: &'a str,
-    pub headers: &'a HeaderMap,
+    /// Already translated by [`super::upstream_headers`]; the credential is
+    /// added per attempt.
+    pub headers: HeaderMap,
     pub body: Bytes,
 }
 
@@ -103,7 +105,11 @@ impl UpstreamClient {
                     source,
                 }
             })?;
-            let headers = upstream_headers(request.headers, backend, credential.as_ref());
+            let mut headers = request.headers.clone();
+            if let Some(credential) = &credential {
+                let (name, value) = credential.header_pair();
+                headers.insert(name, value);
+            }
             tracing::debug!(attempt, %url, "sending upstream request");
             let outcome = self
                 .http

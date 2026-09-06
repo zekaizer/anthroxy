@@ -51,7 +51,11 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json"),
     );
-    let headers = upstream_headers(&base, backend, credential.as_ref());
+    let mut headers = upstream_headers(&base, backend);
+    if let Some(credential) = &credential {
+        let (name, value) = credential.header_pair();
+        headers.insert(name, value);
+    }
     let started = Instant::now();
     let models = match http
         .get(format!("{}/v1/models", backend.url))

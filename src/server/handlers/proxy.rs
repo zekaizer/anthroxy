@@ -75,11 +75,13 @@ async fn handle(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or("/");
+    let headers = upstream_headers(&parts.headers, backend);
     let mut recorder = state.body_log.as_ref().map(|log| {
         let record = request_record(
             request_id,
-            &parts,
+            &parts.method,
             path_and_query,
+            &headers,
             &requested_model,
             route,
             peek.stream,
@@ -92,7 +94,7 @@ async fn handle(
             backend,
             method: parts.method.clone(),
             path_and_query,
-            headers: &parts.headers,
+            headers,
             body,
         })
         .await?;
@@ -153,28 +155,28 @@ async fn handle(
     Ok(response)
 }
 
-/// Snapshot for the body log. Headers are recorded as they go upstream minus
-/// the credential header, which is added at send time and never written.
+/// Snapshot for the body log. `headers` are the ones going upstream; the
+/// credential is added at send time and never written.
 fn request_record(
     request_id: &RequestId,
-    parts: &http::request::Parts,
+    method: &http::Method,
     path_and_query: &str,
+    headers: &http::HeaderMap,
     requested_model: &str,
     route: &crate::routing::Route,
     stream: bool,
 ) -> RequestRecord {
-    let backend = &route.backend;
     RequestRecord {
         request_id: request_id.as_str().to_owned(),
         received_at: jiff::Timestamp::now().to_string(),
-        method: parts.method.to_string(),
+        method: method.to_string(),
         path: path_and_query.to_owned(),
         requested_model: requested_model.to_owned(),
         model: route.id.clone(),
         upstream_model: route.upstream_model.clone(),
-        backend: backend.name.clone(),
+        backend: route.backend.name.clone(),
         stream,
-        request_headers: headers_for_record(&upstream_headers(&parts.headers, backend, None)),
+        request_headers: headers_for_record(headers),
     }
 }
 
