@@ -11,8 +11,8 @@ use super::style::table;
 use super::{Cli, Style, display_path};
 use crate::config::Config;
 use crate::routing::Registry;
-use crate::upstream::Backend;
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
+use crate::upstream::{Backend, RetryPolicy, UpstreamClient, http_client};
 
 #[derive(Debug, Clone, Args)]
 pub struct CheckArgs {
@@ -71,8 +71,13 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
     } else {
-        let http = reqwest::Client::builder().timeout(args.timeout).build()?;
-        let results = probe_all(&http, registry.backends().map(Arc::as_ref)).await;
+        let client = UpstreamClient::new(
+            http_client(&config.upstream)
+                .timeout(args.timeout)
+                .build()?,
+            RetryPolicy::never(),
+        );
+        let results = probe_all(&client, registry.backends().map(Arc::as_ref)).await;
         for (backend, result) in registry.backends().zip(&results) {
             let (ok, ids) = report_backend(backend, result, style);
             if !ok {
@@ -143,9 +148,9 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
     };
     let (models_line, ids) = match &probe.models {
         None => (style.dim("GET /v1/models skipped (no credential)"), None),
-        Some(ModelsProbe::Unreachable(detail)) => {
+        Some(ModelsProbe::Failed(error)) => {
             ok = false;
-            (style.err(&format!("unreachable: {detail}")), None)
+            (style.err(&error.to_string()), None)
         }
         Some(ModelsProbe::Answered {
             status,

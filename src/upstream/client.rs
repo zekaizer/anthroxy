@@ -64,17 +64,21 @@ pub fn describe(error: &reqwest::Error) -> String {
     text
 }
 
+/// How every backend is reached: the configured timeouts and no redirects,
+/// since a redirect would resend the body and the credential elsewhere.
+pub fn http_client(config: &UpstreamConfig) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(config.connect_timeout)
+        .read_timeout(config.read_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+}
+
 impl UpstreamClient {
     pub fn from_config(config: &UpstreamConfig) -> reqwest::Result<Self> {
-        let http = reqwest::Client::builder()
-            .connect_timeout(config.connect_timeout)
-            .read_timeout(config.read_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
-        Ok(Self {
-            http,
-            retry: RetryPolicy::from_config(config),
-        })
+        Ok(Self::new(
+            http_client(config).build()?,
+            RetryPolicy::from_config(config),
+        ))
     }
 
     pub fn new(http: reqwest::Client, retry: RetryPolicy) -> Self {

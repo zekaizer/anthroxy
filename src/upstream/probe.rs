@@ -1,9 +1,12 @@
 //! Reachability check used by `anthroxy check`: acquire the credential
 //! and call `GET /v1/models` on the backend.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use super::{Backend, upstream_headers};
+use bytes::Bytes;
+use http::{HeaderMap, HeaderValue, Method};
+
+use super::{Backend, UpstreamClient, UpstreamError, UpstreamRequest, upstream_headers};
 use crate::credential::CredentialError;
 
 #[derive(Debug)]
@@ -23,11 +26,12 @@ pub enum ModelsProbe {
         ids: Vec<String>,
         detail: Option<String>,
     },
-    Unreachable(String),
+    Failed(UpstreamError),
 }
 
-/// Never fails: every outcome is data for the report.
-pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
+/// Never fails: every outcome is data for the report. `client` decides the
+/// timeouts and retries; `check` uses none.
+pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
     let credential = match backend.credential.credential().await {
         Ok(credential) => credential,
         Err(error) => {
@@ -42,31 +46,23 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
         None => backend.credential.describe(),
     };
     // What Claude Code always sends; backend `headers` still override.
-    let mut base = http::HeaderMap::new();
-    base.insert(
-        "anthropic-version",
-        http::HeaderValue::from_static("2023-06-01"),
-    );
+    let mut base = HeaderMap::new();
+    base.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
     base.insert(
         http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
+        HeaderValue::from_static("application/json"),
     );
-    let mut headers = upstream_headers(&base, backend);
-    if let Some(credential) = &credential {
-        let (name, value) = credential.header_pair();
-        headers.insert(name, value);
-    }
-    let started = Instant::now();
-    let models = match http
-        .get(format!("{}/v1/models", backend.url))
-        .headers(headers)
-        .send()
-        .await
-    {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let latency = started.elapsed();
-            let body = response.bytes().await.unwrap_or_default();
+    let request = UpstreamRequest {
+        backend,
+        method: Method::GET,
+        path_and_query: "/v1/models",
+        headers: upstream_headers(&base, backend),
+        body: Bytes::new(),
+    };
+    let models = match client.send(request).await {
+        Ok(upstream) => {
+            let status = upstream.response.status().as_u16();
+            let body = upstream.response.bytes().await.unwrap_or_default();
             let json = serde_json::from_slice::<serde_json::Value>(&body).ok();
             let ids = json.as_ref().map(model_ids).unwrap_or_default();
             let detail = if (200..300).contains(&status) {
@@ -76,12 +72,12 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
             };
             ModelsProbe::Answered {
                 status,
-                latency,
+                latency: upstream.latency,
                 ids,
                 detail,
             }
         }
-        Err(error) => ModelsProbe::Unreachable(super::client::describe(&error)),
+        Err(error) => ModelsProbe::Failed(error),
     };
     Probe {
         credential: Ok(description),
@@ -92,10 +88,10 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
 /// Probes every backend concurrently; results are in the same order as
 /// `backends`.
 pub async fn probe_all<'a>(
-    http: &reqwest::Client,
+    client: &UpstreamClient,
     backends: impl IntoIterator<Item = &'a Backend>,
 ) -> Vec<Probe> {
-    futures_util::future::join_all(backends.into_iter().map(|b| probe(http, b))).await
+    futures_util::future::join_all(backends.into_iter().map(|b| probe(client, b))).await
 }
 
 /// `error.message` of an Anthropic error, else the first line of the body.
@@ -133,6 +129,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::config::{BackendConfig, CredentialConfig, CredentialHeader};
+    use crate::upstream::RetryPolicy;
+
+    fn client() -> UpstreamClient {
+        UpstreamClient::new(reqwest::Client::new(), RetryPolicy::never())
+    }
 
     async fn slow_backend(name: &str, delay: Duration) -> Backend {
         let app = axum::Router::new().route(
@@ -161,9 +162,8 @@ mod tests {
     async fn probe_all_runs_backends_concurrently_in_order() {
         let a = slow_backend("a", Duration::from_millis(300)).await;
         let b = slow_backend("b", Duration::from_millis(300)).await;
-        let http = reqwest::Client::new();
         let started = Instant::now();
-        let probes = probe_all(&http, [&a, &b]).await;
+        let probes = probe_all(&client(), [&a, &b]).await;
         let elapsed = started.elapsed();
         assert_eq!(probes.len(), 2);
         assert!(
@@ -189,7 +189,7 @@ mod tests {
             header: CredentialHeader::XApiKey,
         })
         .unwrap();
-        let probe = probe(&reqwest::Client::new(), &backend).await;
+        let probe = probe(&client(), &backend).await;
         assert_eq!(probe.credential.unwrap(), "static (key-…7890)");
         assert!(matches!(
             probe.models,
@@ -198,10 +198,7 @@ mod tests {
 
         let none = slow_backend("b", Duration::ZERO).await;
         assert_eq!(
-            super::probe(&reqwest::Client::new(), &none)
-                .await
-                .credential
-                .unwrap(),
+            super::probe(&client(), &none).await.credential.unwrap(),
             "none"
         );
     }
