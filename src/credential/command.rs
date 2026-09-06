@@ -58,7 +58,7 @@ impl CommandCredential {
     /// reject.
     async fn fetch(&self) -> Result<Cached, CredentialError> {
         let output = self.run().await?;
-        let credential = Credential::new(self.header, output.secret)?;
+        let credential = Credential::new(self.header.clone(), output.secret)?;
         let now = Instant::now();
         let mut valid_until = now + self.refresh;
         if let Some(expires_at) = output.expires_at {

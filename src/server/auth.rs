@@ -11,7 +11,7 @@ use http::header::AUTHORIZATION;
 use subtle::ConstantTimeEq;
 
 use super::{RequestId, RouterError, Snapshot};
-use crate::credential::X_API_KEY;
+use crate::config::X_API_KEY;
 
 #[derive(Clone)]
 pub struct ClientToken(Vec<u8>);

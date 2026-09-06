@@ -186,7 +186,7 @@ mod tests {
         let mut backend = slow_backend("a", Duration::ZERO).await;
         backend.credential = crate::credential::build(&CredentialConfig::Static {
             value: "key-1234567890".into(),
-            header: CredentialHeader::XApiKey,
+            header: CredentialHeader::x_api_key(),
         })
         .unwrap();
         let probe = probe(&client(), &backend).await;

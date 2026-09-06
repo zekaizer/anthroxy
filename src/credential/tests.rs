@@ -4,7 +4,7 @@ use super::*;
 use crate::config::{CommandOutput, CredentialConfig, CredentialHeader};
 
 fn bearer(secret: &str) -> Credential {
-    Credential::new(CredentialHeader::Bearer, secret).unwrap()
+    Credential::new(CredentialHeader::bearer(), secret).unwrap()
 }
 
 #[test]
@@ -14,11 +14,33 @@ fn header_pair_for_each_scheme() {
     assert_eq!(value, "Bearer abc");
     assert!(value.is_sensitive());
 
-    let (name, value) = Credential::new(CredentialHeader::XApiKey, "k")
+    let (name, value) = Credential::new(CredentialHeader::x_api_key(), "k")
         .unwrap()
         .header_pair();
     assert_eq!(name.as_str(), "x-api-key");
     assert_eq!(value, "k");
+
+    let custom = CredentialHeader::custom("Api-Key", None).unwrap();
+    let (name, value) = Credential::new(custom, "k").unwrap().header_pair();
+    assert_eq!(name.as_str(), "api-key");
+    assert_eq!(value, "k");
+
+    let custom = CredentialHeader::custom("authorization", Some("Token".into())).unwrap();
+    let (name, value) = Credential::new(custom, "k").unwrap().header_pair();
+    assert_eq!(name, http::header::AUTHORIZATION);
+    assert_eq!(value, "Token k");
+    assert!(value.is_sensitive());
+}
+
+#[test]
+fn custom_header_rejects_bad_names_and_schemes() {
+    assert!(CredentialHeader::custom("bad header", None).is_err());
+    for scheme in ["", "two words", "line\nbreak"] {
+        assert!(
+            CredentialHeader::custom("x", Some(scheme.into())).is_err(),
+            "{scheme:?}"
+        );
+    }
 }
 
 #[test]
@@ -38,12 +60,12 @@ async fn fixed_none_and_static() {
 
     let fixed = build(&CredentialConfig::Static {
         value: "key-1234567890".into(),
-        header: CredentialHeader::XApiKey,
+        header: CredentialHeader::x_api_key(),
     })
     .unwrap();
     assert_eq!(
         fixed.credential().await.unwrap(),
-        Some(Credential::new(CredentialHeader::XApiKey, "key-1234567890").unwrap())
+        Some(Credential::new(CredentialHeader::x_api_key(), "key-1234567890").unwrap())
     );
     assert_eq!(
         fixed.describe(),
@@ -59,7 +81,7 @@ async fn env_is_resolved_at_build_time() {
     unsafe { std::env::set_var(name, "from-environment") };
     let source = build(&CredentialConfig::Env {
         name: name.into(),
-        header: CredentialHeader::Bearer,
+        header: CredentialHeader::bearer(),
     })
     .unwrap();
     assert_eq!(
@@ -70,7 +92,7 @@ async fn env_is_resolved_at_build_time() {
 
     let err = build(&CredentialConfig::Env {
         name: "ANTHROXY_TEST_MISSING".into(),
-        header: CredentialHeader::Bearer,
+        header: CredentialHeader::bearer(),
     })
     .err()
     .unwrap();
@@ -81,7 +103,7 @@ async fn env_is_resolved_at_build_time() {
 fn static_value_must_be_header_safe() {
     let err = build(&CredentialConfig::Static {
         value: "line\nbreak".into(),
-        header: CredentialHeader::Bearer,
+        header: CredentialHeader::bearer(),
     })
     .err()
     .unwrap();
@@ -92,7 +114,7 @@ fn command(cmd: &str, refresh: Duration, timeout: Duration) -> CommandCredential
     CommandCredential::new(
         cmd.to_owned(),
         CommandOutput::Text,
-        CredentialHeader::Bearer,
+        CredentialHeader::bearer(),
         refresh,
         timeout,
     )
@@ -102,7 +124,7 @@ fn json_command(cmd: &str, refresh: Duration) -> CommandCredential {
     CommandCredential::new(
         cmd.to_owned(),
         CommandOutput::Json,
-        CredentialHeader::Bearer,
+        CredentialHeader::bearer(),
         refresh,
         Duration::from_secs(5),
     )

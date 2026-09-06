@@ -118,12 +118,14 @@ default_model = "qwen"
             assert_eq!(*output, CommandOutput::Json);
             assert_eq!(*refresh, Duration::from_secs(60));
             assert_eq!(*timeout, Duration::from_secs(2));
-            assert_eq!(*header, CredentialHeader::Bearer);
+            assert_eq!(*header, CredentialHeader::bearer());
         }
         other => panic!("{other:?}"),
     }
     match &c.backends["vllm"].credential {
-        CredentialConfig::Static { header, .. } => assert_eq!(*header, CredentialHeader::XApiKey),
+        CredentialConfig::Static { header, .. } => {
+            assert_eq!(*header, CredentialHeader::x_api_key())
+        }
         other => panic!("{other:?}"),
     }
     // Trailing slash is dropped so path concatenation is unambiguous.
@@ -141,6 +143,54 @@ fn command_output_defaults_to_text() {
     match &parse(&text).unwrap().backends["local"].credential {
         CredentialConfig::Command { output, .. } => assert_eq!(*output, CommandOutput::Text),
         other => panic!("{other:?}"),
+    }
+}
+
+fn with_local_credential(credential: &str) -> String {
+    MINIMAL.replace(
+        "url = \"http://127.0.0.1:1234\"",
+        &format!("url = \"http://127.0.0.1:1234\"\ncredential = {credential}"),
+    )
+}
+
+#[test]
+fn credential_header_accepts_a_custom_name_and_scheme() {
+    let text =
+        with_local_credential(r#"{ kind = "static", value = "k", header = { name = "Api-Key" } }"#);
+    match &parse(&text).unwrap().backends["local"].credential {
+        CredentialConfig::Static { header, .. } => {
+            assert_eq!(header.name.as_str(), "api-key");
+            assert_eq!(header.scheme, None);
+        }
+        other => panic!("{other:?}"),
+    }
+
+    let text = with_local_credential(
+        r#"{ kind = "env", name = "K", header = { name = "authorization", scheme = "Token" } }"#,
+    );
+    match &parse(&text).unwrap().backends["local"].credential {
+        CredentialConfig::Env { header, .. } => assert_eq!(
+            *header,
+            CredentialHeader::custom("authorization", Some("Token".into())).unwrap()
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn credential_header_rejects_other_forms() {
+    for (header, needle) in [
+        (r#""basic""#, "bearer"),
+        (r#"{ name = "bad header" }"#, "header name"),
+        (r#"{ name = "x", scheme = "two words" }"#, "single word"),
+        (r#"{ name = "x", schema = "Bearer" }"#, "unknown field"),
+        (r#"{ scheme = "Bearer" }"#, "missing field"),
+    ] {
+        let text = with_local_credential(&format!(
+            r#"{{ kind = "static", value = "k", header = {header} }}"#
+        ));
+        let err = parse(&text).err().unwrap().to_string();
+        assert!(err.contains(needle), "{header}: {err}");
     }
 }
 

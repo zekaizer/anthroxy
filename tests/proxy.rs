@@ -540,3 +540,25 @@ async fn retries_configured_statuses() {
     assert_eq!(res.status(), 200);
     assert_eq!(upstream.received().len(), 2);
 }
+
+#[tokio::test]
+async fn custom_credential_header_reaches_the_backend() {
+    let upstream = MockUpstream::start(echo).await;
+    let config = config_with_backend(&upstream.url(), "").replace(
+        r#"credential = { kind = "static", value = "backend-secret-key" }"#,
+        r#"credential = { kind = "static", value = "backend-secret-key", header = { name = "api-key" } }"#,
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+
+    let seen = upstream.last();
+    assert_eq!(seen.header("api-key"), Some("backend-secret-key"));
+    assert_eq!(seen.header("authorization"), None);
+    assert_eq!(seen.header("x-api-key"), None);
+}

@@ -11,14 +11,12 @@ mod tests;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use http::header::{AUTHORIZATION, HeaderName, HeaderValue};
+use http::header::{HeaderName, HeaderValue};
 
 use crate::config::{CredentialConfig, CredentialHeader};
 
 pub use command::{CommandCredential, EXPIRY_MARGIN};
 pub use fixed::FixedCredential;
-
-pub static X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
 
 /// A secret plus the header it is sent in. `Debug` never prints the secret.
 #[derive(Clone, PartialEq, Eq)]
@@ -34,24 +32,18 @@ impl Credential {
         secret: impl Into<String>,
     ) -> Result<Self, CredentialError> {
         let secret = secret.into();
-        HeaderValue::from_str(&secret).map_err(|_| CredentialError::NotHeaderSafe)?;
+        HeaderValue::from_str(&header.value(&secret))
+            .map_err(|_| CredentialError::NotHeaderSafe)?;
         Ok(Self { header, secret })
     }
 
     /// Header to set on the upstream request. The value is marked sensitive so
     /// HTTP-layer logging redacts it.
     pub fn header_pair(&self) -> (HeaderName, HeaderValue) {
-        let mut value = match self.header {
-            CredentialHeader::Bearer => HeaderValue::from_str(&format!("Bearer {}", self.secret)),
-            CredentialHeader::XApiKey => HeaderValue::from_str(&self.secret),
-        }
-        .expect("checked in Credential::new");
+        let mut value = HeaderValue::from_str(&self.header.value(&self.secret))
+            .expect("checked in Credential::new");
         value.set_sensitive(true);
-        let name = match self.header {
-            CredentialHeader::Bearer => AUTHORIZATION,
-            CredentialHeader::XApiKey => X_API_KEY.clone(),
-        };
-        (name, value)
+        (self.header.name.clone(), value)
     }
 
     /// First and last four characters, enough to tell two tokens apart in logs.
@@ -133,10 +125,10 @@ pub fn build(config: &CredentialConfig) -> Result<Box<dyn CredentialSource>, Cre
     Ok(match config {
         CredentialConfig::None => Box::new(FixedCredential::none()),
         CredentialConfig::Static { value, header } => {
-            Box::new(FixedCredential::secret(*header, value.clone())?)
+            Box::new(FixedCredential::secret(header.clone(), value.clone())?)
         }
         CredentialConfig::Env { name, header } => {
-            Box::new(FixedCredential::from_env(*header, name)?)
+            Box::new(FixedCredential::from_env(header.clone(), name)?)
         }
         CredentialConfig::Command {
             command,
@@ -147,7 +139,7 @@ pub fn build(config: &CredentialConfig) -> Result<Box<dyn CredentialSource>, Cre
         } => Box::new(CommandCredential::new(
             command.clone(),
             *output,
-            *header,
+            header.clone(),
             *refresh,
             *timeout,
         )),

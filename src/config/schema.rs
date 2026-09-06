@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::byte_size;
+use super::credential_header::CredentialHeader;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -181,17 +182,6 @@ pub enum CommandOutput {
     /// `{"token": "...", "expires_at": ...}`. `expires_at` is optional: an
     /// RFC 3339 timestamp or unix seconds (milliseconds when >= 10^11).
     Json,
-}
-
-/// How a credential is presented to the backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialHeader {
-    /// `Authorization: Bearer <credential>`
-    #[default]
-    Bearer,
-    /// `x-api-key: <credential>`
-    XApiKey,
 }
 
 #[derive(Debug, Clone, Deserialize)]
