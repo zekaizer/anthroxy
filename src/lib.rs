@@ -3,3 +3,14 @@
 //!
 //! All behaviour lives here. `src/main.rs` only parses the command line and
 //! calls into this crate.
+
+pub mod anthropic;
+pub mod build_info;
+pub mod cli;
+pub mod config;
+pub mod credential;
+pub mod observability;
+pub mod routing;
+pub mod server;
+pub mod service;
+pub mod upstream;

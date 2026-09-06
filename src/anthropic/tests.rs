@@ -1,0 +1,79 @@
+use super::*;
+use http::StatusCode;
+
+#[test]
+fn error_response_serializes_to_anthropic_shape() {
+    let e = ErrorResponse::new(ErrorType::NotFoundError, "no such model").with_request_id("req_1");
+    let json = serde_json::to_value(&e).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "type": "error",
+            "error": {"type": "not_found_error", "message": "no such model"},
+            "request_id": "req_1"
+        })
+    );
+    assert_eq!(e.status(), StatusCode::NOT_FOUND);
+    assert_eq!(ErrorType::OverloadedError.status().as_u16(), 529);
+    assert_eq!(
+        ErrorType::AuthenticationError.status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[test]
+fn error_response_parses_upstream_body() {
+    let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+    let e: ErrorResponse = serde_json::from_str(body).unwrap();
+    assert_eq!(e.error.kind, ErrorType::OverloadedError);
+    assert_eq!(e.request_id, None);
+}
+
+#[test]
+fn model_list_fills_first_and_last() {
+    let list = ModelList::all(vec![
+        ModelObject::new("a", "A", "2026-01-01T00:00:00Z"),
+        ModelObject::new("b", "B", "2026-01-01T00:00:00Z"),
+    ]);
+    assert_eq!(list.first_id.as_deref(), Some("a"));
+    assert_eq!(list.last_id.as_deref(), Some("b"));
+    assert!(!list.has_more);
+    let json = serde_json::to_value(&list).unwrap();
+    assert_eq!(json["data"][0]["type"], "model");
+    assert_eq!(json["data"][1]["display_name"], "B");
+
+    let empty = ModelList::all(vec![]);
+    assert_eq!(empty.first_id, None);
+}
+
+#[test]
+fn peek_reads_model_and_stream_only() {
+    let body = br#"{"model":"m1","max_tokens":5,"stream":true,"messages":[],"unknown":{"x":1}}"#;
+    let p = peek(body).unwrap();
+    assert_eq!(p.model.as_deref(), Some("m1"));
+    assert!(p.stream);
+
+    let p = peek(br#"{"model":"m2","messages":[]}"#).unwrap();
+    assert!(!p.stream);
+}
+
+#[test]
+fn peek_rejects_missing_model_and_non_json() {
+    assert!(matches!(
+        peek(br#"{"messages":[]}"#),
+        Err(PeekError::NoModel)
+    ));
+    assert!(matches!(peek(b"not json"), Err(PeekError::NotJson(_))));
+    assert!(matches!(peek(b"[1,2]"), Err(PeekError::NotJson(_))));
+}
+
+#[test]
+fn rewrite_model_preserves_everything_else_in_order() {
+    let body = br#"{"model":"exposed","max_tokens":1024,"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"x"}],"metadata":{"user_id":"u"},"temperature":1.0,"big":12345678901234567890}"#;
+    let out = rewrite_model(body, "upstream-name").unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(
+        text,
+        r#"{"model":"upstream-name","max_tokens":1024,"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"x"}],"metadata":{"user_id":"u"},"temperature":1.0,"big":12345678901234567890}"#
+    );
+}
