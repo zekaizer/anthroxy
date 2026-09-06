@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::byte_size;
+use super::credential_header::CredentialHeader;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,9 +143,11 @@ pub enum CredentialConfig {
         #[serde(default)]
         header: CredentialHeader,
     },
-    /// `command` runs through `sh -c`; trimmed stdout is the credential.
+    /// `command` runs through `sh -c`; stdout is read as `output` says.
     Command {
         command: String,
+        #[serde(default)]
+        output: CommandOutput,
         #[serde(
             default = "CredentialConfig::default_refresh",
             with = "humantime_serde"
@@ -169,15 +172,16 @@ impl CredentialConfig {
     }
 }
 
-/// How a credential is presented to the backend.
+/// What a credential command prints on stdout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CredentialHeader {
-    /// `Authorization: Bearer <credential>`
+pub enum CommandOutput {
+    /// The credential itself; surrounding whitespace is trimmed.
     #[default]
-    Bearer,
-    /// `x-api-key: <credential>`
-    XApiKey,
+    Text,
+    /// `{"token": "...", "expires_at": ...}`. `expires_at` is optional: an
+    /// RFC 3339 timestamp or unix seconds (milliseconds when >= 10^11).
+    Json,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -6,7 +6,7 @@ use http::header::{
 };
 
 use super::Backend;
-use crate::credential::X_API_KEY;
+use crate::config::X_API_KEY;
 
 pub static ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
 pub static X_ROUTER_BACKEND: HeaderName = HeaderName::from_static("x-anthroxy-backend");

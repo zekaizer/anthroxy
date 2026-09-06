@@ -57,7 +57,10 @@ url = "http://127.0.0.1:1234"
 #   { kind = "static",  value = "sk-...", header = "x_api_key" }
 #   { kind = "env",     name = "VLLM_API_KEY" }
 #   { kind = "command", command = "cat ~/.token", refresh = "5m", timeout = "10s" }
-# `header` is "bearer" (Authorization: Bearer ...) or "x_api_key".
+# `header` is "bearer" (Authorization: Bearer ...), "x_api_key", or any header
+# as { name = "api-key" } / { name = "authorization", scheme = "Token" }.
+# A command may print `{"token": "...", "expires_at": ...}` instead, with
+# output = "json"; it is then also re-run two minutes before `expires_at`.
 credential = { kind = "none" }
 
 # [backends.vllm]
