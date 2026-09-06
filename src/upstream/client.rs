@@ -27,10 +27,8 @@ pub struct UpstreamRequest<'a> {
 }
 
 pub struct UpstreamResponse {
-    pub status: StatusCode,
-    pub headers: HeaderMap,
-    /// Body still to be read; nothing has been consumed.
-    pub body: reqwest::Response,
+    /// Headers arrived; nothing of the body has been consumed.
+    pub response: reqwest::Response,
     /// Attempts made, including the successful one.
     pub attempts: u32,
     /// From first attempt to response headers.
@@ -137,9 +135,7 @@ impl UpstreamClient {
                         }
                         Decision::GiveUp => {
                             return Ok(UpstreamResponse {
-                                status,
-                                headers: response.headers().clone(),
-                                body: response,
+                                response,
                                 attempts: attempt,
                                 latency: started.elapsed(),
                             });

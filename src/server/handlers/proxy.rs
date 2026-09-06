@@ -98,8 +98,9 @@ async fn handle(
             body,
         })
         .await?;
+    let status = upstream.response.status();
     tracing::info!(
-        status = upstream.status.as_u16(),
+        status = status.as_u16(),
         attempts = upstream.attempts,
         latency_ms = upstream.latency.as_millis() as u64,
         "upstream responded"
@@ -107,14 +108,14 @@ async fn handle(
 
     if let Some(recorder) = recorder.as_mut() {
         recorder.response_started(
-            upstream.status,
-            &upstream.headers,
+            status,
+            upstream.response.headers(),
             upstream.attempts,
             upstream.latency.as_millis() as u64,
         );
     }
 
-    let mut headers = response_headers(&upstream.headers);
+    let mut headers = response_headers(upstream.response.headers());
     headers.insert(X_ROUTER_BACKEND.clone(), header_value(&backend.name));
     headers.insert(X_ROUTER_MODEL.clone(), header_value(&route.id));
     headers.insert(
@@ -122,27 +123,27 @@ async fn handle(
         header_value(&route.upstream_model),
     );
 
-    let body = if upstream.status.is_client_error() || upstream.status.is_server_error() {
+    let body = if status.is_client_error() || status.is_server_error() {
         let raw = upstream
-            .body
+            .response
             .bytes()
             .await
             .map_err(|e| RouterError::BodyRead(e.to_string()))?;
         tracing::warn!(
-            status = upstream.status.as_u16(),
+            status = status.as_u16(),
             bytes = raw.len(),
             "upstream returned an error"
         );
         if let Some(recorder) = recorder.take() {
             recorder.finish_with_body(&raw);
         }
-        match annotate_upstream_error(&raw, &backend.name, upstream.status, request_id.as_str()) {
+        match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
             Some(annotated) => Body::from(annotated),
             None => Body::from(raw),
         }
     } else {
-        let mut relay =
-            Relay::new(upstream.body.bytes_stream(), span).observe(TracingObserver::new(started));
+        let mut relay = Relay::new(upstream.response.bytes_stream(), span)
+            .observe(TracingObserver::new(started));
         if let Some(recorder) = recorder.take() {
             relay = relay.observe(recorder);
         }
@@ -150,7 +151,7 @@ async fn handle(
     };
 
     let mut response = Response::new(body);
-    *response.status_mut() = upstream.status;
+    *response.status_mut() = status;
     *response.headers_mut() = headers;
     Ok(response)
 }
