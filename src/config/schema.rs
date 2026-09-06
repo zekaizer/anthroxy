@@ -142,9 +142,11 @@ pub enum CredentialConfig {
         #[serde(default)]
         header: CredentialHeader,
     },
-    /// `command` runs through `sh -c`; trimmed stdout is the credential.
+    /// `command` runs through `sh -c`; stdout is read as `output` says.
     Command {
         command: String,
+        #[serde(default)]
+        output: CommandOutput,
         #[serde(
             default = "CredentialConfig::default_refresh",
             with = "humantime_serde"
@@ -167,6 +169,18 @@ impl CredentialConfig {
     pub const fn default_timeout() -> Duration {
         Duration::from_secs(10)
     }
+}
+
+/// What a credential command prints on stdout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandOutput {
+    /// The credential itself; surrounding whitespace is trimmed.
+    #[default]
+    Text,
+    /// `{"token": "...", "expires_at": ...}`. `expires_at` is optional: an
+    /// RFC 3339 timestamp or unix seconds (milliseconds when >= 10^11).
+    Json,
 }
 
 /// How a credential is presented to the backend.

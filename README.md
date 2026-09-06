@@ -114,6 +114,10 @@ url = "https://api.anthropic.com"
 credential = { kind = "command", command = "cat ~/.claude-token", refresh = "5m" }
 anthropic_beta = ["oauth-2025-04-20"]        # merged into the client's anthropic-beta
 
+[backends.cli]                               # a CLI that reports its token's expiry
+url = "https://gateway.example.com"
+credential = { kind = "command", command = "some-cli token --json | jq '{token: .access_token, expires_at: .expires_at}'", output = "json" }
+
 [[models]]
 id = "qwen"                      # what Claude Code sees and sends
 backend = "vllm"
@@ -134,7 +138,7 @@ Notes:
 
 - `${NAME}` in any string value is replaced with the environment variable `NAME` at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands.
 - Credential kinds: `none` (default), `static`, `env` (`name = "VAR"`), `command`. `header` is `bearer` (default) or `x_api_key`.
-- A `command` credential runs through `sh -c`; trimmed stdout is the token. It is re-run after `refresh`, and once more immediately if the backend answers 401/403.
+- A `command` credential runs through `sh -c`. With `output = "text"` (default) trimmed stdout is the token; with `output = "json"` stdout is `{"token": "...", "expires_at": ...}`, where the optional `expires_at` is an RFC 3339 timestamp or unix seconds (milliseconds when ≥ 10^11). The command is re-run after `refresh`, two minutes before `expires_at`, and once more immediately if the backend answers 401/403. A token whose `expires_at` has passed is an error, not sent upstream.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
 - Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, logging and upstream settings swap atomically; in-flight requests finish on the old configuration. Changing `server.listen` still needs a restart. A file that fails to load leaves the running configuration untouched and logs the error.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.

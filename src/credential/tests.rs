@@ -1,7 +1,7 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::config::{CredentialConfig, CredentialHeader};
+use crate::config::{CommandOutput, CredentialConfig, CredentialHeader};
 
 fn bearer(secret: &str) -> Credential {
     Credential::new(CredentialHeader::Bearer, secret).unwrap()
@@ -89,7 +89,38 @@ fn static_value_must_be_header_safe() {
 }
 
 fn command(cmd: &str, refresh: Duration, timeout: Duration) -> CommandCredential {
-    CommandCredential::new(cmd.to_owned(), CredentialHeader::Bearer, refresh, timeout)
+    CommandCredential::new(
+        cmd.to_owned(),
+        CommandOutput::Text,
+        CredentialHeader::Bearer,
+        refresh,
+        timeout,
+    )
+}
+
+fn json_command(cmd: &str, refresh: Duration) -> CommandCredential {
+    CommandCredential::new(
+        cmd.to_owned(),
+        CommandOutput::Json,
+        CredentialHeader::Bearer,
+        refresh,
+        Duration::from_secs(5),
+    )
+}
+
+fn unix_secs(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
+/// A command that appends a line to `counter` and prints `json`.
+fn counting_json(counter: &std::path::Path, json: &str) -> String {
+    format!("echo run >> {} && echo '{json}'", counter.display())
+}
+
+fn runs(counter: &std::path::Path) -> usize {
+    std::fs::read_to_string(counter)
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
 }
 
 #[tokio::test]
@@ -183,4 +214,81 @@ async fn command_failure_is_not_cached() {
     assert!(source.credential().await.is_err());
     std::fs::write(&flag, "").unwrap();
     assert_eq!(source.credential().await.unwrap(), Some(bearer("tok")));
+}
+
+#[tokio::test]
+async fn json_output_yields_the_token() {
+    let source = json_command(r#"echo '{"token": "tok-json"}'"#, Duration::from_secs(60));
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok-json")));
+    assert!(source.describe().contains("json"), "{}", source.describe());
+}
+
+#[tokio::test]
+async fn json_output_with_a_distant_expiry_is_cached() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let expires_at =
+        humantime::format_rfc3339_seconds(SystemTime::now() + Duration::from_secs(3600));
+    let cmd = counting_json(
+        &counter,
+        &format!(r#"{{"token": "tok", "expires_at": "{expires_at}"}}"#),
+    );
+    let source = json_command(&cmd, Duration::from_secs(3600));
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok")));
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok")));
+    assert_eq!(runs(&counter), 1, "second call served from cache");
+}
+
+#[tokio::test]
+async fn json_output_reruns_once_the_expiry_nears() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let expires_at = unix_secs(SystemTime::now() + EXPIRY_MARGIN - Duration::from_secs(30));
+    let cmd = counting_json(
+        &counter,
+        &format!(r#"{{"token": "tok", "expires_at": {expires_at}}}"#),
+    );
+    let source = json_command(&cmd, Duration::from_secs(3600));
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok")));
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok")));
+    assert_eq!(
+        runs(&counter),
+        2,
+        "a credential inside the expiry margin is not served from cache"
+    );
+}
+
+#[tokio::test]
+async fn json_output_that_already_expired_is_an_error() {
+    let expired_ms = unix_secs(SystemTime::now() - Duration::from_secs(60)) * 1000;
+    let source = json_command(
+        &format!(r#"echo '{{"token": "tok", "expires_at": {expired_ms}}}'"#),
+        Duration::from_secs(60),
+    );
+    let err = source.credential().await.err().unwrap();
+    assert!(matches!(err, CredentialError::Expired(_)), "{err}");
+    assert!(err.to_string().contains("expired at 20"), "{err}");
+}
+
+#[tokio::test]
+async fn json_output_must_be_a_token_object() {
+    for cmd in [
+        "echo not-json",
+        "echo '{}'",
+        r#"echo '{"token": "t", "expires_at": "soon"}'"#,
+        r#"echo '{"token": "t", "expires_at": true}'"#,
+    ] {
+        let err = json_command(cmd, Duration::ZERO)
+            .credential()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, CredentialError::Json(_)), "{cmd}: {err}");
+    }
+    let err = json_command(r#"echo '{"token": ""}'"#, Duration::ZERO)
+        .credential()
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, CredentialError::Empty), "{err}");
 }

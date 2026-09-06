@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 pub use error::ConfigError;
 pub use schema::{
-    BackendConfig, Config, CredentialConfig, CredentialHeader, LogFormat, LoggingConfig,
-    ModelConfig, RoutingConfig, ServerConfig, UpstreamConfig,
+    BackendConfig, CommandOutput, Config, CredentialConfig, CredentialHeader, LogFormat,
+    LoggingConfig, ModelConfig, RoutingConfig, ServerConfig, UpstreamConfig,
 };
 
 /// Environment variable naming the configuration file.

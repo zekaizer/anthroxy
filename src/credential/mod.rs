@@ -3,6 +3,7 @@
 
 mod command;
 mod fixed;
+mod output;
 
 #[cfg(test)]
 mod tests;
@@ -14,7 +15,7 @@ use http::header::{AUTHORIZATION, HeaderName, HeaderValue};
 
 use crate::config::{CredentialConfig, CredentialHeader};
 
-pub use command::CommandCredential;
+pub use command::{CommandCredential, EXPIRY_MARGIN};
 pub use fixed::FixedCredential;
 
 pub static X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
@@ -92,6 +93,10 @@ pub enum CredentialError {
     Failed { status: String, stderr: String },
     #[error("credential command printed nothing on stdout")]
     Empty,
+    #[error("credential command output is not `{{\"token\": ..., \"expires_at\": ...}}` JSON: {0}")]
+    Json(String),
+    #[error("credential command returned a credential that expired at {}", humantime::format_rfc3339_seconds(*.0))]
+    Expired(std::time::SystemTime),
 }
 
 fn stderr_suffix(stderr: &str) -> String {
@@ -135,11 +140,13 @@ pub fn build(config: &CredentialConfig) -> Result<Box<dyn CredentialSource>, Cre
         }
         CredentialConfig::Command {
             command,
+            output,
             refresh,
             timeout,
             header,
         } => Box::new(CommandCredential::new(
             command.clone(),
+            *output,
             *header,
             *refresh,
             *timeout,

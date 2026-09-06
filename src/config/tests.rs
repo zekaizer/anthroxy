@@ -75,7 +75,7 @@ retry_on_status = [502, 503]
 
 [backends.claude]
 url = "https://api.anthropic.com/"
-credential = { kind = "command", command = "echo tok", refresh = "1m", timeout = "2s" }
+credential = { kind = "command", command = "echo tok", output = "json", refresh = "1m", timeout = "2s" }
 anthropic_beta = ["oauth-2025-04-20"]
 headers = { "x-extra" = "1" }
 
@@ -109,11 +109,13 @@ default_model = "qwen"
     match &c.backends["claude"].credential {
         CredentialConfig::Command {
             command,
+            output,
             refresh,
             timeout,
             header,
         } => {
             assert_eq!(command, "echo tok");
+            assert_eq!(*output, CommandOutput::Json);
             assert_eq!(*refresh, Duration::from_secs(60));
             assert_eq!(*timeout, Duration::from_secs(2));
             assert_eq!(*header, CredentialHeader::Bearer);
@@ -128,6 +130,18 @@ default_model = "qwen"
     assert_eq!(c.backends["claude"].url, "https://api.anthropic.com");
     assert_eq!(c.models[0].aliases, vec!["claude-opus-5", "big"]);
     assert_eq!(c.routing.default_model.as_deref(), Some("qwen"));
+}
+
+#[test]
+fn command_output_defaults_to_text() {
+    let text = MINIMAL.replace(
+        "url = \"http://127.0.0.1:1234\"",
+        "url = \"http://127.0.0.1:1234\"\ncredential = { kind = \"command\", command = \"echo tok\" }",
+    );
+    match &parse(&text).unwrap().backends["local"].credential {
+        CredentialConfig::Command { output, .. } => assert_eq!(*output, CommandOutput::Text),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
