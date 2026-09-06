@@ -39,7 +39,7 @@ impl<S: Send + Sync> FromRequestParts<S> for RequestId {
             .extensions
             .get::<RequestId>()
             .cloned()
-            .unwrap_or_else(RequestId::generate))
+            .expect("assign runs on every route, the fallback included"))
     }
 }
 
