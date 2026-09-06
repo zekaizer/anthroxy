@@ -7,7 +7,7 @@ use crate::config::CredentialHeader;
 #[derive(Debug)]
 pub struct FixedCredential {
     credential: Option<Credential>,
-    origin: &'static str,
+    /// Set when the value was read from this environment variable.
     env_name: Option<String>,
 }
 
@@ -15,7 +15,6 @@ impl FixedCredential {
     pub fn none() -> Self {
         Self {
             credential: None,
-            origin: "none",
             env_name: None,
         }
     }
@@ -23,7 +22,6 @@ impl FixedCredential {
     pub fn secret(header: CredentialHeader, value: String) -> Result<Self, CredentialError> {
         Ok(Self {
             credential: Some(Credential::new(header, value)?),
-            origin: "static",
             env_name: None,
         })
     }
@@ -32,10 +30,10 @@ impl FixedCredential {
     pub fn from_env(header: CredentialHeader, name: &str) -> Result<Self, CredentialError> {
         let value =
             std::env::var(name).map_err(|_| CredentialError::MissingEnv(name.to_owned()))?;
-        let mut fixed = Self::secret(header, value)?;
-        fixed.origin = "env";
-        fixed.env_name = Some(name.to_owned());
-        Ok(fixed)
+        Ok(Self {
+            credential: Some(Credential::new(header, value)?),
+            env_name: Some(name.to_owned()),
+        })
     }
 }
 
@@ -49,9 +47,9 @@ impl CredentialSource for FixedCredential {
 
     fn describe(&self) -> String {
         match (&self.env_name, &self.credential) {
-            (Some(name), Some(c)) => format!("env ${name} ({})", c.masked()),
-            (None, Some(c)) => format!("static ({})", c.masked()),
-            _ => self.origin.to_owned(),
+            (Some(name), _) => format!("env ${name}"),
+            (None, Some(_)) => "static".to_owned(),
+            (None, None) => "none".to_owned(),
         }
     }
 }

@@ -119,7 +119,7 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
         false
     }
 
-    /// One-line human description for status output.
+    /// Where the credential comes from, for status output. Never the value.
     fn describe(&self) -> String;
 }
 

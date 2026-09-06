@@ -45,7 +45,11 @@ async fn fixed_none_and_static() {
         fixed.credential().await.unwrap(),
         Some(Credential::new(CredentialHeader::XApiKey, "key-1234567890").unwrap())
     );
-    assert_eq!(fixed.describe(), "static (key-…7890)");
+    assert_eq!(
+        fixed.describe(),
+        "static",
+        "describe never carries the value"
+    );
 }
 
 #[tokio::test]
@@ -62,7 +66,7 @@ async fn env_is_resolved_at_build_time() {
         source.credential().await.unwrap(),
         Some(bearer("from-environment"))
     );
-    assert!(source.describe().starts_with("env $ANTHROXY_TEST_CRED"));
+    assert_eq!(source.describe(), "env $ANTHROXY_TEST_CRED");
 
     let err = build(&CredentialConfig::Env {
         name: "ANTHROXY_TEST_MISSING".into(),

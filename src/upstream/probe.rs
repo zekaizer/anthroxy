@@ -8,7 +8,7 @@ use crate::credential::CredentialError;
 
 #[derive(Debug)]
 pub struct Probe {
-    /// Credential source description with the value masked.
+    /// Credential source, plus the masked value when there is one.
     pub credential: Result<String, CredentialError>,
     pub models: Option<ModelsProbe>,
 }
@@ -29,19 +29,17 @@ pub enum ModelsProbe {
 /// Never fails: every outcome is data for the report.
 pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
     let credential = match backend.credential.credential().await {
-        Ok(Some(c)) => Ok(format!(
-            "{} ({})",
-            backend.credential.describe(),
-            c.masked()
-        )),
-        Ok(None) => Ok(backend.credential.describe()),
-        Err(e) => Err(e),
+        Ok(credential) => credential,
+        Err(error) => {
+            return Probe {
+                credential: Err(error),
+                models: None,
+            };
+        }
     };
-    let Ok(credential_value) = backend.credential.credential().await else {
-        return Probe {
-            credential,
-            models: None,
-        };
+    let description = match &credential {
+        Some(c) => format!("{} ({})", backend.credential.describe(), c.masked()),
+        None => backend.credential.describe(),
     };
     // What Claude Code always sends; backend `headers` still override.
     let mut base = http::HeaderMap::new();
@@ -53,7 +51,7 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json"),
     );
-    let headers = upstream_headers(&base, backend, credential_value.as_ref());
+    let headers = upstream_headers(&base, backend, credential.as_ref());
     let started = Instant::now();
     let models = match http
         .get(format!("{}/v1/models", backend.url))
@@ -82,7 +80,7 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
         Err(error) => ModelsProbe::Unreachable(super::client::describe(&error)),
     };
     Probe {
-        credential,
+        credential: Ok(description),
         models: Some(models),
     }
 }
@@ -131,6 +129,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    use crate::config::CredentialHeader;
     use crate::credential::FixedCredential;
 
     async fn slow_backend(name: &str, delay: Duration) -> Backend {
@@ -175,6 +174,29 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn credential_line_is_the_source_plus_the_masked_value() {
+        let mut backend = slow_backend("a", Duration::ZERO).await;
+        backend.credential = Arc::new(
+            FixedCredential::secret(CredentialHeader::XApiKey, "key-1234567890".into()).unwrap(),
+        );
+        let probe = probe(&reqwest::Client::new(), &backend).await;
+        assert_eq!(probe.credential.unwrap(), "static (key-…7890)");
+        assert!(matches!(
+            probe.models,
+            Some(ModelsProbe::Answered { status: 200, .. })
+        ));
+
+        let none = slow_backend("b", Duration::ZERO).await;
+        assert_eq!(
+            super::probe(&reqwest::Client::new(), &none)
+                .await
+                .credential
+                .unwrap(),
+            "none"
+        );
     }
 
     #[test]
