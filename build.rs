@@ -20,7 +20,7 @@ fn main() {
         }
         None => "unknown".to_owned(),
     };
-    println!("cargo:rustc-env=CLAUDE_ROUTER_GIT={describe}");
+    println!("cargo:rustc-env=ANTHROXY_GIT={describe}");
     // Re-run when the checked-out commit or the index changes.
     for path in [".git/HEAD", ".git/index"] {
         println!("cargo:rerun-if-changed={path}");

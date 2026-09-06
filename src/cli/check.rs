@@ -122,7 +122,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
     println!();
     if problems == 0 {
         println!(
-            "{} ready. Next: `claude-router serve`, then `claude-router env` for Claude Code.",
+            "{} ready. Next: `anthroxy serve`, then `anthroxy env` for Claude Code.",
             style.ok_mark()
         );
         Ok(())

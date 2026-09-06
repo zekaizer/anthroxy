@@ -1,4 +1,4 @@
-# claude-router
+# anthroxy
 
 Rust binary. A single-endpoint gateway in front of several Anthropic-API-compatible backends (vLLM among them), so Claude Code points at one URL and can switch models mid-session.
 
@@ -20,7 +20,7 @@ cargo fmt
 ## Layout
 
 - `src/lib.rs` — the library. All behaviour lives here; integration tests target this crate.
-- `src/main.rs` — the `claude-router` binary. Thin entry point: parse the command line, call the library. No logic.
+- `src/main.rs` — the `anthroxy` binary. Thin entry point: parse the command line, call the library. No logic.
 - One module per responsibility, one file per concern; add a file rather than growing one:
   - `config/` — TOML schema, `${ENV}` expansion, validation, the `init` example.
   - `anthropic/` — wire types the router emits or inspects (errors, model list, `model` peek/rewrite).

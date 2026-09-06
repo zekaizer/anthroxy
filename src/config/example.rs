@@ -1,9 +1,9 @@
-//! The commented configuration written by `claude-router init`. Valid as-is.
+//! The commented configuration written by `anthroxy init`. Valid as-is.
 
-pub const EXAMPLE: &str = r##"# claude-router configuration
+pub const EXAMPLE: &str = r##"# anthroxy configuration
 #
 # One endpoint for Claude Code in front of several Anthropic-compatible
-# backends. Point Claude Code at this router (see `claude-router env`) and pick
+# backends. Point Claude Code at this router (see `anthroxy env`) and pick
 # any model below with /model — switching takes effect on the next request.
 #
 # `${NAME}` is replaced with the environment variable NAME when the file is
@@ -21,13 +21,13 @@ max_body_bytes = "64MiB"
 
 [logging]
 # Log filter: error | warn | info | debug | trace, or a tracing directive such
-# as "claude_router=debug,info". `--log-level` and RUST_LOG override this.
+# as "anthroxy=debug,info". `--log-level` and RUST_LOG override this.
 level = "info"
 # "text" for humans, "json" for log shippers.
 format = "text"
 # Uncomment to write every request/response body plus routing metadata to
 # disk, one directory per request. Handy when a backend misbehaves.
-# body_dir = "~/.local/state/claude-router/bodies"
+# body_dir = "~/.local/state/anthroxy/bodies"
 # Recorded exchanges older than this are deleted (checked every 10 minutes).
 # "0s" keeps everything.
 body_retention = "7d"

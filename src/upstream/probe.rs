@@ -1,4 +1,4 @@
-//! Reachability check used by `claude-router check`: acquire the credential
+//! Reachability check used by `anthroxy check`: acquire the credential
 //! and call `GET /v1/models` on the backend.
 
 use std::time::{Duration, Instant};

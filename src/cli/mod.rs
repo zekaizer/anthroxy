@@ -28,17 +28,17 @@ const HELP_TEMPLATE: &str = "\
 
 const AFTER_HELP: &str = "\
 Getting started:
-  1. claude-router init            write a commented config with a fresh token
+  1. anthroxy init            write a commented config with a fresh token
   2. edit backends and models in the file it printed
-  3. claude-router check           validate and probe every backend
-  4. claude-router serve           start the router
-  5. claude-router env             copy the variables into Claude Code's shell
+  3. anthroxy check           validate and probe every backend
+  4. anthroxy serve           start the router
+  5. anthroxy env             copy the variables into Claude Code's shell
 
 Then pick any configured model with /model inside Claude Code.";
 
 #[derive(Debug, Clone, Parser)]
 #[command(
-    name = "claude-router",
+    name = "anthroxy",
     version = crate::build_info::VERSION,
     author,
     about = "One endpoint for Claude Code in front of several Anthropic-compatible backends",
@@ -47,12 +47,12 @@ Then pick any configured model with /model inside Claude Code.";
     propagate_version = true
 )]
 pub struct Cli {
-    /// Configuration file [default: ~/.config/claude-router/config.toml]
+    /// Configuration file [default: ~/.config/anthroxy/config.toml]
     #[arg(short, long, global = true, env = config::CONFIG_ENV, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
     /// Log filter: error|warn|info|debug|trace, or a directive such as
-    /// "claude_router=debug,info". Overrides RUST_LOG and the file.
+    /// "anthroxy=debug,info". Overrides RUST_LOG and the file.
     #[arg(short = 'l', long, global = true, value_name = "FILTER")]
     pub log_level: Option<String>,
 
@@ -81,7 +81,7 @@ impl From<LogFormatArg> for LogFormat {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    /// Start the router. SIGHUP (or `claude-router service reload`) re-reads
+    /// Start the router. SIGHUP (or `anthroxy service reload`) re-reads
     /// the configuration without dropping connections.
     Serve(serve::ServeArgs),
     /// Validate the configuration and probe every backend
@@ -97,7 +97,7 @@ pub enum Command {
 }
 
 impl Cli {
-    /// Explicit `--config`, else `$CLAUDE_ROUTER_CONFIG`, else the default.
+    /// Explicit `--config`, else `$ANTHROXY_CONFIG`, else the default.
     pub fn config_path(&self) -> PathBuf {
         self.config.clone().unwrap_or_else(config::default_path)
     }

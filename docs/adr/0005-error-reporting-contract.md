@@ -22,7 +22,7 @@ With one endpoint in front of several backends, "the request failed" is not acti
 
 502 is deliberate: it distinguishes "the router could not get an answer" from a backend's own 500.
 
-**Identification.** Router-originated failures name the backend and cause in `error.message` (e.g. ``backend `vllm` unreachable after 3 attempt(s): ... connection refused``). Every response carries `x-request-id`; the same id appears in every log line of that request and in the error body. Responses that involved a backend carry `x-claude-router-backend`.
+**Identification.** Router-originated failures name the backend and cause in `error.message` (e.g. ``backend `vllm` unreachable after 3 attempt(s): ... connection refused``). Every response carries `x-request-id`; the same id appears in every log line of that request and in the error body. Responses that involved a backend carry `x-anthroxy-backend`.
 
 **Upstream errors.** A 4xx/5xx from a backend is relayed with its own status and headers. If its body is an Anthropic error document, `error.message` is prefixed with `[backend <name>, HTTP <status>]` and `request_id` is filled with the router id when the backend supplied none. Any other body (plain text, another vendor's JSON) is relayed byte-for-byte. Errors inside an SSE stream are never touched.
 

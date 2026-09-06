@@ -62,6 +62,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "anthroxy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "async-trait",
+ "axum",
+ "bytes",
+ "clap",
+ "dirs",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "humantime",
+ "humantime-serde",
+ "jiff",
+ "owo-colors",
+ "predicates",
+ "rand",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,40 +305,6 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
-
-[[package]]
-name = "claude-router"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "async-trait",
- "axum",
- "bytes",
- "clap",
- "dirs",
- "futures-util",
- "http",
- "http-body-util",
- "humantime",
- "humantime-serde",
- "jiff",
- "owo-colors",
- "predicates",
- "rand",
- "regex-lite",
- "reqwest",
- "serde",
- "serde_json",
- "subtle",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "colorchoice"

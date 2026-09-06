@@ -76,7 +76,7 @@ pub async fn collect(expected: &Expected<'_>, runner: &dyn CommandRunner) -> Vec
             "unit file",
             Verdict::Fail,
             format!(
-                "{} not found; run `claude-router service install`",
+                "{} not found; run `anthroxy service install`",
                 expected.unit_path.display()
             ),
         )),
@@ -87,7 +87,7 @@ pub async fn collect(expected: &Expected<'_>, runner: &dyn CommandRunner) -> Vec
         Some(None) => checks.push(check(
             "unit paths",
             Verdict::Fail,
-            "ExecStart line not recognised; run `claude-router service install` to rewrite the unit",
+            "ExecStart line not recognised; run `anthroxy service install` to rewrite the unit",
         )),
         Some(Some(exec)) => {
             let mut mismatches = Vec::new();
@@ -112,7 +112,7 @@ pub async fn collect(expected: &Expected<'_>, runner: &dyn CommandRunner) -> Vec
                     format!("{} --config {}", exec.exe.display(), exec.config.display()),
                 ));
             } else {
-                mismatches.push("run `claude-router service install` to update the unit".to_owned());
+                mismatches.push("run `anthroxy service install` to update the unit".to_owned());
                 checks.push(check("unit paths", Verdict::Fail, mismatches.join("; ")));
             }
         }
@@ -124,14 +124,14 @@ pub async fn collect(expected: &Expected<'_>, runner: &dyn CommandRunner) -> Vec
             "enabled",
             "is-enabled",
             "enabled",
-            "run `systemctl --user enable claude-router.service`",
+            "run `systemctl --user enable anthroxy.service`",
         ));
         checks.push(systemctl_state(
             runner,
             "active",
             "is-active",
             "active",
-            "see `journalctl --user -u claude-router.service -n 20`",
+            "see `journalctl --user -u anthroxy.service -n 20`",
         ));
     } else {
         checks.push(check("enabled", Verdict::Skip, "systemd not reachable"));
@@ -175,7 +175,7 @@ pub async fn collect(expected: &Expected<'_>, runner: &dyn CommandRunner) -> Vec
 
 const SYSTEMD_HINT: &str = "; enable systemd with `[boot] systemd=true` in /etc/wsl.conf, then `wsl --shutdown` from Windows";
 
-/// `systemctl --user <query> claude-router.service`, Ok when stdout equals `want`.
+/// `systemctl --user <query> anthroxy.service`, Ok when stdout equals `want`.
 fn systemctl_state(
     runner: &dyn CommandRunner,
     name: &'static str,

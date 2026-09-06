@@ -53,7 +53,7 @@ impl RouterError {
         }
     }
 
-    /// Backend involved, for the `x-claude-router-backend` header.
+    /// Backend involved, for the `x-anthroxy-backend` header.
     pub fn backend(&self) -> Option<&str> {
         match self {
             RouterError::Upstream(UpstreamError::Credential { backend, .. })

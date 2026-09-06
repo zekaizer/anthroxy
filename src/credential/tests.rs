@@ -48,7 +48,7 @@ async fn fixed_none_and_static() {
 
 #[tokio::test]
 async fn env_is_resolved_at_build_time() {
-    let name = "CLAUDE_ROUTER_TEST_CRED";
+    let name = "ANTHROXY_TEST_CRED";
     // SAFETY: test-local variable, no other thread reads it concurrently.
     unsafe { std::env::set_var(name, "from-environment") };
     let source = build(&CredentialConfig::Env {
@@ -60,14 +60,10 @@ async fn env_is_resolved_at_build_time() {
         source.credential().await.unwrap(),
         Some(bearer("from-environment"))
     );
-    assert!(
-        source
-            .describe()
-            .starts_with("env $CLAUDE_ROUTER_TEST_CRED")
-    );
+    assert!(source.describe().starts_with("env $ANTHROXY_TEST_CRED"));
 
     let err = build(&CredentialConfig::Env {
-        name: "CLAUDE_ROUTER_TEST_MISSING".into(),
+        name: "ANTHROXY_TEST_MISSING".into(),
         header: CredentialHeader::Bearer,
     })
     .err()

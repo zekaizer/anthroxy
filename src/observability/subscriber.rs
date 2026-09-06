@@ -14,7 +14,7 @@ use crate::config::LogFormat;
 pub fn resolve_directives(cli: Option<&str>, env: Option<&str>, config: &str) -> String {
     let chosen = cli.or(env).unwrap_or(config).trim();
     match chosen.to_ascii_lowercase().as_str() {
-        "debug" | "trace" => format!("claude_router={chosen},info"),
+        "debug" | "trace" => format!("anthroxy={chosen},info"),
         _ => chosen.to_owned(),
     }
 }
@@ -68,11 +68,11 @@ mod tests {
     fn verbose_bare_levels_scope_to_the_router() {
         assert_eq!(
             resolve_directives(None, None, "debug"),
-            "claude_router=debug,info"
+            "anthroxy=debug,info"
         );
         assert_eq!(
             resolve_directives(Some("trace"), None, "info"),
-            "claude_router=trace,info"
+            "anthroxy=trace,info"
         );
         assert_eq!(
             resolve_directives(None, None, "h2=debug,info"),

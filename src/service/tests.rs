@@ -29,13 +29,13 @@ impl FakeRunner {
         Self::default()
             .with("systemctl --user is-system-running", true, "running", "")
             .with(
-                "systemctl --user is-enabled claude-router.service",
+                "systemctl --user is-enabled anthroxy.service",
                 true,
                 "enabled",
                 "",
             )
             .with(
-                "systemctl --user is-active claude-router.service",
+                "systemctl --user is-active anthroxy.service",
                 true,
                 "active",
                 "",
@@ -79,12 +79,12 @@ struct Fixture {
 
 fn fixture(write_unit_for: Option<(&Path, &Path)>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let exe = dir.path().join("bin").join("claude-router");
+    let exe = dir.path().join("bin").join("anthroxy");
     let config = dir.path().join("config.toml");
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
     std::fs::write(&exe, "").unwrap();
     std::fs::write(&config, "").unwrap();
-    let unit = dir.path().join("claude-router.service");
+    let unit = dir.path().join("anthroxy.service");
     if let Some((unit_exe, unit_config)) = write_unit_for {
         std::fs::write(&unit, render_unit(unit_exe, unit_config)).unwrap();
     }
@@ -161,17 +161,13 @@ async fn missing_unit_skips_dependent_checks() {
 #[tokio::test]
 async fn stale_unit_paths_are_reported_with_both_sides() {
     let f = fixture(Some((
-        Path::new("/old/claude-router"),
+        Path::new("/old/anthroxy"),
         Path::new("/old/config.toml"),
     )));
     let checks = collect(&expected(&f, Err(String::new())), &FakeRunner::healthy()).await;
     let paths = verdict(&checks, "unit paths");
     assert_eq!(paths.verdict, Verdict::Fail);
-    assert!(
-        paths.detail.contains("/old/claude-router"),
-        "{}",
-        paths.detail
-    );
+    assert!(paths.detail.contains("/old/anthroxy"), "{}", paths.detail);
     assert!(
         paths.detail.contains(f.exe.to_str().unwrap()),
         "{}",
@@ -224,13 +220,13 @@ async fn inactive_unit_points_at_the_journal() {
     let f = fixture(Some((Path::new("/x"), Path::new("/y"))));
     let runner = FakeRunner::healthy()
         .with(
-            "systemctl --user is-active claude-router.service",
+            "systemctl --user is-active anthroxy.service",
             false,
             "failed",
             "",
         )
         .with(
-            "systemctl --user is-enabled claude-router.service",
+            "systemctl --user is-enabled anthroxy.service",
             false,
             "disabled",
             "",

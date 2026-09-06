@@ -1,4 +1,4 @@
-//! Black-box tests of the `claude-router` binary.
+//! Black-box tests of the `anthroxy` binary.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
@@ -8,8 +8,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 fn bin() -> Command {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("claude-router"));
-    cmd.env_remove("CLAUDE_ROUTER_CONFIG")
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("anthroxy"));
+    cmd.env_remove("ANTHROXY_CONFIG")
         .env_remove("RUST_LOG")
         .env("NO_COLOR", "1");
     cmd
@@ -17,8 +17,8 @@ fn bin() -> Command {
 
 /// For tests that keep the process running and read its output live.
 fn spawnable() -> std::process::Command {
-    let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin!("claude-router"));
-    cmd.env_remove("CLAUDE_ROUTER_CONFIG")
+    let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin!("anthroxy"));
+    cmd.env_remove("ANTHROXY_CONFIG")
         .env_remove("RUST_LOG")
         .env("NO_COLOR", "1");
     cmd
@@ -73,10 +73,9 @@ fn help_lists_every_command() {
 fn version_shows_git_state_and_help_shows_author() {
     let out = bin().arg("--version").output().unwrap();
     let text = String::from_utf8(out.stdout).unwrap();
-    let re = regex_lite::Regex::new(
-        r"^claude-router \d+\.\d+\.\d+ \(([0-9a-f]{7,}(-dirty)?|unknown)\)\n$",
-    )
-    .unwrap();
+    let re =
+        regex_lite::Regex::new(r"^anthroxy \d+\.\d+\.\d+ \(([0-9a-f]{7,}(-dirty)?|unknown)\)\n$")
+            .unwrap();
     assert!(re.is_match(&text), "unexpected version line: {text:?}");
 
     bin()
@@ -84,7 +83,7 @@ fn version_shows_git_state_and_help_shows_author() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Luke Lee"))
-        .stdout(predicate::str::is_match(r"claude-router \d+\.\d+\.\d+ \(").unwrap());
+        .stdout(predicate::str::is_match(r"anthroxy \d+\.\d+\.\d+ \(").unwrap());
 }
 
 #[test]
@@ -96,7 +95,7 @@ fn init_writes_a_loadable_config_and_refuses_to_overwrite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("wrote"))
-        .stdout(predicate::str::contains("claude-router check"));
+        .stdout(predicate::str::contains("anthroxy check"));
     assert!(path.exists());
 
     bin()
@@ -127,7 +126,7 @@ fn init_stdout_prints_without_touching_disk() {
         .args(["--config", path.to_str().unwrap(), "init", "--stdout"])
         .assert()
         .success()
-        .stdout(predicate::str::starts_with("# claude-router configuration"))
+        .stdout(predicate::str::starts_with("# anthroxy configuration"))
         .stdout(predicate::str::contains("[[models]]"));
     assert!(!path.exists());
 }
@@ -171,11 +170,11 @@ fn check_probe_reports_unreachable_backend() {
 #[test]
 fn missing_config_is_a_clear_error() {
     bin()
-        .args(["--config", "/nonexistent/claude-router.toml", "models"])
+        .args(["--config", "/nonexistent/anthroxy.toml", "models"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot read"))
-        .stderr(predicate::str::contains("/nonexistent/claude-router.toml"));
+        .stderr(predicate::str::contains("/nonexistent/anthroxy.toml"));
 }
 
 #[test]

@@ -38,9 +38,9 @@ pub fn run(cli: &Cli, args: &InitArgs, style: &Style) -> anyhow::Result<()> {
     println!();
     println!("Next:");
     println!("  1. edit the [backends.*] and [[models]] entries in that file");
-    println!("  2. claude-router check      validate and probe the backends");
-    println!("  3. claude-router serve      start the router");
-    println!("  4. claude-router env        variables for Claude Code");
+    println!("  2. anthroxy check      validate and probe the backends");
+    println!("  3. anthroxy serve      start the router");
+    println!("  4. anthroxy env        variables for Claude Code");
     Ok(())
 }
 

@@ -18,7 +18,7 @@ Claude Code talks to exactly one `ANTHROPIC_BASE_URL`. Since v2.1.129 it can lis
 
 **Paths.** `POST /v1/messages` and `POST /v1/messages/count_tokens` are proxied with path and query string unchanged; `<backend.url>` is the only prefix added. Other paths are 404.
 
-**Headers.** Every client header is forwarded except hop-by-hop headers, `host`, `content-length`, the client's `authorization`/`x-api-key` (replaced by the backend credential, ADR-0004) and `accept-encoding` (so bodies are relayed and logged uncompressed). A backend's `headers` override and its `anthropic_beta` flags are merged into the client's list. Response headers are forwarded except framing headers; the router adds `x-request-id`, `x-claude-router-backend`, `x-claude-router-model` and `x-claude-router-upstream-model`.
+**Headers.** Every client header is forwarded except hop-by-hop headers, `host`, `content-length`, the client's `authorization`/`x-api-key` (replaced by the backend credential, ADR-0004) and `accept-encoding` (so bodies are relayed and logged uncompressed). A backend's `headers` override and its `anthropic_beta` flags are merged into the client's list. Response headers are forwarded except framing headers; the router adds `x-request-id`, `x-anthroxy-backend`, `x-anthroxy-model` and `x-anthroxy-upstream-model`.
 
 **Bodies.** Successful responses are streamed to the client chunk by chunk as the backend produces them; no buffering, no SSE parsing. Error responses (4xx/5xx) are buffered, see ADR-0005.
 

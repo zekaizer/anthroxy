@@ -51,7 +51,7 @@ jobs:
         # `ldd` says "statically linked". Any `=>` in ldd output means a
         # shared library got in.
         run: |
-          bin="target/$TARGET/release/claude-router"
+          bin="target/$TARGET/release/anthroxy"
           file "$bin"
           file "$bin" | grep -Eq 'static(-pie)? linked'
           if ldd "$bin" 2>&1 | grep -q '=>'; then
@@ -62,9 +62,9 @@ jobs:
 
       - name: Package
         run: |
-          name="claude-router-$TARGET"
+          name="anthroxy-$TARGET"
           mkdir -p "dist/$name"
-          cp "target/$TARGET/release/claude-router" README.md "dist/$name/"
+          cp "target/$TARGET/release/anthroxy" README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
           ls -l dist

@@ -1,6 +1,6 @@
 mod support;
 
-use claude_router::config::Config;
+use anthroxy::config::Config;
 use serde_json::{Value, json};
 use support::mock_upstream::echo;
 use support::router::{TOKEN, config_with_backend};
@@ -92,7 +92,7 @@ upstream_model = "other-v2"
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    assert_eq!(res.headers()["x-claude-router-backend"], "other");
+    assert_eq!(res.headers()["x-anthroxy-backend"], "other");
     let seen = second.last();
     assert_eq!(seen.json()["model"], "other-v2");
     assert_eq!(seen.header("x-api-key"), Some("other-key"));
@@ -112,12 +112,11 @@ async fn failed_reload_keeps_the_previous_configuration() {
 
     let broken = config_with_backend(&upstream.url(), "").replace(
         r#"credential = { kind = "static", value = "backend-secret-key" }"#,
-        r#"credential = { kind = "env", name = "CLAUDE_ROUTER_TEST_DEFINITELY_UNSET" }"#,
+        r#"credential = { kind = "env", name = "ANTHROXY_TEST_DEFINITELY_UNSET" }"#,
     );
     let err = router.reload.apply(&parse(&broken)).unwrap_err();
     assert!(
-        err.to_string()
-            .contains("CLAUDE_ROUTER_TEST_DEFINITELY_UNSET"),
+        err.to_string().contains("ANTHROXY_TEST_DEFINITELY_UNSET"),
         "{err}"
     );
     assert_eq!(

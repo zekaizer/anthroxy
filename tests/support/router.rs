@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
-use claude_router::config::Config;
-use claude_router::server::{ReloadHandle, Server};
+use anthroxy::config::Config;
+use anthroxy::server::{ReloadHandle, Server};
 
 pub const TOKEN: &str = "router-test-token";
 

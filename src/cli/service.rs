@@ -52,7 +52,7 @@ pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result
             println!("The router now starts with the system. Useful commands:");
             println!("  systemctl --user status {UNIT_NAME}");
             println!("  journalctl --user -u {UNIT_NAME} -f");
-            println!("  claude-router service uninstall");
+            println!("  anthroxy service uninstall");
             Ok(())
         }
         ServiceAction::Reload => {

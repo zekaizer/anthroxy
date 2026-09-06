@@ -9,10 +9,10 @@ use super::Backend;
 use crate::credential::{Credential, X_API_KEY};
 
 pub static ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
-pub static X_ROUTER_BACKEND: HeaderName = HeaderName::from_static("x-claude-router-backend");
-pub static X_ROUTER_MODEL: HeaderName = HeaderName::from_static("x-claude-router-model");
+pub static X_ROUTER_BACKEND: HeaderName = HeaderName::from_static("x-anthroxy-backend");
+pub static X_ROUTER_MODEL: HeaderName = HeaderName::from_static("x-anthroxy-model");
 pub static X_ROUTER_UPSTREAM_MODEL: HeaderName =
-    HeaderName::from_static("x-claude-router-upstream-model");
+    HeaderName::from_static("x-anthroxy-upstream-model");
 static KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 static PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 

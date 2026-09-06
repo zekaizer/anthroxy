@@ -52,7 +52,7 @@ impl ServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
-    /// `tracing` filter directive, e.g. `info` or `claude_router=debug,info`.
+    /// `tracing` filter directive, e.g. `info` or `anthroxy=debug,info`.
     #[serde(default = "LoggingConfig::default_level")]
     pub level: String,
     #[serde(default)]

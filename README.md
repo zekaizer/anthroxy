@@ -1,14 +1,14 @@
-# claude-router
+# anthroxy
 
-[![CI](https://github.com/zekaizer/claude-router/actions/workflows/ci.yml/badge.svg)](https://github.com/zekaizer/claude-router/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/zekaizer/claude-router?sort=semver)](https://github.com/zekaizer/claude-router/releases/latest)
+[![CI](https://github.com/zekaizer/anthroxy/actions/workflows/ci.yml/badge.svg)](https://github.com/zekaizer/anthroxy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zekaizer/anthroxy?sort=semver)](https://github.com/zekaizer/anthroxy/releases/latest)
 
 One endpoint for Claude Code in front of several Anthropic-API-compatible backends (vLLM, LM Studio, api.anthropic.com, …). Claude Code points at the router once; every configured model shows up in its `/model` picker, and switching between them takes effect on the next request without restarting the session.
 
 ```
-Claude Code ──► claude-router ──┬──► vLLM            (Qwen, …)
- one URL,         routes by     ├──► LM Studio        (local models)
- one token        `model`       └──► api.anthropic.com (rotating OAuth token)
+Claude Code ──► anthroxy ──┬──► vLLM              (Qwen, …)
+ one URL,      routes by   ├──► LM Studio         (local models)
+ one token     `model`     └──► api.anthropic.com (rotating OAuth token)
 ```
 
 What the router does:
@@ -25,16 +25,16 @@ What the router does:
 **Linux x86_64 (WSL2 included), no toolchain needed** — every release ships a fully static executable:
 
 ```sh
-curl -fsSLO https://github.com/zekaizer/claude-router/releases/latest/download/claude-router-x86_64-unknown-linux-musl.tar.gz
-tar -xzf claude-router-x86_64-unknown-linux-musl.tar.gz
-install -m 755 claude-router-x86_64-unknown-linux-musl/claude-router ~/.local/bin/
-claude-router --version        # prints the version and the commit it was built from
+curl -fsSLO https://github.com/zekaizer/anthroxy/releases/latest/download/anthroxy-x86_64-unknown-linux-musl.tar.gz
+tar -xzf anthroxy-x86_64-unknown-linux-musl.tar.gz
+install -m 755 anthroxy-x86_64-unknown-linux-musl/anthroxy ~/.local/bin/
+anthroxy --version        # prints the version and the commit it was built from
 ```
 
 **From source** (Linux and macOS, Rust 1.85+ for edition 2024):
 
 ```sh
-cargo install --path .        # or: cargo build --release && cp target/release/claude-router ~/.local/bin/
+cargo install --path .        # or: cargo build --release && cp target/release/anthroxy ~/.local/bin/
 ```
 
 Claude Code **2.1.152 or newer** on the client side: gateway model discovery arrived in 2.1.129, and 2.1.152 added the recovery that lets a session switch from a non-Anthropic backend back to Anthropic (older versions fail with a 400 on the `thinking` blocks the other model left in the history).
@@ -42,17 +42,17 @@ Claude Code **2.1.152 or newer** on the client side: gateway model discovery arr
 ## Quick start
 
 ```sh
-claude-router init            # writes ~/.config/claude-router/config.toml with a fresh token
-$EDITOR ~/.config/claude-router/config.toml
-claude-router check           # validates the file and probes every backend
-claude-router serve           # starts the router (Ctrl-C to stop)
-claude-router env             # prints the variables Claude Code needs
+anthroxy init            # writes ~/.config/anthroxy/config.toml with a fresh token
+$EDITOR ~/.config/anthroxy/config.toml
+anthroxy check           # validates the file and probes every backend
+anthroxy serve           # starts the router (Ctrl-C to stop)
+anthroxy env             # prints the variables Claude Code needs
 ```
 
 `check` output looks like this:
 
 ```
-✓ ~/.config/claude-router/config.toml  valid: 2 backend(s), 3 model(s), listening on 0.0.0.0:8787
+✓ ~/.config/anthroxy/config.toml  valid: 2 backend(s), 3 model(s), listening on 0.0.0.0:8787
 
 Backends
   ✓  claude  https://api.anthropic.com
@@ -80,11 +80,11 @@ export ANTHROPIC_MODEL="gemma-local"      # the model Claude Code starts with
 claude
 ```
 
-`claude-router env --format powershell` prints the same for the Windows host; `--format json` prints an `"env"` block for `~/.claude/settings.json`.
+`anthroxy env --format powershell` prints the same for the Windows host; `--format json` prints an `"env"` block for `~/.claude/settings.json`.
 
 ## Configuration
 
-`~/.config/claude-router/config.toml` (override with `--config` or `CLAUDE_ROUTER_CONFIG`). `claude-router init --stdout` prints a fully commented example; the essentials:
+`~/.config/anthroxy/config.toml` (override with `--config` or `ANTHROXY_CONFIG`). `anthroxy init --stdout` prints a fully commented example; the essentials:
 
 ```toml
 [server]
@@ -94,7 +94,7 @@ token = "…"                      # what Claude Code sends as ANTHROPIC_AUTH_TO
 [logging]
 level = "info"                   # error|warn|info|debug|trace or a tracing directive
 format = "text"                  # or "json"
-# body_dir = "/var/tmp/claude-router"   # record every request/response (see Debugging)
+# body_dir = "/var/tmp/anthroxy"   # record every request/response (see Debugging)
 body_retention = "7d"            # delete recorded exchanges older than this; "0s" keeps all
 
 [upstream]
@@ -135,7 +135,7 @@ Notes:
 - Credential kinds: `none` (default), `static`, `env` (`name = "VAR"`), `command`. `header` is `bearer` (default) or `x_api_key`.
 - A `command` credential runs through `sh -c`; trimmed stdout is the token. It is re-run after `refresh`, and once more immediately if the backend answers 401/403.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
-- Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `claude-router service reload`): models, backends, credentials, token, logging and upstream settings swap atomically; in-flight requests finish on the old configuration. Changing `server.listen` still needs a restart. A file that fails to load leaves the running configuration untouched and logs the error.
+- Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, logging and upstream settings swap atomically; in-flight requests finish on the old configuration. Changing `server.listen` still needs a restart. A file that fails to load leaves the running configuration untouched and logs the error.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.
 
 ## Commands
@@ -159,18 +159,18 @@ Global options: `--config PATH`, `--log-level FILTER`, `--log-format text|json`.
 | `GET /v1/models`, `GET /v1/models/{id}` | yes | The configured models, Anthropic list format. |
 | `POST /v1/messages`, `POST /v1/messages/count_tokens` | yes | Routed by the body's `model`; path and query forwarded unchanged. |
 
-Auth is `x-api-key: <token>` or `Authorization: Bearer <token>`; failures are 401 in the Anthropic error format. Every response carries `x-request-id`; proxied ones also carry `x-claude-router-backend`, `x-claude-router-model` and `x-claude-router-upstream-model`.
+Auth is `x-api-key: <token>` or `Authorization: Bearer <token>`; failures are 401 in the Anthropic error format. Every response carries `x-request-id`; proxied ones also carry `x-anthroxy-backend`, `x-anthroxy-model` and `x-anthroxy-upstream-model`.
 
 Errors the router produces are `{"type":"error","error":{"type":…,"message":…},"request_id":…}`: 400 for a body without `model`, 404 for an unknown model (listing the configured ones), 413 over `server.max_body_bytes`, 502 when a backend is unreachable or its credential cannot be obtained. Backend errors are relayed with their status; if the body is an Anthropic error, its message is prefixed with `[backend <name>, HTTP <status>]`.
 
 ## Running on WSL2 as a service
 
 ```sh
-claude-router service install     # writes ~/.config/systemd/user/claude-router.service, enables it, enables linger
-claude-router service status      # ✓/✗ per check; exit 1 if anything is wrong
-claude-router service reload      # re-read the config (systemctl --user reload)
-journalctl --user -u claude-router -f
-claude-router service uninstall
+anthroxy service install     # writes ~/.config/systemd/user/anthroxy.service, enables it, enables linger
+anthroxy service status      # ✓/✗ per check; exit 1 if anything is wrong
+anthroxy service reload      # re-read the config (systemctl --user reload)
+journalctl --user -u anthroxy -f
+anthroxy service uninstall
 ```
 
 Requirements: systemd enabled in the distribution (`[boot] systemd=true` in `/etc/wsl.conf`, default on recent Ubuntu). WSL still shuts the VM down when idle unless `%USERPROFILE%\.wslconfig` sets `[wsl2] vmIdleTimeout=-1`.
@@ -181,7 +181,7 @@ From Claude Code on the Windows host, use the distribution's address (`hostname 
 
 - **Logs.** Text by default, `--log-format json` for shippers. Each request runs in a span `request{id=… method=… path=… model=… backend=…}`; the lines you will look for are `routed`, `upstream responded` (status, attempts, latency), `response body complete` (bytes, chunks, time to first byte) and the `WARN`s: retries, credential refreshes, client disconnects, upstream errors.
 - **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`. Each request gets `<DIR>/<time>-<request id>/` with `request.json` (exactly what went upstream), `response.json|sse|bin` (exactly what came back) and `meta.json` (routing, headers with credentials redacted, status, timings, outcome). Entries older than `logging.body_retention` (default 7 days) are deleted at startup and every 10 minutes; set it to `0s` to keep everything.
-- **Levels.** `--log-level debug` (or `trace`) applies to the router only. To see the HTTP client internals, name them: `--log-level "claude_router=debug,hyper=debug,h2=debug"`.
+- **Levels.** `--log-level debug` (or `trace`) applies to the router only. To see the HTTP client internals, name them: `--log-level "anthroxy=debug,hyper=debug,h2=debug"`.
 
 ## Development
 

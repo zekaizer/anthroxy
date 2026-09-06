@@ -1,17 +1,17 @@
-//! systemd user unit: `~/.config/systemd/user/claude-router.service`.
+//! systemd user unit: `~/.config/systemd/user/anthroxy.service`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const UNIT_NAME: &str = "claude-router.service";
+pub const UNIT_NAME: &str = "anthroxy.service";
 
 /// Renders the unit. `exe` and `config` are embedded as absolute paths so the
 /// unit does not depend on PATH or the working directory.
 pub fn render_unit(exe: &Path, config: &Path) -> String {
     format!(
         "[Unit]\n\
-         Description=claude-router: one endpoint for Claude Code in front of several backends\n\
-         Documentation=https://github.com/zekaizer/claude-router\n\
+         Description=anthroxy: one endpoint for Claude Code in front of several backends\n\
+         Documentation=https://github.com/zekaizer/anthroxy\n\
          After=network-online.target\n\
          Wants=network-online.target\n\
          \n\
@@ -41,7 +41,7 @@ fn shell_quote(path: &Path) -> String {
     }
 }
 
-/// `~/.config/systemd/user/claude-router.service`
+/// `~/.config/systemd/user/anthroxy.service`
 pub fn unit_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("systemd").join("user").join(UNIT_NAME))
 }
@@ -212,10 +212,10 @@ mod tests {
     #[test]
     fn unit_embeds_absolute_paths_and_restarts() {
         let unit = render_unit(
-            Path::new("/usr/local/bin/claude-router"),
-            Path::new("/home/u/.config/claude-router/config.toml"),
+            Path::new("/usr/local/bin/anthroxy"),
+            Path::new("/home/u/.config/anthroxy/config.toml"),
         );
-        assert!(unit.contains("ExecStart=/usr/local/bin/claude-router --config /home/u/.config/claude-router/config.toml serve\n"));
+        assert!(unit.contains("ExecStart=/usr/local/bin/anthroxy --config /home/u/.config/anthroxy/config.toml serve\n"));
         assert!(unit.contains("Restart=on-failure"));
         assert!(
             unit.contains("ExecReload=/bin/kill -HUP $MAINPID\n"),
@@ -227,27 +227,24 @@ mod tests {
 
     #[test]
     fn paths_with_spaces_are_quoted() {
-        let unit = render_unit(
-            Path::new("/opt/my tools/claude-router"),
-            Path::new("/c.toml"),
-        );
-        assert!(unit.contains("ExecStart=\"/opt/my tools/claude-router\" --config /c.toml serve"));
+        let unit = render_unit(Path::new("/opt/my tools/anthroxy"), Path::new("/c.toml"));
+        assert!(unit.contains("ExecStart=\"/opt/my tools/anthroxy\" --config /c.toml serve"));
     }
 
     #[test]
     fn exec_start_round_trips_through_render() {
-        let exe = Path::new("/opt/my tools/claude-router");
-        let config = Path::new("/home/u/.config/claude-router/config.toml");
+        let exe = Path::new("/opt/my tools/anthroxy");
+        let config = Path::new("/home/u/.config/anthroxy/config.toml");
         let parsed = parse_exec_start(&render_unit(exe, config)).unwrap();
         assert_eq!(parsed.exe, exe);
         assert_eq!(parsed.config, config);
 
         let plain = parse_exec_start(&render_unit(
-            Path::new("/usr/bin/claude-router"),
+            Path::new("/usr/bin/anthroxy"),
             Path::new("/c.toml"),
         ))
         .unwrap();
-        assert_eq!(plain.exe, Path::new("/usr/bin/claude-router"));
+        assert_eq!(plain.exe, Path::new("/usr/bin/anthroxy"));
         assert_eq!(plain.config, Path::new("/c.toml"));
     }
 

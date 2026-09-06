@@ -52,9 +52,7 @@ pub fn render(config: &Config, host: Option<&str>, format: EnvFormat) -> String 
     let mut out = String::new();
     match format {
         EnvFormat::Sh => {
-            out.push_str(
-                "# Point Claude Code at claude-router (paste into your shell or profile)\n",
-            );
+            out.push_str("# Point Claude Code at anthroxy (paste into your shell or profile)\n");
             for (name, value) in &vars {
                 out.push_str(&format!("export {name}=\"{value}\"\n"));
             }
@@ -67,7 +65,7 @@ pub fn render(config: &Config, host: Option<&str>, format: EnvFormat) -> String 
             }
         }
         EnvFormat::Powershell => {
-            out.push_str("# Point Claude Code at claude-router (PowerShell)\n");
+            out.push_str("# Point Claude Code at anthroxy (PowerShell)\n");
             for (name, value) in &vars {
                 out.push_str(&format!("$env:{name} = \"{value}\"\n"));
             }

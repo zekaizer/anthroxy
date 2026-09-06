@@ -1,10 +1,10 @@
 [package]
-name = "claude-router"
+name = "anthroxy"
 version = "0.1.0"
 edition = "2024"
 authors = ["Luke Lee"]
 description = "One endpoint for Claude Code in front of several Anthropic-compatible backends"
-repository = "https://github.com/zekaizer/claude-router"
+repository = "https://github.com/zekaizer/anthroxy"
 readme = "README.md"
 keywords = ["claude-code", "anthropic", "proxy", "gateway", "llm"]
 categories = ["command-line-utilities", "network-programming"]

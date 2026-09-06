@@ -44,7 +44,7 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
         .map_err(|e| anyhow::anyhow!("cannot listen on {}: {e}", config.server.listen))?;
     let addr = bound.local_addr();
     print_banner(&config, &path, addr, style);
-    tracing::info!(%addr, config = %path.display(), "claude-router listening");
+    tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
     let reloader = tokio::spawn(reload_on_hangup(
         bound.reload_handle(),
@@ -54,7 +54,7 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     let result = bound.serve(shutdown_signal()).await;
     reloader.abort();
     result?;
-    tracing::info!("claude-router stopped");
+    tracing::info!("anthroxy stopped");
     Ok(())
 }
 
@@ -98,7 +98,7 @@ fn print_banner(config: &Config, path: &std::path::Path, addr: SocketAddr, style
     let registry = Registry::from_config(config);
     println!(
         "{} {}",
-        style.bold(&format!("claude-router {}", crate::build_info::VERSION)),
+        style.bold(&format!("anthroxy {}", crate::build_info::VERSION)),
         style.dim(&format!("({})", display_path(path)))
     );
     let shown = if addr.ip().is_unspecified() {
@@ -153,7 +153,7 @@ fn print_banner(config: &Config, path: &std::path::Path, addr: SocketAddr, style
     }
     println!(
         "  client   {}",
-        style.dim("run `claude-router env` for Claude Code's variables")
+        style.dim("run `anthroxy env` for Claude Code's variables")
     );
     println!("{}", style.dim("Press Ctrl-C to stop."));
 }

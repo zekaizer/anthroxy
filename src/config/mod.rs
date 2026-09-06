@@ -23,13 +23,13 @@ pub use schema::{
 };
 
 /// Environment variable naming the configuration file.
-pub const CONFIG_ENV: &str = "CLAUDE_ROUTER_CONFIG";
+pub const CONFIG_ENV: &str = "ANTHROXY_CONFIG";
 
-/// Default configuration path: `$XDG_CONFIG_HOME/claude-router/config.toml`.
+/// Default configuration path: `$XDG_CONFIG_HOME/anthroxy/config.toml`.
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("claude-router")
+        .join("anthroxy")
         .join("config.toml")
 }
 

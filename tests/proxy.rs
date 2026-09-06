@@ -124,12 +124,9 @@ async fn forwards_messages_with_rewritten_model_and_backend_credential() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    assert_eq!(res.headers()["x-claude-router-backend"], "mock");
-    assert_eq!(res.headers()["x-claude-router-model"], "fast");
-    assert_eq!(
-        res.headers()["x-claude-router-upstream-model"],
-        "mock-fast-v1"
-    );
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+    assert_eq!(res.headers()["x-anthroxy-model"], "fast");
+    assert_eq!(res.headers()["x-anthroxy-upstream-model"], "mock-fast-v1");
     assert!(res.headers().contains_key("x-request-id"));
     assert_eq!(res.headers()["content-type"], "application/json");
 
@@ -196,7 +193,7 @@ async fn model_named_by_alias_or_exact_id_is_not_rewritten_unnecessarily() {
         .unwrap();
     assert_eq!(res.status(), 200);
     assert_eq!(upstream.last().json()["model"], "mock-fast-v1");
-    assert_eq!(res.headers()["x-claude-router-model"], "fast");
+    assert_eq!(res.headers()["x-anthroxy-model"], "fast");
 }
 
 #[tokio::test]
@@ -232,7 +229,7 @@ async fn unknown_model_uses_default_when_configured() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    assert_eq!(res.headers()["x-claude-router-model"], "fast");
+    assert_eq!(res.headers()["x-anthroxy-model"], "fast");
     assert_eq!(upstream.last().json()["model"], "mock-fast-v1");
 }
 
@@ -368,7 +365,7 @@ async fn retries_connection_failures_then_reports_backend() {
         .await
         .unwrap();
     assert_eq!(res.status(), 502);
-    assert_eq!(res.headers()["x-claude-router-backend"], "mock");
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "api_error");
@@ -459,7 +456,7 @@ async fn upstream_error_body_is_annotated_with_backend() {
         .await
         .unwrap();
     assert_eq!(res.status(), 429);
-    assert_eq!(res.headers()["x-claude-router-backend"], "mock");
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"]["type"], "rate_limit_error");
     let message = body["error"]["message"].as_str().unwrap();
