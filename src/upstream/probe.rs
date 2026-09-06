@@ -87,6 +87,15 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
     }
 }
 
+/// Probes every backend concurrently; results are in the same order as
+/// `backends`.
+pub async fn probe_all<'a>(
+    http: &reqwest::Client,
+    backends: impl IntoIterator<Item = &'a Backend>,
+) -> Vec<Probe> {
+    futures_util::future::join_all(backends.into_iter().map(|b| probe(http, b))).await
+}
+
 /// `error.message` of an Anthropic error, else the first line of the body.
 fn error_detail(json: Option<&serde_json::Value>, body: &[u8]) -> String {
     json.and_then(|j| j.pointer("/error/message"))
@@ -119,6 +128,54 @@ fn model_ids(body: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use crate::credential::FixedCredential;
+
+    async fn slow_backend(name: &str, delay: Duration) -> Backend {
+        let app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get(move || async move {
+                tokio::time::sleep(delay).await;
+                axum::Json(serde_json::json!({"data": [{"id": "m"}]}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Backend {
+            name: name.to_owned(),
+            url,
+            credential: Arc::new(FixedCredential::none()),
+            headers: http::HeaderMap::new(),
+            anthropic_beta: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_all_runs_backends_concurrently_in_order() {
+        let a = slow_backend("a", Duration::from_millis(300)).await;
+        let b = slow_backend("b", Duration::from_millis(300)).await;
+        let http = reqwest::Client::new();
+        let started = Instant::now();
+        let probes = probe_all(&http, [&a, &b]).await;
+        let elapsed = started.elapsed();
+        assert_eq!(probes.len(), 2);
+        assert!(
+            elapsed < Duration::from_millis(550),
+            "probes ran sequentially: {elapsed:?}"
+        );
+        for p in &probes {
+            match &p.models {
+                Some(ModelsProbe::Answered { status, ids, .. }) => {
+                    assert_eq!(*status, 200);
+                    assert_eq!(ids, &["m"]);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn extracts_ids_from_both_list_shapes() {

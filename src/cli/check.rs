@@ -2,6 +2,7 @@
 //! `GET /v1/models` on every backend. Exit status is non-zero when anything
 //! the router needs at runtime is broken.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Args;
@@ -10,7 +11,7 @@ use super::style::table;
 use super::{Cli, Style, display_path};
 use crate::config::Config;
 use crate::routing::Registry;
-use crate::upstream::probe::{ModelsProbe, Probe, probe};
+use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
 use crate::upstream::{Backend, Backends};
 
 #[derive(Debug, Args)]
@@ -72,9 +73,9 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
     } else {
         let http = reqwest::Client::builder().timeout(args.timeout).build()?;
-        for backend in backends.iter() {
-            let result = probe(&http, backend).await;
-            let (ok, ids) = report_backend(backend, &result, style);
+        let results = probe_all(&http, backends.iter().map(Arc::as_ref)).await;
+        for (backend, result) in backends.iter().zip(&results) {
+            let (ok, ids) = report_backend(backend, result, style);
             if !ok {
                 problems += 1;
             }
