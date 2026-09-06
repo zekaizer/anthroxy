@@ -44,6 +44,13 @@ fn minimal_config_applies_defaults() {
     ));
     assert_eq!(c.models[0].upstream_model, None);
     assert_eq!(c.routing.default_model, None);
+    assert_eq!(c.logging.body_retention, Duration::from_secs(7 * 24 * 3600));
+}
+
+#[test]
+fn body_retention_accepts_zero() {
+    let text = MINIMAL.to_owned() + "\n[logging]\nbody_retention = \"0s\"\n";
+    assert_eq!(parse(&text).unwrap().logging.body_retention, Duration::ZERO);
 }
 
 #[test]

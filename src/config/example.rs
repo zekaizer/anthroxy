@@ -28,6 +28,9 @@ format = "text"
 # Uncomment to write every request/response body plus routing metadata to
 # disk, one directory per request. Handy when a backend misbehaves.
 # body_dir = "~/.local/state/claude-router/bodies"
+# Recorded exchanges older than this are deleted (checked every 10 minutes).
+# "0s" keeps everything.
+body_retention = "7d"
 
 [upstream]
 # Connection establishment limit per attempt.

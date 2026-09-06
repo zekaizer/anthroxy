@@ -5,7 +5,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
@@ -16,6 +17,8 @@ use crate::server::relay::{RelayObserver, RelayOutcome};
 #[derive(Debug, Clone)]
 pub struct BodyLog {
     root: PathBuf,
+    /// `None` keeps entries forever.
+    retention: Option<Duration>,
 }
 
 /// What the router knew about a request when it forwarded it.
@@ -66,10 +69,12 @@ pub struct Recorder {
 }
 
 impl BodyLog {
-    pub fn open(root: &Path) -> std::io::Result<Self> {
+    /// `retention` of zero disables pruning.
+    pub fn open(root: &Path, retention: Duration) -> std::io::Result<Self> {
         std::fs::create_dir_all(root)?;
         Ok(Self {
             root: root.to_path_buf(),
+            retention: (!retention.is_zero()).then_some(retention),
         })
     }
 
@@ -77,11 +82,62 @@ impl BodyLog {
         &self.root
     }
 
+    pub fn retention(&self) -> Option<Duration> {
+        self.retention
+    }
+
+    /// Deletes entries whose stamp is older than `now - retention`. Returns
+    /// how many were removed. Names that do not carry a stamp are left alone.
+    pub fn prune(&self, now: jiff::Timestamp) -> usize {
+        let Some(retention) = self.retention else {
+            return 0;
+        };
+        let Ok(cutoff) =
+            now.checked_sub(jiff::SignedDuration::try_from(retention).unwrap_or_default())
+        else {
+            return 0;
+        };
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return 0;
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(stamp) = name.to_str().and_then(entry_stamp) else {
+                continue;
+            };
+            if stamp < cutoff && entry.path().is_dir() {
+                match std::fs::remove_dir_all(entry.path()) {
+                    Ok(()) => removed += 1,
+                    Err(error) => {
+                        tracing::warn!(path = %entry.path().display(), %error, "cannot prune body log entry");
+                    }
+                }
+            }
+        }
+        removed
+    }
+
+    /// Prunes now and then every `interval` until the task is aborted.
+    pub fn spawn_pruner(self: Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                let removed = self.prune(jiff::Timestamp::now());
+                if removed > 0 {
+                    tracing::info!(removed, dir = %self.root.display(), "pruned body log entries");
+                }
+                tokio::time::sleep(interval).await;
+            }
+        })
+    }
+
     /// Starts a record and writes `request.json` plus a first `meta.json`.
     pub fn begin(&self, record: RequestRecord, body: &Bytes, started: Instant) -> Recorder {
-        let dir = self
-            .root
-            .join(format!("{}-{}", dir_stamp(), record.request_id));
+        let dir = self.root.join(format!(
+            "{}-{}",
+            dir_stamp(jiff::Timestamp::now()),
+            record.request_id
+        ));
         let meta = Meta {
             request: record,
             status: None,
@@ -112,13 +168,26 @@ impl BodyLog {
 }
 
 /// `YYYYMMDDTHHMMSS.mmmZ`, sortable and file-name safe.
-fn dir_stamp() -> String {
-    let now = jiff::Timestamp::now();
+fn dir_stamp(now: jiff::Timestamp) -> String {
     format!(
         "{}.{:03}Z",
         now.strftime("%Y%m%dT%H%M%S"),
         now.subsec_millisecond()
     )
+}
+
+/// Inverse of [`dir_stamp`] for an entry directory name (`<stamp>-<id>`).
+fn entry_stamp(name: &str) -> Option<jiff::Timestamp> {
+    // 20260906T023829.457Z
+    let stamp = name.get(..20)?;
+    if !stamp.ends_with('Z') || name.as_bytes().get(20) != Some(&b'-') {
+        return None;
+    }
+    let parsed = jiff::civil::DateTime::strptime("%Y%m%dT%H%M%S.%3f", &stamp[..19]).ok()?;
+    parsed
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .ok()
+        .map(|z| z.timestamp())
 }
 
 fn to_pretty_json(value: &impl Serialize) -> Vec<u8> {
@@ -248,4 +317,70 @@ pub fn headers_for_record(headers: &HeaderMap) -> BTreeMap<String, String> {
             .or_insert(text);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts(text: &str) -> jiff::Timestamp {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn stamp_round_trips_through_directory_names() {
+        let now = ts("2026-09-06T02:38:29.457Z");
+        let name = format!("{}-rtr_abc", dir_stamp(now));
+        assert_eq!(name, "20260906T023829.457Z-rtr_abc");
+        assert_eq!(entry_stamp(&name), Some(now));
+        assert_eq!(entry_stamp("notes"), None);
+        assert_eq!(
+            entry_stamp("20260906T023829Z-rtr_abc"),
+            None,
+            "millis are mandatory"
+        );
+    }
+
+    #[test]
+    fn prune_removes_only_old_stamped_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = BodyLog::open(dir.path(), Duration::from_secs(3600)).unwrap();
+        let now = ts("2026-09-06T12:00:00Z");
+        for name in [
+            "20260906T105959.000Z-rtr_old",   // 2h old
+            "20260906T113000.000Z-rtr_fresh", // 30m old
+            "20260906T120000.000Z-rtr_now",
+            "unrelated-directory",
+        ] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join("meta.json"), "{}").unwrap();
+        }
+        std::fs::write(dir.path().join("stray-file"), "").unwrap();
+        assert_eq!(log.prune(now), 1);
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "20260906T113000.000Z-rtr_fresh",
+                "20260906T120000.000Z-rtr_now",
+                "stray-file",
+                "unrelated-directory"
+            ]
+        );
+        assert_eq!(log.prune(now), 0, "idempotent");
+    }
+
+    #[test]
+    fn zero_retention_never_prunes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("20200101T000000.000Z-rtr_ancient")).unwrap();
+        let log = BodyLog::open(dir.path(), Duration::ZERO).unwrap();
+        assert_eq!(log.retention(), None);
+        assert_eq!(log.prune(ts("2026-09-06T12:00:00Z")), 0);
+        assert!(dir.path().join("20200101T000000.000Z-rtr_ancient").exists());
+    }
 }

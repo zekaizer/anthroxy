@@ -61,11 +61,20 @@ pub struct LoggingConfig {
     /// directory.
     #[serde(default)]
     pub body_dir: Option<PathBuf>,
+    /// Recorded exchanges older than this are deleted; `0` keeps them forever.
+    #[serde(
+        default = "LoggingConfig::default_body_retention",
+        with = "humantime_serde"
+    )]
+    pub body_retention: Duration,
 }
 
 impl LoggingConfig {
     pub fn default_level() -> String {
         "info".to_owned()
+    }
+    pub const fn default_body_retention() -> Duration {
+        Duration::from_secs(7 * 24 * 3600)
     }
 }
 
@@ -75,6 +84,7 @@ impl Default for LoggingConfig {
             level: Self::default_level(),
             format: LogFormat::default(),
             body_dir: None,
+            body_retention: Self::default_body_retention(),
         }
     }
 }

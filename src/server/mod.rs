@@ -25,6 +25,9 @@ pub use error::RouterError;
 pub use request_id::RequestId;
 pub use state::AppState;
 
+/// How often expired body-log entries are swept.
+const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+
 #[derive(Debug, thiserror::Error)]
 pub enum ServerBuildError {
     #[error(transparent)]
@@ -42,17 +45,20 @@ pub enum ServerBuildError {
 /// A configured but not yet listening router.
 pub struct Server {
     app: Router,
+    body_log: Option<Arc<BodyLog>>,
 }
 
 impl Server {
     pub fn new(config: &Config) -> Result<Self, ServerBuildError> {
         let body_log = match &config.logging.body_dir {
-            Some(dir) => Some(Arc::new(BodyLog::open(dir).map_err(|source| {
-                ServerBuildError::BodyLog {
-                    dir: dir.clone(),
-                    source,
-                }
-            })?)),
+            Some(dir) => Some(Arc::new(
+                BodyLog::open(dir, config.logging.body_retention).map_err(|source| {
+                    ServerBuildError::BodyLog {
+                        dir: dir.clone(),
+                        source,
+                    }
+                })?,
+            )),
             None => None,
         };
         let state = AppState {
@@ -64,8 +70,10 @@ impl Server {
             started_at: jiff::Timestamp::now(),
             body_log,
         };
+        let body_log = state.body_log.clone();
         Ok(Self {
             app: routes::build(state),
+            body_log,
         })
     }
 
@@ -74,6 +82,7 @@ impl Server {
         Ok(BoundServer {
             listener,
             app: self.app,
+            body_log: self.body_log,
         })
     }
 }
@@ -82,6 +91,7 @@ impl Server {
 pub struct BoundServer {
     listener: TcpListener,
     app: Router,
+    body_log: Option<Arc<BodyLog>>,
 }
 
 impl BoundServer {
@@ -92,15 +102,24 @@ impl BoundServer {
     }
 
     /// Serves until `shutdown` resolves, then lets in-flight requests finish.
+    /// Body-log pruning runs alongside and stops with the server.
     pub async fn serve(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
-        axum::serve(
+        let pruner = self
+            .body_log
+            .filter(|log| log.retention().is_some())
+            .map(|log| log.spawn_pruner(PRUNE_INTERVAL));
+        let result = axum::serve(
             self.listener,
             self.app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown)
-        .await
+        .await;
+        if let Some(task) = pruner {
+            task.abort();
+        }
+        result
     }
 }

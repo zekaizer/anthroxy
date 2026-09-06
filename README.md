@@ -83,6 +83,7 @@ token = "…"                      # what Claude Code sends as ANTHROPIC_AUTH_TO
 level = "info"                   # error|warn|info|debug|trace or a tracing directive
 format = "text"                  # or "json"
 # body_dir = "/var/tmp/claude-router"   # record every request/response (see Debugging)
+body_retention = "7d"            # delete recorded exchanges older than this; "0s" keeps all
 
 [upstream]
 connect_timeout = "10s"
@@ -165,7 +166,7 @@ From Claude Code on the Windows host, use the distribution's address (`hostname 
 ## Debugging
 
 - **Logs.** Text by default, `--log-format json` for shippers. Each request runs in a span `request{id=… method=… path=… model=… backend=…}`; the lines you will look for are `routed`, `upstream responded` (status, attempts, latency), `response body complete` (bytes, chunks, time to first byte) and the `WARN`s: retries, credential refreshes, client disconnects, upstream errors.
-- **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`. Each request gets `<DIR>/<time>-<request id>/` with `request.json` (exactly what went upstream), `response.json|sse|bin` (exactly what came back) and `meta.json` (routing, headers with credentials redacted, status, timings, outcome). Nothing rotates these files; clean the directory yourself.
+- **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`. Each request gets `<DIR>/<time>-<request id>/` with `request.json` (exactly what went upstream), `response.json|sse|bin` (exactly what came back) and `meta.json` (routing, headers with credentials redacted, status, timings, outcome). Entries older than `logging.body_retention` (default 7 days) are deleted at startup and every 10 minutes; set it to `0s` to keep everything.
 - **Levels.** `--log-level debug` (or `trace`) applies to the router only. To see the HTTP client internals, name them: `--log-level "claude_router=debug,hyper=debug,h2=debug"`.
 
 ## Development
