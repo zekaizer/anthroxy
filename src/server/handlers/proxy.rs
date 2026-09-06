@@ -12,7 +12,7 @@ use crate::anthropic;
 use crate::observability::RequestRecord;
 use crate::observability::body_log::headers_for_record;
 use crate::server::annotate::annotate_upstream_error;
-use crate::server::relay::{Relay, TracingObserver};
+use crate::server::relay::Relay;
 use crate::server::{AppState, RequestId, RouterError};
 use crate::upstream::{
     UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, header_value,
@@ -75,7 +75,7 @@ async fn handle(
         .map(|p| p.as_str())
         .unwrap_or("/");
     let headers = upstream_headers(&parts.headers, backend);
-    let mut recorder = state.body_log.as_ref().map(|log| {
+    let recorder = state.body_log.as_ref().map(|log| {
         let record = request_record(
             request_id,
             &parts.method,
@@ -105,14 +105,15 @@ async fn handle(
         "upstream responded"
     );
 
-    if let Some(recorder) = recorder.as_mut() {
+    let recorder = recorder.map(|mut recorder| {
         recorder.response_started(
             status,
             upstream.response.headers(),
             upstream.attempts,
             upstream.latency.as_millis() as u64,
         );
-    }
+        recorder
+    });
 
     let mut headers = response_headers(upstream.response.headers());
     headers.insert(X_ROUTER_BACKEND.clone(), header_value(&backend.name));
@@ -133,7 +134,7 @@ async fn handle(
             bytes = raw.len(),
             "upstream returned an error"
         );
-        if let Some(recorder) = recorder.take() {
+        if let Some(recorder) = recorder {
             recorder.finish_with_body(&raw);
         }
         match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
@@ -141,12 +142,12 @@ async fn handle(
             None => Body::from(raw),
         }
     } else {
-        let mut relay = Relay::new(upstream.response.bytes_stream(), span)
-            .observe(TracingObserver::new(started));
-        if let Some(recorder) = recorder.take() {
-            relay = relay.observe(recorder);
-        }
-        Body::from_stream(relay)
+        Body::from_stream(Relay::new(
+            upstream.response.bytes_stream(),
+            span,
+            started,
+            recorder,
+        ))
     };
 
     let mut response = Response::new(body);

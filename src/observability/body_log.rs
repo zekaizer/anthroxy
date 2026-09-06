@@ -11,7 +11,7 @@ use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 
-use crate::server::relay::{RelayObserver, RelayOutcome};
+use crate::server::relay::RelayOutcome;
 
 #[derive(Debug, Clone)]
 pub struct BodyLog {
@@ -257,16 +257,15 @@ impl Recorder {
     /// Records a fully buffered body and finishes.
     pub fn finish_with_body(mut self, body: &[u8]) {
         self.response.extend_from_slice(body);
-        self.on_end(&RelayOutcome::Complete);
+        self.finish(&RelayOutcome::Complete);
     }
-}
 
-impl RelayObserver for Recorder {
-    fn on_chunk(&mut self, chunk: &Bytes) {
+    pub fn chunk(&mut self, chunk: &Bytes) {
         self.response.extend_from_slice(chunk);
     }
 
-    fn on_end(&mut self, outcome: &RelayOutcome) {
+    /// Writes the response body and the final `meta.json`.
+    pub fn finish(mut self, outcome: &RelayOutcome) {
         self.meta.end = Some(EndMeta {
             outcome: match outcome {
                 RelayOutcome::Complete => "complete".to_owned(),

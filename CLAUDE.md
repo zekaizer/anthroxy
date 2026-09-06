@@ -28,7 +28,7 @@ cargo fmt
   - `credential/` — `CredentialSource` trait; fixed and command-backed sources.
   - `upstream/` — backend registry, header translation, retry policy, HTTP client, probe.
   - `server/` — axum app: request id span, client auth, handlers (`health`, `models`, `proxy`), relay stream, error mapping.
-  - `observability/` — tracing subscriber, per-request body capture (a relay observer).
+  - `observability/` — tracing subscriber, per-request body capture (fed by the relay stream).
   - `service/` — systemd user unit.
   - `cli/` — clap grammar and one file per subcommand.
 - `tests/` — black-box tests: `proxy.rs`/`body_log.rs` against a mock backend in `tests/support/`, `cli.rs` against the binary.
