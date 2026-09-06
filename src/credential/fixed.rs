@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::{Credential, CredentialError, CredentialSource, check_header_safe};
+use super::{Credential, CredentialError, CredentialSource};
 use crate::config::CredentialHeader;
 
 /// A credential fixed for the life of the process, or none at all.
@@ -21,9 +21,8 @@ impl FixedCredential {
     }
 
     pub fn secret(header: CredentialHeader, value: String) -> Result<Self, CredentialError> {
-        check_header_safe(&value)?;
         Ok(Self {
-            credential: Some(Credential::new(header, value)),
+            credential: Some(Credential::new(header, value)?),
             origin: "static",
             env_name: None,
         })

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
-use super::{Credential, CredentialError, CredentialSource, check_header_safe};
+use super::{Credential, CredentialError, CredentialSource};
 use crate::config::CredentialHeader;
 
 #[derive(Debug)]
@@ -71,8 +71,7 @@ impl CommandCredential {
         if secret.is_empty() {
             return Err(CredentialError::Empty);
         }
-        check_header_safe(&secret)?;
-        Ok(Credential::new(self.header, secret))
+        Credential::new(self.header, secret)
     }
 }
 

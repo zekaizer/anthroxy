@@ -82,7 +82,7 @@ fn upstream_headers_drop_hop_by_hop_and_client_auth() {
 
 #[test]
 fn upstream_headers_set_credential_and_overrides() {
-    let cred = Credential::new(CredentialHeader::Bearer, "backend-token");
+    let cred = Credential::new(CredentialHeader::Bearer, "backend-token").unwrap();
     let out = upstream_headers(
         &client_headers(),
         &backend(
@@ -100,7 +100,7 @@ fn upstream_headers_set_credential_and_overrides() {
     );
     assert_eq!(out["x-extra"], "1");
 
-    let cred = Credential::new(CredentialHeader::XApiKey, "k");
+    let cred = Credential::new(CredentialHeader::XApiKey, "k").unwrap();
     let out = upstream_headers(&client_headers(), &backend(&[], &[]), Some(&cred));
     assert_eq!(out["x-api-key"], "k");
     assert!(!out.contains_key("authorization"));
