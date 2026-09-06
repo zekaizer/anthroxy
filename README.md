@@ -10,7 +10,7 @@ Claude Code ──► claude-router ──┬──► vLLM            (Qwen, �
 
 What the router does:
 
-- **Model discovery.** `GET /v1/models` lists the configured models so Claude Code can offer them in `/model` (needs `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, Claude Code ≥ 2.1.129).
+- **Model discovery.** `GET /v1/models` lists the configured models so Claude Code can offer them in `/model` (needs `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`).
 - **Routing by `model`.** Each request goes to the backend that serves the named model; the model name is rewritten to what that backend calls it. Aliases let Claude Code's built-in model ids land on your backends too.
 - **Per-backend credentials.** None, a static key, an environment variable, or a shell command that is re-run periodically (for tokens another program keeps fresh). Claude Code itself only ever sees one static router token.
 - **Verbatim passthrough.** Unknown request fields, beta headers and response bodies are relayed as-is; streaming responses are forwarded chunk by chunk.
@@ -24,6 +24,8 @@ cargo install --path .        # or: cargo build --release && cp target/release/c
 ```
 
 Requires a Rust toolchain with edition 2024 support (1.85+). Linux and macOS.
+
+Claude Code **2.1.152 or newer** on the client side: gateway model discovery arrived in 2.1.129, and 2.1.152 added the recovery that lets a session switch from a non-Anthropic backend back to Anthropic (older versions fail with a 400 on the `thinking` blocks the other model left in the history).
 
 ## Quick start
 
