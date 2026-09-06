@@ -35,6 +35,12 @@ cargo fmt
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed docs.
 
+## Versioning and releases
+
+- `0.x.y` is the development cycle: breaking changes to configuration, CLI and HTTP behaviour are allowed outright, with no deprecation paths or compatibility shims. Code stays in its final form at every commit; no leftovers, no history in comments.
+- A release tag `vX.Y.Z` must equal the `Cargo.toml` version; the release workflow refuses otherwise.
+- The release body is a short summary of what changed since the previous release tag (`git log <prev>..<tag>`), written by user-visible effect, not a raw commit list.
+
 ## Docs on demand
 
 This file stays short. Details live under `docs/` and are read only when a task needs them. When adding guidance, put it in a doc and list it here with its read-when condition.
