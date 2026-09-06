@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 
 use super::style::table;
-use super::{Cli, Style, display_path};
+use super::{Cli, Style, display_path, is_wsl};
 use crate::service::status::{Check, Expected, Verdict, collect};
 use crate::service::systemd::{self, ServiceError, SystemRunner, UNIT_NAME};
 
@@ -148,12 +148,6 @@ pub fn render(checks: &[Check], style: &Style) -> String {
         ));
     }
     out
-}
-
-fn is_wsl() -> bool {
-    std::fs::read_to_string("/proc/version")
-        .map(|v| v.to_ascii_lowercase().contains("microsoft"))
-        .unwrap_or(false)
 }
 
 fn require_linux() -> Result<(), ServiceError> {

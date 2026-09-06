@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use clap::{Args, ValueEnum};
 
-use super::Cli;
+use super::{Cli, is_wsl};
 use crate::config::Config;
 
 #[derive(Debug, Clone, Args)]
@@ -91,12 +91,6 @@ fn default_host(config: &Config) -> String {
         IpAddr::V6(v6) => format!("[{v6}]"),
         ip => ip.to_string(),
     }
-}
-
-fn is_wsl() -> bool {
-    std::fs::read_to_string("/proc/version")
-        .map(|v| v.to_ascii_lowercase().contains("microsoft"))
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

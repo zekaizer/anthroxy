@@ -155,3 +155,9 @@ pub fn display_path(path: &Path) -> String {
     }
     path.display().to_string()
 }
+
+fn is_wsl() -> bool {
+    std::fs::read_to_string("/proc/version")
+        .map(|v| v.to_ascii_lowercase().contains("microsoft"))
+        .unwrap_or(false)
+}
