@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 
 use super::style::table;
-use super::{Cli, Style, display_path};
+use super::{Cli, Style, display_path, is_wsl};
 use crate::service::status::{Check, Expected, Verdict, collect};
 use crate::service::systemd::{self, ServiceError, SystemRunner, UNIT_NAME};
 
@@ -33,20 +33,27 @@ pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result
     let config = std::path::absolute(&config)?;
     match &args.action {
         ServiceAction::Install { print: true } => {
-            let exe = std::env::current_exe().map_err(ServiceError::Exe)?;
-            print!("{}", systemd::render_unit(&exe, &config));
+            print!("{}", systemd::render_unit(&systemd::exe()?, &config));
             Ok(())
         }
         ServiceAction::Install { print: false } => {
             require_linux()?;
-            let exe = std::env::current_exe().map_err(ServiceError::Exe)?;
-            let unit_path = systemd::unit_path().ok_or(ServiceError::NoConfigDir)?;
-            systemd::write_unit(&unit_path, &systemd::render_unit(&exe, &config))?;
+            let unit_path = systemd::unit_path()?;
+            systemd::write_unit(&unit_path, &systemd::render_unit(&systemd::exe()?, &config))?;
             println!("{} wrote {}", style.ok_mark(), display_path(&unit_path));
-            for (program, args) in systemd::install_steps(&unit_path).into_iter().skip(1) {
-                let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                systemd::run(program, &args)?;
-                println!("{} {program} {}", style.ok_mark(), args.join(" "));
+            // Linger last: the unit must exist and be enabled before it matters.
+            const STEPS: [(&str, &[&str]); 3] = [
+                ("systemctl", &["--user", "daemon-reload"]),
+                ("systemctl", &["--user", "enable", "--now", UNIT_NAME]),
+                ("loginctl", &["enable-linger"]),
+            ];
+            for (program, args) in STEPS {
+                systemd::run(program, args)?;
+                println!(
+                    "{} {}",
+                    style.ok_mark(),
+                    systemd::command_line(program, args)
+                );
             }
             println!();
             println!("The router now starts with the system. Useful commands:");
@@ -66,7 +73,7 @@ pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result
         }
         ServiceAction::Uninstall => {
             require_linux()?;
-            let unit_path = systemd::unit_path().ok_or(ServiceError::NoConfigDir)?;
+            let unit_path = systemd::unit_path()?;
             if let Err(error) =
                 systemd::run("systemctl", &["--user", "disable", "--now", UNIT_NAME])
             {
@@ -88,8 +95,8 @@ pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result
         }
         ServiceAction::Status => {
             require_linux()?;
-            let exe = std::env::current_exe().map_err(ServiceError::Exe)?;
-            let unit_path = systemd::unit_path().ok_or(ServiceError::NoConfigDir)?;
+            let exe = systemd::exe()?;
+            let unit_path = systemd::unit_path()?;
             let user = std::env::var("USER").unwrap_or_else(|_| "-".to_owned());
             let health_url = cli
                 .load_config()
@@ -148,12 +155,6 @@ pub fn render(checks: &[Check], style: &Style) -> String {
         ));
     }
     out
-}
-
-fn is_wsl() -> bool {
-    std::fs::read_to_string("/proc/version")
-        .map(|v| v.to_ascii_lowercase().contains("microsoft"))
-        .unwrap_or(false)
 }
 
 fn require_linux() -> Result<(), ServiceError> {

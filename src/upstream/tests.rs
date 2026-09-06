@@ -1,27 +1,24 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
-use crate::config::CredentialHeader;
-use crate::credential::{Credential, FixedCredential};
+use crate::config::{BackendConfig, CredentialConfig};
 
 fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
-    let mut map = HeaderMap::new();
-    for (k, v) in headers {
-        map.insert(
-            http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
-            HeaderValue::from_str(v).unwrap(),
-        );
-    }
-    Backend {
-        name: "b".into(),
-        url: "http://backend".into(),
-        credential: Arc::new(FixedCredential::none()),
-        headers: map,
-        anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
-    }
+    Backend::from_config(
+        "b",
+        &BackendConfig {
+            url: "http://backend".into(),
+            credential: CredentialConfig::None,
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
+        },
+    )
+    .unwrap()
 }
 
 fn client_headers() -> HeaderMap {
@@ -53,7 +50,7 @@ fn client_headers() -> HeaderMap {
 
 #[test]
 fn upstream_headers_drop_hop_by_hop_and_client_auth() {
-    let out = upstream_headers(&client_headers(), &backend(&[], &[]), None);
+    let out = upstream_headers(&client_headers(), &backend(&[], &[]));
     for dropped in [
         "host",
         "content-length",
@@ -81,29 +78,19 @@ fn upstream_headers_drop_hop_by_hop_and_client_auth() {
 }
 
 #[test]
-fn upstream_headers_set_credential_and_overrides() {
-    let cred = Credential::new(CredentialHeader::Bearer, "backend-token");
+fn upstream_headers_apply_backend_overrides() {
     let out = upstream_headers(
         &client_headers(),
         &backend(
             &[],
             &[("anthropic-version", "2024-01-01"), ("x-extra", "1")],
         ),
-        Some(&cred),
     );
-    assert_eq!(out["authorization"], "Bearer backend-token");
-    assert!(out["authorization"].is_sensitive());
-    assert!(!out.contains_key("x-api-key"));
     assert_eq!(
         out["anthropic-version"], "2024-01-01",
         "backend header overrides client"
     );
     assert_eq!(out["x-extra"], "1");
-
-    let cred = Credential::new(CredentialHeader::XApiKey, "k");
-    let out = upstream_headers(&client_headers(), &backend(&[], &[]), Some(&cred));
-    assert_eq!(out["x-api-key"], "k");
-    assert!(!out.contains_key("authorization"));
 }
 
 #[test]
@@ -111,7 +98,6 @@ fn upstream_headers_merge_beta_flags_without_duplicates() {
     let out = upstream_headers(
         &client_headers(),
         &backend(&["oauth-2025-04-20", "claude-code-20250219"], &[]),
-        None,
     );
     assert_eq!(
         out["anthropic-beta"],
@@ -120,7 +106,7 @@ fn upstream_headers_merge_beta_flags_without_duplicates() {
 
     let mut no_beta = client_headers();
     no_beta.remove("anthropic-beta");
-    let out = upstream_headers(&no_beta, &backend(&["oauth-2025-04-20"], &[]), None);
+    let out = upstream_headers(&no_beta, &backend(&["oauth-2025-04-20"], &[]));
     assert_eq!(out["anthropic-beta"], "oauth-2025-04-20");
 }
 

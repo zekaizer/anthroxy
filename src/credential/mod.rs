@@ -7,7 +7,6 @@ mod fixed;
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -28,11 +27,14 @@ pub struct Credential {
 }
 
 impl Credential {
-    pub fn new(header: CredentialHeader, secret: impl Into<String>) -> Self {
-        Self {
-            header,
-            secret: secret.into(),
-        }
+    /// Fails when `secret` cannot travel in an HTTP header.
+    pub fn new(
+        header: CredentialHeader,
+        secret: impl Into<String>,
+    ) -> Result<Self, CredentialError> {
+        let secret = secret.into();
+        HeaderValue::from_str(&secret).map_err(|_| CredentialError::NotHeaderSafe)?;
+        Ok(Self { header, secret })
     }
 
     /// Header to set on the upstream request. The value is marked sensitive so
@@ -42,7 +44,7 @@ impl Credential {
             CredentialHeader::Bearer => HeaderValue::from_str(&format!("Bearer {}", self.secret)),
             CredentialHeader::XApiKey => HeaderValue::from_str(&self.secret),
         }
-        .expect("credential validated as header-safe");
+        .expect("checked in Credential::new");
         value.set_sensitive(true);
         let name = match self.header {
             CredentialHeader::Bearer => AUTHORIZATION,
@@ -116,37 +118,31 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
         false
     }
 
-    /// One-line human description for status output.
+    /// Where the credential comes from, for status output. Never the value.
     fn describe(&self) -> String;
 }
 
 /// Builds the source for a backend. Static inputs (environment) are resolved
 /// here so misconfiguration surfaces at startup rather than on first request.
-pub fn build(config: &CredentialConfig) -> Result<Arc<dyn CredentialSource>, CredentialError> {
+pub fn build(config: &CredentialConfig) -> Result<Box<dyn CredentialSource>, CredentialError> {
     Ok(match config {
-        CredentialConfig::None => Arc::new(FixedCredential::none()),
+        CredentialConfig::None => Box::new(FixedCredential::none()),
         CredentialConfig::Static { value, header } => {
-            Arc::new(FixedCredential::secret(*header, value.clone())?)
+            Box::new(FixedCredential::secret(*header, value.clone())?)
         }
         CredentialConfig::Env { name, header } => {
-            Arc::new(FixedCredential::from_env(*header, name)?)
+            Box::new(FixedCredential::from_env(*header, name)?)
         }
         CredentialConfig::Command {
             command,
             refresh,
             timeout,
             header,
-        } => Arc::new(CommandCredential::new(
+        } => Box::new(CommandCredential::new(
             command.clone(),
             *header,
             *refresh,
             *timeout,
         )),
     })
-}
-
-fn check_header_safe(secret: &str) -> Result<(), CredentialError> {
-    HeaderValue::from_str(secret)
-        .map(|_| ())
-        .map_err(|_| CredentialError::NotHeaderSafe)
 }

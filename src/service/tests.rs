@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::status::{Check, Expected, Verdict, collect};
-use super::systemd::{CommandOutput, CommandRunner, ServiceError, render_unit};
+use super::systemd::{CommandOutput, CommandRunner, ServiceError, command_line, render_unit};
 
 /// Scripted `systemctl`/`loginctl`: keyed by the full command line.
 #[derive(Default)]
@@ -51,7 +51,7 @@ impl FakeRunner {
 
 impl CommandRunner for FakeRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, ServiceError> {
-        let command = format!("{program} {}", args.join(" "));
+        let command = command_line(program, args);
         self.calls.borrow_mut().push(command.clone());
         self.outputs
             .get(&command)

@@ -7,12 +7,13 @@ use std::time::Duration;
 
 use clap::Args;
 
+use super::models::{default_route_line, table_rows};
 use super::style::table;
 use super::{Cli, Style, display_path};
 use crate::config::Config;
-use crate::routing::Registry;
+use crate::routing::{Registry, Route};
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
-use crate::upstream::{Backend, Backends};
+use crate::upstream::{Backend, RetryPolicy, UpstreamClient, http_client};
 
 #[derive(Debug, Clone, Args)]
 pub struct CheckArgs {
@@ -47,21 +48,20 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         ))
     );
 
-    let backends = match Backends::from_config(&config) {
-        Ok(b) => b,
+    let registry = match Registry::from_config(&config) {
+        Ok(registry) => registry,
         Err(error) => {
             println!("{} {error}", style.err_mark());
             anyhow::bail!("configuration is not usable");
         }
     };
-    let registry = Registry::from_config(&config);
 
     let mut problems = 0usize;
     let mut listed: std::collections::HashMap<String, Vec<String>> = Default::default();
     println!();
     println!("{}", style.bold("Backends"));
     if args.no_probe {
-        for backend in backends.iter() {
+        for backend in registry.backends() {
             println!(
                 "  {}  {}  {}",
                 style.dim("-"),
@@ -72,9 +72,14 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
     } else {
-        let http = reqwest::Client::builder().timeout(args.timeout).build()?;
-        let results = probe_all(&http, backends.iter().map(Arc::as_ref)).await;
-        for (backend, result) in backends.iter().zip(&results) {
+        let client = UpstreamClient::new(
+            http_client(&config.upstream)
+                .timeout(args.timeout)
+                .build()?,
+            RetryPolicy::never(),
+        );
+        let results = probe_all(&client, registry.backends().map(Arc::as_ref)).await;
+        for (backend, result) in registry.backends().zip(&results) {
             let (ok, ids) = report_backend(backend, result, style);
             if !ok {
                 problems += 1;
@@ -87,37 +92,23 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
 
     println!();
     println!("{}", style.bold("Models"));
-    let mut rows = vec![
-        ["", "id", "backend", "upstream model", "picker label"]
-            .iter()
-            .map(|h| style.dim(h))
-            .collect::<Vec<_>>(),
-    ];
-    for route in registry.routes() {
-        let mark = match listed.get(&route.backend) {
+    let mark = |route: &Route| {
+        let mark = match listed.get(&route.backend.name) {
             Some(ids) if ids.is_empty() => style.dim("-"),
             Some(ids) if ids.contains(&route.upstream_model) => style.ok_mark(),
             Some(_) => style.warn_mark(),
             None => style.dim("-"),
         };
-        rows.push(vec![
-            format!("  {mark}"),
-            style.bold(&route.id),
-            route.backend.clone(),
-            route.upstream_model.clone(),
-            route.display_name.clone(),
-        ]);
-    }
-    print!("{}", table(&rows));
+        format!("  {mark}")
+    };
+    print!("{}", table(&table_rows(&registry, style, Some(&mark))));
     if listed.values().any(|ids| !ids.is_empty()) {
         println!(
             "  {}",
             style.dim("✓ upstream model listed by the backend, ! not listed (check the name), - backend gave no list")
         );
     }
-    if let Some(route) = registry.default_route() {
-        println!("  unknown model ids → {}", style.bold(&route.id));
-    }
+    println!("  {}", default_route_line(&registry, style));
 
     println!();
     if problems == 0 {
@@ -144,9 +135,9 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
     };
     let (models_line, ids) = match &probe.models {
         None => (style.dim("GET /v1/models skipped (no credential)"), None),
-        Some(ModelsProbe::Unreachable(detail)) => {
+        Some(ModelsProbe::Failed(error)) => {
             ok = false;
-            (style.err(&format!("unreachable: {detail}")), None)
+            (style.err(&error.to_string()), None)
         }
         Some(ModelsProbe::Answered {
             status,

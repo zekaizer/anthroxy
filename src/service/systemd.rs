@@ -42,8 +42,20 @@ fn shell_quote(path: &Path) -> String {
 }
 
 /// `~/.config/systemd/user/anthroxy.service`
-pub fn unit_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("systemd").join("user").join(UNIT_NAME))
+pub fn unit_path() -> Result<PathBuf, ServiceError> {
+    dirs::config_dir()
+        .map(|d| d.join("systemd").join("user").join(UNIT_NAME))
+        .ok_or(ServiceError::NoConfigDir)
+}
+
+/// The running binary, embedded in the unit as an absolute path.
+pub fn exe() -> Result<PathBuf, ServiceError> {
+    std::env::current_exe().map_err(ServiceError::Exe)
+}
+
+/// `program` and `args` as one shell-style line, for reports and errors.
+pub fn command_line(program: &str, args: &[&str]) -> String {
+    format!("{program} {}", args.join(" "))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -81,6 +93,16 @@ impl CommandOutput {
             &self.stderr
         }
     }
+
+    /// stdout when present, else stderr: `systemctl is-*` and `loginctl`
+    /// print the state on stdout even when they exit non-zero.
+    pub fn state(&self) -> &str {
+        if self.stdout.is_empty() {
+            &self.stderr
+        } else {
+            &self.stdout
+        }
+    }
 }
 
 /// Executes `systemctl`/`loginctl`. A trait so status checks can run against
@@ -100,7 +122,7 @@ impl CommandRunner for SystemRunner {
                 .args(args)
                 .output()
                 .map_err(|e| ServiceError::Command {
-                    command: format!("{program} {}", args.join(" ")),
+                    command: command_line(program, args),
                     detail: e.to_string(),
                 })?;
         Ok(CommandOutput {
@@ -119,7 +141,7 @@ pub fn run(program: &str, args: &[&str]) -> Result<String, ServiceError> {
         Ok(output.stdout)
     } else {
         Err(ServiceError::Command {
-            command: format!("{program} {}", args.join(" ")),
+            command: command_line(program, args),
             detail: output.message().to_owned(),
         })
     }
@@ -172,24 +194,6 @@ fn split_quoted(line: &str) -> Vec<String> {
         words.push(current);
     }
     words
-}
-
-/// Steps performed by `service install`, in order, for the report.
-pub fn install_steps(unit: &Path) -> Vec<(&'static str, Vec<String>)> {
-    vec![
-        ("write unit", vec![unit.display().to_string()]),
-        ("systemctl", vec!["--user".into(), "daemon-reload".into()]),
-        (
-            "systemctl",
-            vec![
-                "--user".into(),
-                "enable".into(),
-                "--now".into(),
-                UNIT_NAME.into(),
-            ],
-        ),
-        ("loginctl", vec!["enable-linger".into()]),
-    ]
 }
 
 pub fn write_unit(path: &Path, content: &str) -> Result<(), ServiceError> {
@@ -252,12 +256,5 @@ mod tests {
     fn exec_start_missing_or_foreign_is_none() {
         assert!(parse_exec_start("[Unit]\nDescription=x\n").is_none());
         assert!(parse_exec_start("[Service]\nExecStart=/usr/bin/other --flag\n").is_none());
-    }
-
-    #[test]
-    fn install_steps_enable_linger_last() {
-        let steps = install_steps(Path::new("/u.service"));
-        assert_eq!(steps.last().unwrap().0, "loginctl");
-        assert_eq!(steps[2].1, vec!["--user", "enable", "--now", UNIT_NAME]);
     }
 }

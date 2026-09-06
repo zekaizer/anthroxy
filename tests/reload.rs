@@ -1,16 +1,16 @@
 mod support;
 
-use anthroxy::config::Config;
-use serde_json::{Value, json};
+use anthroxy::config::{Config, process_env};
+use serde_json::json;
 use support::mock_upstream::echo;
-use support::router::{TOKEN, config_with_backend};
+use support::router::{TOKEN, config_with_backend, model_ids};
 use support::{MockUpstream, TestRouter};
 
 fn parse(text: &str) -> Config {
-    Config::parse(text, |name| std::env::var(name).ok()).unwrap()
+    Config::parse(text, process_env).unwrap()
 }
 
-async fn model_ids(router: &TestRouter, token: &str) -> (u16, Vec<String>) {
+async fn list_models(router: &TestRouter, token: &str) -> (u16, Vec<String>) {
     let res = router
         .http
         .get(router.url("/v1/models"))
@@ -20,13 +20,7 @@ async fn model_ids(router: &TestRouter, token: &str) -> (u16, Vec<String>) {
         .unwrap();
     let status = res.status().as_u16();
     let ids = if status == 200 {
-        let body: Value = res.json().await.unwrap();
-        body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["id"].as_str().unwrap().to_owned())
-            .collect()
+        model_ids(&res.json().await.unwrap())
     } else {
         Vec::new()
     };
@@ -38,7 +32,7 @@ async fn reload_swaps_models_backends_and_token_without_restart() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
     assert_eq!(
-        model_ids(&router, TOKEN).await,
+        list_models(&router, TOKEN).await,
         (200, vec!["fast".into(), "smart".into()])
     );
 
@@ -74,9 +68,9 @@ upstream_model = "other-v2"
     assert!(!report.listen_changed);
 
     // Old token is gone, new one works, the model table is the new one.
-    assert_eq!(model_ids(&router, TOKEN).await.0, 401);
+    assert_eq!(list_models(&router, TOKEN).await.0, 401);
     assert_eq!(
-        model_ids(&router, "rotated-token").await,
+        list_models(&router, "rotated-token").await,
         (200, vec!["fast".into(), "newcomer".into()])
     );
 
@@ -120,7 +114,7 @@ async fn failed_reload_keeps_the_previous_configuration() {
         "{err}"
     );
     assert_eq!(
-        model_ids(&router, TOKEN).await,
+        list_models(&router, TOKEN).await,
         (200, vec!["fast".into(), "smart".into()])
     );
 }
@@ -134,5 +128,5 @@ async fn reload_reports_a_changed_listen_address() {
     let report = router.reload.apply(&parse(&moved)).unwrap();
     assert!(report.listen_changed);
     // Still answering on the original socket.
-    assert_eq!(model_ids(&router, TOKEN).await.0, 200);
+    assert_eq!(list_models(&router, TOKEN).await.0, 200);
 }

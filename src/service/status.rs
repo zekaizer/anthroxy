@@ -147,7 +147,7 @@ pub async fn collect(expected: &Expected<'_>, runner: &dyn CommandRunner) -> Vec
             Verdict::Fail,
             format!(
                 "Linger={}; run `loginctl enable-linger` so the router starts without a login session",
-                if output.stdout.is_empty() { output.message().to_owned() } else { output.stdout.clone() }
+                output.state()
             ),
         )),
         Err(error) => checks.push(check("linger", Verdict::Skip, error.to_string())),
@@ -185,14 +185,7 @@ fn systemctl_state(
 ) -> Check {
     match runner.run("systemctl", &["--user", query, UNIT_NAME]) {
         Ok(output) if output.stdout.trim() == want => check(name, Verdict::Ok, want),
-        Ok(output) => {
-            let state = if output.stdout.is_empty() {
-                output.message().to_owned()
-            } else {
-                output.stdout.clone()
-            };
-            check(name, Verdict::Fail, format!("{state}; {hint}"))
-        }
+        Ok(output) => check(name, Verdict::Fail, format!("{}; {hint}", output.state())),
         Err(error) => check(name, Verdict::Skip, error.to_string()),
     }
 }

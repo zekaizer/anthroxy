@@ -1,14 +1,17 @@
 //! Reachability check used by `anthroxy check`: acquire the credential
 //! and call `GET /v1/models` on the backend.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use super::{Backend, upstream_headers};
+use bytes::Bytes;
+use http::{HeaderMap, HeaderValue, Method};
+
+use super::{Backend, UpstreamClient, UpstreamError, UpstreamRequest, upstream_headers};
 use crate::credential::CredentialError;
 
 #[derive(Debug)]
 pub struct Probe {
-    /// Credential source description with the value masked.
+    /// Credential source, plus the masked value when there is one.
     pub credential: Result<String, CredentialError>,
     pub models: Option<ModelsProbe>,
 }
@@ -23,48 +26,43 @@ pub enum ModelsProbe {
         ids: Vec<String>,
         detail: Option<String>,
     },
-    Unreachable(String),
+    Failed(UpstreamError),
 }
 
-/// Never fails: every outcome is data for the report.
-pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
+/// Never fails: every outcome is data for the report. `client` decides the
+/// timeouts and retries; `check` uses none.
+pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
     let credential = match backend.credential.credential().await {
-        Ok(Some(c)) => Ok(format!(
-            "{} ({})",
-            backend.credential.describe(),
-            c.masked()
-        )),
-        Ok(None) => Ok(backend.credential.describe()),
-        Err(e) => Err(e),
+        Ok(credential) => credential,
+        Err(error) => {
+            return Probe {
+                credential: Err(error),
+                models: None,
+            };
+        }
     };
-    let Ok(credential_value) = backend.credential.credential().await else {
-        return Probe {
-            credential,
-            models: None,
-        };
+    let description = match &credential {
+        Some(c) => format!("{} ({})", backend.credential.describe(), c.masked()),
+        None => backend.credential.describe(),
     };
     // What Claude Code always sends; backend `headers` still override.
-    let mut base = http::HeaderMap::new();
-    base.insert(
-        "anthropic-version",
-        http::HeaderValue::from_static("2023-06-01"),
-    );
+    let mut base = HeaderMap::new();
+    base.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
     base.insert(
         http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
+        HeaderValue::from_static("application/json"),
     );
-    let headers = upstream_headers(&base, backend, credential_value.as_ref());
-    let started = Instant::now();
-    let models = match http
-        .get(format!("{}/v1/models", backend.url))
-        .headers(headers)
-        .send()
-        .await
-    {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let latency = started.elapsed();
-            let body = response.bytes().await.unwrap_or_default();
+    let request = UpstreamRequest {
+        backend,
+        method: Method::GET,
+        path_and_query: "/v1/models",
+        headers: upstream_headers(&base, backend),
+        body: Bytes::new(),
+    };
+    let models = match client.send(request).await {
+        Ok(upstream) => {
+            let status = upstream.response.status().as_u16();
+            let body = upstream.response.bytes().await.unwrap_or_default();
             let json = serde_json::from_slice::<serde_json::Value>(&body).ok();
             let ids = json.as_ref().map(model_ids).unwrap_or_default();
             let detail = if (200..300).contains(&status) {
@@ -74,15 +72,15 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
             };
             ModelsProbe::Answered {
                 status,
-                latency,
+                latency: upstream.latency,
                 ids,
                 detail,
             }
         }
-        Err(error) => ModelsProbe::Unreachable(super::client::describe(&error)),
+        Err(error) => ModelsProbe::Failed(error),
     };
     Probe {
-        credential,
+        credential: Ok(description),
         models: Some(models),
     }
 }
@@ -90,10 +88,10 @@ pub async fn probe(http: &reqwest::Client, backend: &Backend) -> Probe {
 /// Probes every backend concurrently; results are in the same order as
 /// `backends`.
 pub async fn probe_all<'a>(
-    http: &reqwest::Client,
+    client: &UpstreamClient,
     backends: impl IntoIterator<Item = &'a Backend>,
 ) -> Vec<Probe> {
-    futures_util::future::join_all(backends.into_iter().map(|b| probe(http, b))).await
+    futures_util::future::join_all(backends.into_iter().map(|b| probe(client, b))).await
 }
 
 /// `error.message` of an Anthropic error, else the first line of the body.
@@ -128,10 +126,14 @@ fn model_ids(body: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use crate::credential::FixedCredential;
+    use crate::config::{BackendConfig, CredentialConfig, CredentialHeader};
+    use crate::upstream::RetryPolicy;
+
+    fn client() -> UpstreamClient {
+        UpstreamClient::new(reqwest::Client::new(), RetryPolicy::never())
+    }
 
     async fn slow_backend(name: &str, delay: Duration) -> Backend {
         let app = axum::Router::new().route(
@@ -144,22 +146,24 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Backend {
-            name: name.to_owned(),
-            url,
-            credential: Arc::new(FixedCredential::none()),
-            headers: http::HeaderMap::new(),
-            anthropic_beta: Vec::new(),
-        }
+        Backend::from_config(
+            name,
+            &BackendConfig {
+                url,
+                credential: CredentialConfig::None,
+                headers: Default::default(),
+                anthropic_beta: Vec::new(),
+            },
+        )
+        .unwrap()
     }
 
     #[tokio::test]
     async fn probe_all_runs_backends_concurrently_in_order() {
         let a = slow_backend("a", Duration::from_millis(300)).await;
         let b = slow_backend("b", Duration::from_millis(300)).await;
-        let http = reqwest::Client::new();
         let started = Instant::now();
-        let probes = probe_all(&http, [&a, &b]).await;
+        let probes = probe_all(&client(), [&a, &b]).await;
         let elapsed = started.elapsed();
         assert_eq!(probes.len(), 2);
         assert!(
@@ -175,6 +179,28 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn credential_line_is_the_source_plus_the_masked_value() {
+        let mut backend = slow_backend("a", Duration::ZERO).await;
+        backend.credential = crate::credential::build(&CredentialConfig::Static {
+            value: "key-1234567890".into(),
+            header: CredentialHeader::XApiKey,
+        })
+        .unwrap();
+        let probe = probe(&client(), &backend).await;
+        assert_eq!(probe.credential.unwrap(), "static (key-…7890)");
+        assert!(matches!(
+            probe.models,
+            Some(ModelsProbe::Answered { status: 200, .. })
+        ));
+
+        let none = slow_backend("b", Duration::ZERO).await;
+        assert_eq!(
+            super::probe(&client(), &none).await.credential.unwrap(),
+            "none"
+        );
     }
 
     #[test]

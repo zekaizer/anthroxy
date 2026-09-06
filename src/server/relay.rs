@@ -1,5 +1,5 @@
-//! Relays an upstream body to the client chunk by chunk, observing it on the
-//! way through.
+//! Relays an upstream body to the client chunk by chunk, summarising it in
+//! the log and, when a body log is on, recording it.
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -8,6 +8,8 @@ use std::time::Instant;
 use bytes::Bytes;
 use futures_util::Stream;
 use tracing::Span;
+
+use crate::observability::Recorder;
 
 /// How a relayed body ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,106 +22,36 @@ pub enum RelayOutcome {
     ClientDisconnected,
 }
 
-/// Sees every chunk and the final outcome. Implementations must not block.
-pub trait RelayObserver: Send + 'static {
-    fn on_chunk(&mut self, chunk: &Bytes);
-    fn on_end(&mut self, outcome: &RelayOutcome);
-}
-
-/// Body stream that fans chunks out to observers and reports its end exactly
-/// once, including when dropped early.
+/// Body stream that reports its end exactly once, including when dropped
+/// early.
 pub struct Relay<S> {
     inner: S,
-    observers: Vec<Box<dyn RelayObserver>>,
     span: Span,
-    finished: bool,
-}
-
-impl<S> Relay<S> {
-    pub fn new(inner: S, span: Span) -> Self {
-        Self {
-            inner,
-            observers: Vec::new(),
-            span,
-            finished: false,
-        }
-    }
-
-    pub fn observe(mut self, observer: impl RelayObserver) -> Self {
-        self.observers.push(Box::new(observer));
-        self
-    }
-
-    fn end(&mut self, outcome: RelayOutcome) {
-        if self.finished {
-            return;
-        }
-        self.finished = true;
-        let _guard = self.span.enter();
-        for observer in &mut self.observers {
-            observer.on_end(&outcome);
-        }
-    }
-}
-
-impl<S> Stream for Relay<S>
-where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
-{
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = &mut *self;
-        match Pin::new(&mut this.inner).poll_next(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(Ok(chunk))) => {
-                let _guard = this.span.enter();
-                for observer in &mut this.observers {
-                    observer.on_chunk(&chunk);
-                }
-                Poll::Ready(Some(Ok(chunk)))
-            }
-            Poll::Ready(Some(Err(error))) => {
-                let text = error.to_string();
-                this.end(RelayOutcome::UpstreamError(text.clone()));
-                Poll::Ready(Some(Err(std::io::Error::other(text))))
-            }
-            Poll::Ready(None) => {
-                this.end(RelayOutcome::Complete);
-                Poll::Ready(None)
-            }
-        }
-    }
-}
-
-impl<S> Drop for Relay<S> {
-    fn drop(&mut self) {
-        self.end(RelayOutcome::ClientDisconnected);
-    }
-}
-
-/// Emits one summary line per body: bytes, chunks, time to first byte and
-/// total duration.
-pub struct TracingObserver {
+    recorder: Option<Recorder>,
     started: Instant,
     first_chunk: Option<Instant>,
     bytes: usize,
     chunks: usize,
+    finished: bool,
 }
 
-impl TracingObserver {
-    pub fn new(started: Instant) -> Self {
+impl<S> Relay<S> {
+    /// `started` is when the request arrived, for time-to-first-byte.
+    pub fn new(inner: S, span: Span, started: Instant, recorder: Option<Recorder>) -> Self {
         Self {
+            inner,
+            span,
+            recorder,
             started,
             first_chunk: None,
             bytes: 0,
             chunks: 0,
+            finished: false,
         }
     }
-}
 
-impl RelayObserver for TracingObserver {
-    fn on_chunk(&mut self, chunk: &Bytes) {
+    fn chunk(&mut self, chunk: &Bytes) {
+        let _guard = self.span.enter();
         if self.first_chunk.is_none() {
             self.first_chunk = Some(Instant::now());
             tracing::debug!(
@@ -130,14 +62,22 @@ impl RelayObserver for TracingObserver {
         self.bytes += chunk.len();
         self.chunks += 1;
         tracing::trace!(bytes = chunk.len(), "relayed chunk");
+        if let Some(recorder) = &mut self.recorder {
+            recorder.chunk(chunk);
+        }
     }
 
-    fn on_end(&mut self, outcome: &RelayOutcome) {
+    fn end(&mut self, outcome: RelayOutcome) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let _guard = self.span.enter();
         let ttfb_ms = self
             .first_chunk
             .map(|t| t.duration_since(self.started).as_millis() as u64);
         let duration_ms = self.started.elapsed().as_millis() as u64;
-        match outcome {
+        match &outcome {
             RelayOutcome::Complete => tracing::info!(
                 bytes = self.bytes,
                 chunks = self.chunks,
@@ -159,5 +99,41 @@ impl RelayObserver for TracingObserver {
                 "client disconnected before the response body finished"
             ),
         }
+        if let Some(recorder) = self.recorder.take() {
+            recorder.finish(&outcome);
+        }
+    }
+}
+
+impl<S> Stream for Relay<S>
+where
+    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+{
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Ok(chunk))) => {
+                this.chunk(&chunk);
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                let text = error.to_string();
+                this.end(RelayOutcome::UpstreamError(text.clone()));
+                Poll::Ready(Some(Err(std::io::Error::other(text))))
+            }
+            Poll::Ready(None) => {
+                this.end(RelayOutcome::Complete);
+                Poll::Ready(None)
+            }
+        }
+    }
+}
+
+impl<S> Drop for Relay<S> {
+    fn drop(&mut self) {
+        self.end(RelayOutcome::ClientDisconnected);
     }
 }

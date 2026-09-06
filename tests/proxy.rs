@@ -7,18 +7,8 @@ use axum::response::Response;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use support::mock_upstream::{echo, json_response};
-use support::router::{TOKEN, config_with_backend};
+use support::router::{TOKEN, config_with_backend, messages_body, model_ids};
 use support::{MockUpstream, TestRouter};
-
-fn messages_body(model: &str) -> Value {
-    json!({
-        "model": model,
-        "max_tokens": 16,
-        "messages": [{"role": "user", "content": "hi"}],
-        "metadata": {"user_id": "u1"},
-        "future_field": {"nested": [1, 2, 3]}
-    })
-}
 
 #[tokio::test]
 async fn health_needs_no_auth() {
@@ -83,13 +73,7 @@ async fn lists_configured_models_in_order() {
     let res = router.get("/v1/models").send().await.unwrap();
     assert_eq!(res.status(), 200);
     let body: Value = res.json().await.unwrap();
-    let ids: Vec<&str> = body["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| m["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec!["fast", "smart"]);
+    assert_eq!(model_ids(&body), ["fast", "smart"]);
     assert_eq!(body["data"][0]["display_name"], "Fast Mock");
     assert_eq!(body["data"][0]["type"], "model");
     assert_eq!(body["first_id"], "fast");
@@ -489,6 +473,42 @@ async fn non_json_upstream_error_passes_through_verbatim() {
     assert_eq!(res.status(), 503);
     assert_eq!(res.headers()["content-type"], "text/plain");
     assert_eq!(res.text().await.unwrap(), "backend down");
+}
+
+#[tokio::test]
+async fn upstream_error_body_that_breaks_off_is_a_502() {
+    // Headers and a first chunk go out, then the body breaks off.
+    let upstream = MockUpstream::start(|_| {
+        let chunks = futures_util::stream::iter(0..2).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(50 * i)).await;
+            if i == 0 {
+                Ok("partial")
+            } else {
+                Err(std::io::Error::other("connection reset"))
+            }
+        });
+        Response::builder()
+            .status(500)
+            .header("content-type", "text/plain")
+            .body(Body::from_stream(chunks))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 502, "the backend failed, not the client");
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "api_error");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("mock") && message.contains("body"),
+        "{message}"
+    );
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ use http::header::{
 };
 
 use super::Backend;
-use crate::credential::{Credential, X_API_KEY};
+use crate::credential::X_API_KEY;
 
 pub static ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
 pub static X_ROUTER_BACKEND: HeaderName = HeaderName::from_static("x-anthroxy-backend");
@@ -15,6 +15,12 @@ pub static X_ROUTER_UPSTREAM_MODEL: HeaderName =
     HeaderName::from_static("x-anthroxy-upstream-model");
 static KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 static PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
+
+/// A backend name or model id as a header value. Validation guarantees they
+/// are header-safe.
+pub fn header_value(text: &str) -> HeaderValue {
+    HeaderValue::from_str(text).expect("validated header-safe")
+}
 
 /// Hop-by-hop headers belong to one connection and are never relayed.
 fn is_hop_by_hop(name: &HeaderName) -> bool {
@@ -28,17 +34,15 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 }
 
 /// Builds the header set for the upstream request from the client's headers.
+/// The backend credential is not part of it; [`super::UpstreamClient`] adds
+/// it per attempt.
 ///
 /// Dropped: hop-by-hop headers, `host` and `content-length` (owned by the
 /// client library), the client's own `authorization`/`x-api-key` (replaced by
 /// the backend credential) and `accept-encoding` (bodies are relayed and
 /// logged uncompressed). Backend `headers` override, `anthropic_beta` flags
 /// are merged into the client's list.
-pub fn upstream_headers(
-    client: &HeaderMap,
-    backend: &Backend,
-    credential: Option<&Credential>,
-) -> HeaderMap {
+pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
     let mut out = HeaderMap::with_capacity(client.len() + backend.headers.len() + 1);
     for (name, value) in client {
         if is_hop_by_hop(name)
@@ -61,10 +65,6 @@ pub fn upstream_headers(
             ANTHROPIC_BETA.clone(),
             HeaderValue::from_str(&merged).expect("validated flags"),
         );
-    }
-    if let Some(credential) = credential {
-        let (name, value) = credential.header_pair();
-        out.insert(name, value);
     }
     out
 }

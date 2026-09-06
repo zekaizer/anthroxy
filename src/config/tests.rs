@@ -288,6 +288,47 @@ backend = "a"
 }
 
 #[test]
+fn validation_rejects_names_that_cannot_travel_in_a_header() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends."line\nbreak"]
+url = "http://a"
+
+[[models]]
+id = "id\nbreak"
+backend = "line\nbreak"
+upstream_model = "up\nbreak"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    assert!(joined.contains("backends.line\\nbreak"), "{joined}");
+    assert!(joined.contains("models[0].id"), "{joined}");
+    assert!(joined.contains("models[0].upstream_model"), "{joined}");
+    assert_eq!(p.len(), 3, "{joined}");
+}
+
+#[test]
+fn overrides_are_normalized_like_the_file() {
+    let overrides = Overrides {
+        listen: Some("127.0.0.1:1".parse().unwrap()),
+        body_dir: Some("~/override".into()),
+    };
+    let c = parse(MINIMAL).unwrap().with_overrides(&overrides).unwrap();
+    assert_eq!(c.server.listen, "127.0.0.1:1".parse().unwrap());
+    assert_eq!(
+        c.logging.body_dir.unwrap(),
+        dirs::home_dir().unwrap().join("override")
+    );
+    let untouched = parse(MINIMAL)
+        .unwrap()
+        .with_overrides(&Overrides::default())
+        .unwrap();
+    assert_eq!(untouched.logging.body_dir, None);
+}
+
+#[test]
 fn body_dir_tilde_expands_to_home() {
     let text = MINIMAL.to_owned() + "\n[logging]\nbody_dir = \"~/state/bodies\"\n";
     let c = parse(&text).unwrap();

@@ -1,12 +1,11 @@
 //! Sends one client request to a backend, with credential refresh and retry.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
 
-use super::{Backend, Decision, RetryPolicy, upstream_headers};
+use super::{Backend, Decision, RetryPolicy};
 use crate::config::UpstreamConfig;
 use crate::credential::CredentialError;
 
@@ -17,19 +16,19 @@ pub struct UpstreamClient {
 }
 
 pub struct UpstreamRequest<'a> {
-    pub backend: &'a Arc<Backend>,
+    pub backend: &'a Backend,
     pub method: Method,
     /// Path and query exactly as the client sent them, e.g. `/v1/messages`.
     pub path_and_query: &'a str,
-    pub headers: &'a HeaderMap,
+    /// Already translated by [`super::upstream_headers`]; the credential is
+    /// added per attempt.
+    pub headers: HeaderMap,
     pub body: Bytes,
 }
 
 pub struct UpstreamResponse {
-    pub status: StatusCode,
-    pub headers: HeaderMap,
-    /// Body still to be read; nothing has been consumed.
-    pub body: reqwest::Response,
+    /// Headers arrived; nothing of the body has been consumed.
+    pub response: reqwest::Response,
     /// Attempts made, including the successful one.
     pub attempts: u32,
     /// From first attempt to response headers.
@@ -51,6 +50,13 @@ pub enum UpstreamError {
         #[source]
         source: reqwest::Error,
     },
+    /// The backend answered but its error body broke off before the end.
+    #[error("backend `{backend}` failed while sending its error body: {}", describe(.source))]
+    Body {
+        backend: String,
+        #[source]
+        source: reqwest::Error,
+    },
 }
 
 /// The error with its full source chain, e.g. `error sending request: ... : Connection refused`.
@@ -65,17 +71,21 @@ pub fn describe(error: &reqwest::Error) -> String {
     text
 }
 
+/// How every backend is reached: the configured timeouts and no redirects,
+/// since a redirect would resend the body and the credential elsewhere.
+pub fn http_client(config: &UpstreamConfig) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(config.connect_timeout)
+        .read_timeout(config.read_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+}
+
 impl UpstreamClient {
     pub fn from_config(config: &UpstreamConfig) -> reqwest::Result<Self> {
-        let http = reqwest::Client::builder()
-            .connect_timeout(config.connect_timeout)
-            .read_timeout(config.read_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
-        Ok(Self {
-            http,
-            retry: RetryPolicy::from_config(config),
-        })
+        Ok(Self::new(
+            http_client(config).build()?,
+            RetryPolicy::from_config(config),
+        ))
     }
 
     pub fn new(http: reqwest::Client, retry: RetryPolicy) -> Self {
@@ -104,7 +114,11 @@ impl UpstreamClient {
                     source,
                 }
             })?;
-            let headers = upstream_headers(request.headers, backend, credential.as_ref());
+            let mut headers = request.headers.clone();
+            if let Some(credential) = &credential {
+                let (name, value) = credential.header_pair();
+                headers.insert(name, value);
+            }
             tracing::debug!(attempt, %url, "sending upstream request");
             let outcome = self
                 .http
@@ -132,9 +146,7 @@ impl UpstreamClient {
                         }
                         Decision::GiveUp => {
                             return Ok(UpstreamResponse {
-                                status,
-                                headers: response.headers().clone(),
-                                body: response,
+                                response,
                                 attempts: attempt,
                                 latency: started.elapsed(),
                             });

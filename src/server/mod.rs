@@ -19,7 +19,7 @@ use crate::config::Config;
 pub use auth::ClientToken;
 pub use error::RouterError;
 pub use request_id::RequestId;
-pub use state::{AppState, Snapshot};
+pub use state::{AppState, ReloadReport, Snapshot};
 
 /// How often expired body-log entries are swept.
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
@@ -36,87 +36,49 @@ pub enum ServerBuildError {
         #[source]
         source: std::io::Error,
     },
+    #[error("cannot listen on {addr}: {source}")]
+    Listen {
+        addr: SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
-/// Outcome of a successful [`ReloadHandle::apply`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReloadReport {
-    pub backends: usize,
-    pub models: usize,
-    /// The new file names a different `server.listen`; that needs a restart.
-    pub listen_changed: bool,
-}
-
-/// Swaps the router's configuration while it keeps serving.
-#[derive(Clone)]
-pub struct ReloadHandle {
-    state: AppState,
-}
-
-impl ReloadHandle {
-    /// Builds a new snapshot from `config` and makes it current. On error the
-    /// previous snapshot stays in place.
-    pub fn apply(&self, config: &Config) -> Result<ReloadReport, ServerBuildError> {
-        let snapshot = Snapshot::from_config(config)?;
-        let report = ReloadReport {
-            backends: snapshot.backends.len(),
-            models: snapshot.registry.len(),
-            listen_changed: config.server.listen != self.state.listen(),
-        };
-        self.state.replace(snapshot);
-        Ok(report)
-    }
-}
-
-/// A configured but not yet listening router.
+/// A router bound to `server.listen`, ready to serve.
 pub struct Server {
-    app: Router,
-    state: AppState,
-}
-
-impl Server {
-    pub fn new(config: &Config) -> Result<Self, ServerBuildError> {
-        let state = AppState::new(Snapshot::from_config(config)?, config.server.listen);
-        Ok(Self {
-            app: routes::build(state.clone()),
-            state,
-        })
-    }
-
-    pub fn reload_handle(&self) -> ReloadHandle {
-        ReloadHandle {
-            state: self.state.clone(),
-        }
-    }
-
-    pub async fn bind(self, listen: SocketAddr) -> std::io::Result<BoundServer> {
-        let listener = TcpListener::bind(listen).await?;
-        Ok(BoundServer {
-            listener,
-            app: self.app,
-            state: self.state,
-        })
-    }
-}
-
-/// A router bound to a socket, ready to serve.
-pub struct BoundServer {
     listener: TcpListener,
     app: Router,
     state: AppState,
 }
 
-impl BoundServer {
-    pub fn reload_handle(&self) -> ReloadHandle {
-        ReloadHandle {
-            state: self.state.clone(),
-        }
+impl Server {
+    /// Builds the first snapshot from `config` and binds `server.listen`.
+    pub async fn bind(config: &Config) -> Result<Self, ServerBuildError> {
+        let listen = config.server.listen;
+        let state = AppState::new(Snapshot::from_config(config)?, listen);
+        let listener =
+            TcpListener::bind(listen)
+                .await
+                .map_err(|source| ServerBuildError::Listen {
+                    addr: listen,
+                    source,
+                })?;
+        Ok(Self {
+            listener,
+            app: routes::build(state.clone()),
+            state,
+        })
     }
 
     pub fn local_addr(&self) -> SocketAddr {
         self.listener
             .local_addr()
             .expect("bound listener has an address")
+    }
+
+    /// Handle for reloading and for reading the current snapshot.
+    pub fn state(&self) -> AppState {
+        self.state.clone()
     }
 
     /// Serves until `shutdown` resolves, then lets in-flight requests finish.
@@ -138,13 +100,18 @@ impl BoundServer {
     }
 }
 
+/// The sweep walks the directory synchronously, so it runs on the blocking
+/// pool rather than a worker thread.
 async fn prune_loop(state: AppState) {
     loop {
-        if let Some(log) = &state.snapshot().body_log {
-            let removed = log.prune(jiff::Timestamp::now());
-            if removed > 0 {
-                tracing::info!(removed, dir = %log.root().display(), "pruned body log entries");
-            }
+        if let Some(log) = state.snapshot().body_log.clone() {
+            let _ = tokio::task::spawn_blocking(move || {
+                let removed = log.prune(jiff::Timestamp::now());
+                if removed > 0 {
+                    tracing::info!(removed, dir = %log.root().display(), "pruned body log entries");
+                }
+            })
+            .await;
         }
         tokio::time::sleep(PRUNE_INTERVAL).await;
     }

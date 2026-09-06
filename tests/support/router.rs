@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
 
-use anthroxy::config::Config;
-use anthroxy::server::{ReloadHandle, Server};
+use anthroxy::config::{Config, process_env};
+use anthroxy::server::{AppState, Server};
+use serde_json::{Value, json};
 
 pub const TOKEN: &str = "router-test-token";
 
@@ -9,23 +10,18 @@ pub const TOKEN: &str = "router-test-token";
 pub struct TestRouter {
     pub addr: SocketAddr,
     pub http: reqwest::Client,
-    pub reload: ReloadHandle,
+    pub reload: AppState,
     _task: tokio::task::JoinHandle<()>,
 }
 
 impl TestRouter {
     pub async fn start(config_toml: &str) -> Self {
-        let config =
-            Config::parse(config_toml, |name| std::env::var(name).ok()).expect("valid test config");
-        let server = Server::new(&config).expect("server builds");
-        let bound = server
-            .bind("127.0.0.1:0".parse().unwrap())
-            .await
-            .expect("bind");
-        let addr = bound.local_addr();
-        let reload = bound.reload_handle();
+        let config = Config::parse(config_toml, process_env).expect("valid test config");
+        let server = Server::bind(&config).await.expect("server binds");
+        let addr = server.local_addr();
+        let reload = server.state();
         let task = tokio::spawn(async move {
-            bound.serve(std::future::pending::<()>()).await.unwrap();
+            server.serve(std::future::pending::<()>()).await.unwrap();
         });
         Self {
             addr,
@@ -40,7 +36,7 @@ impl TestRouter {
     }
 
     /// Authenticated POST of a JSON body to `path`.
-    pub fn post(&self, path: &str, body: &serde_json::Value) -> reqwest::RequestBuilder {
+    pub fn post(&self, path: &str, body: &Value) -> reqwest::RequestBuilder {
         self.http
             .post(self.url(path))
             .header("x-api-key", TOKEN)
@@ -52,6 +48,28 @@ impl TestRouter {
     pub fn get(&self, path: &str) -> reqwest::RequestBuilder {
         self.http.get(self.url(path)).header("x-api-key", TOKEN)
     }
+}
+
+/// A `/v1/messages` body naming `model`, with fields the router must relay
+/// untouched.
+pub fn messages_body(model: &str) -> Value {
+    json!({
+        "model": model,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"user_id": "u1"},
+        "future_field": {"nested": [1, 2, 3]}
+    })
+}
+
+/// `data[].id` of a model list.
+pub fn model_ids(list: &Value) -> Vec<String> {
+    list["data"]
+        .as_array()
+        .expect("a model list")
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 /// Configuration with one static-credential backend and two models.

@@ -16,10 +16,7 @@ pub fn build(state: AppState) -> Router {
         .route("/v1/models/{id}", get(models::get_one))
         .route("/v1/messages", post(proxy::proxy))
         .route("/v1/messages/count_tokens", post(proxy::proxy))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_client_token,
-        ));
+        .route_layer(middleware::from_fn(auth::require_client_token));
 
     Router::new()
         .route("/healthz", get(health::healthz))
@@ -27,7 +24,10 @@ pub fn build(state: AppState) -> Router {
         .fallback(not_found)
         // The proxy enforces `server.max_body_bytes` itself with a shaped 413.
         .layer(DefaultBodyLimit::disable())
-        .layer(middleware::from_fn(request_id::assign))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            request_id::assign,
+        ))
         .with_state(state)
 }
 

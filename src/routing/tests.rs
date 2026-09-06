@@ -5,7 +5,7 @@ fn registry(models: &str, routing: &str) -> Registry {
     let text = format!(
         "[server]\ntoken = \"t\"\n[backends.a]\nurl = \"http://a\"\n[backends.b]\nurl = \"http://b\"\n{models}\n{routing}"
     );
-    Registry::from_config(&Config::parse(&text, |_| None).unwrap())
+    Registry::from_config(&Config::parse(&text, |_| None).unwrap()).unwrap()
 }
 
 const TWO_MODELS: &str = r#"
@@ -44,7 +44,7 @@ fn resolves_exact_and_alias_names() {
     let r = registry(TWO_MODELS, "");
     let exact = r.resolve("fast").unwrap();
     assert_eq!(exact.matched, Match::Exact);
-    assert_eq!(exact.route.backend, "a");
+    assert_eq!(exact.route.backend.name, "a");
 
     let alias = r.resolve("claude-haiku-4-5-20251001").unwrap();
     assert_eq!(alias.matched, Match::Alias);
@@ -70,6 +70,17 @@ fn unknown_model_falls_back_to_default() {
     assert_eq!(r.default_route().unwrap().id, "fast");
     // A known name still resolves directly, never through the default.
     assert_eq!(r.resolve("smart").unwrap().matched, Match::Exact);
+}
+
+#[test]
+fn lookup_ignores_the_default() {
+    let r = registry(
+        TWO_MODELS,
+        "[routing]\ndefault_model = \"claude-haiku-4-5\"",
+    );
+    assert!(r.lookup("claude-opus-5").is_none());
+    assert_eq!(r.lookup("claude-haiku-4-5").unwrap().matched, Match::Alias);
+    assert_eq!(r.lookup("smart").unwrap().matched, Match::Exact);
 }
 
 #[test]

@@ -1,19 +1,14 @@
 //! Black-box tests of the `anthroxy` binary.
 
+mod support;
+
 use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
-
-fn bin() -> Command {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("anthroxy"));
-    cmd.env_remove("ANTHROXY_CONFIG")
-        .env_remove("RUST_LOG")
-        .env("NO_COLOR", "1");
-    cmd
-}
+use support::router::{TOKEN, config_with_backend};
 
 /// For tests that keep the process running and read its output live.
 fn spawnable() -> std::process::Command {
@@ -24,33 +19,14 @@ fn spawnable() -> std::process::Command {
     cmd
 }
 
+fn bin() -> Command {
+    Command::from_std(spawnable())
+}
+
+/// The shared test configuration, pointing at a port nothing listens on.
 fn write_config(dir: &std::path::Path, extra: &str) -> std::path::PathBuf {
     let path = dir.join("config.toml");
-    let mut file = std::fs::File::create(&path).unwrap();
-    write!(
-        file,
-        r#"
-[server]
-listen = "127.0.0.1:0"
-token = "cli-test-token"
-
-[backends.local]
-url = "http://127.0.0.1:1"
-
-[[models]]
-id = "m-one"
-backend = "local"
-upstream_model = "upstream-one"
-display_name = "Model One"
-aliases = ["alias-one"]
-
-[[models]]
-id = "m-two"
-backend = "local"
-{extra}
-"#
-    )
-    .unwrap();
+    std::fs::write(&path, config_with_backend("http://127.0.0.1:1", extra)).unwrap();
     path
 }
 
@@ -180,16 +156,16 @@ fn missing_config_is_a_clear_error() {
 #[test]
 fn models_prints_the_table() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_config(dir.path(), "[routing]\ndefault_model = \"m-two\"\n");
+    let path = write_config(dir.path(), "[routing]\ndefault_model = \"smart\"\n");
     bin()
         .args(["--config", path.to_str().unwrap(), "models"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("m-one"))
-        .stdout(predicate::str::contains("upstream-one"))
-        .stdout(predicate::str::contains("Model One"))
-        .stdout(predicate::str::contains("alias-one"))
-        .stdout(predicate::str::contains("routed to m-two"));
+        .stdout(predicate::str::contains("fast"))
+        .stdout(predicate::str::contains("mock-fast-v1"))
+        .stdout(predicate::str::contains("Fast Mock"))
+        .stdout(predicate::str::contains("claude-haiku-4-5"))
+        .stdout(predicate::str::contains("unknown model ids → smart"));
 }
 
 #[test]
@@ -204,13 +180,13 @@ fn env_prints_shell_exports_and_json() {
         .stdout(predicate::str::contains(
             "export ANTHROPIC_BASE_URL=\"http://router.example:0\"",
         ))
-        .stdout(predicate::str::contains(
-            "export ANTHROPIC_AUTH_TOKEN=\"cli-test-token\"",
-        ))
+        .stdout(predicate::str::contains(format!(
+            "export ANTHROPIC_AUTH_TOKEN=\"{TOKEN}\""
+        )))
         .stdout(predicate::str::contains(
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         ))
-        .stdout(predicate::str::contains("export ANTHROPIC_MODEL=\"m-one\""));
+        .stdout(predicate::str::contains("export ANTHROPIC_MODEL=\"fast\""));
     bin()
         .args(["--config", path, "env", "--format", "json"])
         .assert()
@@ -243,48 +219,21 @@ fn service_install_print_renders_a_unit_anywhere() {
 fn serve_starts_answers_health_and_stops_on_sigterm() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(dir.path(), "");
-    let mut child = spawnable()
-        .args([
-            "--config",
-            path.to_str().unwrap(),
-            "serve",
-            "--listen",
-            "127.0.0.1:0",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = serve(&path);
+    let banner = wait_for_banner(&mut child);
+    assert!(
+        banner.lines.iter().any(|l| l.contains("fast")),
+        "{banner:?}"
+    );
+    assert!(
+        banner.lines.iter().any(|l| l.contains("body log")),
+        "{banner:?}"
+    );
 
-    let stdout = BufReader::new(child.stdout.take().unwrap());
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for line in stdout.lines().map_while(Result::ok) {
-            let _ = tx.send(line);
-        }
-    });
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut url = None;
-    let mut banner = Vec::new();
-    while Instant::now() < deadline {
-        if let Ok(line) = rx.recv_timeout(Duration::from_millis(200)) {
-            if let Some(rest) = line.trim().strip_prefix("listening on ") {
-                url = Some(rest.split_whitespace().next().unwrap().to_owned());
-            }
-            banner.push(line);
-            if url.is_some() && banner.iter().any(|l| l.contains("Ctrl-C")) {
-                break;
-            }
-        }
-    }
-    let url = url.unwrap_or_else(|| panic!("no listening line in {banner:?}"));
-    assert!(banner.iter().any(|l| l.contains("m-one")), "{banner:?}");
-    assert!(banner.iter().any(|l| l.contains("body log")), "{banner:?}");
-
-    let body = ureq_get(&format!("{url}/healthz"));
+    let body = http_get(&format!("{}/healthz", banner.url), None);
     assert!(body.contains("\"status\":\"ok\""), "{body}");
 
-    let unauthenticated = ureq_get(&format!("{url}/v1/models"));
+    let unauthenticated = http_get(&format!("{}/v1/models", banner.url), None);
     assert!(
         unauthenticated.contains("authentication_error"),
         "{unauthenticated}"
@@ -292,21 +241,13 @@ fn serve_starts_answers_health_and_stops_on_sigterm() {
 
     #[cfg(unix)]
     {
-        let pid = child.id() as i32;
         // SAFETY: plain libc call on a pid this test owns.
-        unsafe {
-            libc_kill(pid);
-        }
+        unsafe { libc_signal(child.id() as i32, 15) };
         let status = child.wait().unwrap();
         assert!(status.success(), "graceful shutdown exits 0, got {status}");
     }
     #[cfg(not(unix))]
     child.kill().unwrap();
-}
-
-#[cfg(unix)]
-unsafe fn libc_kill(pid: i32) {
-    unsafe { libc_signal(pid, 15) }
 }
 
 #[cfg(unix)]
@@ -324,28 +265,17 @@ unsafe fn libc_signal(pid: i32, sig: i32) {
 fn sighup_reloads_the_configuration_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(dir.path(), "");
-    let mut child = spawnable()
-        .args([
-            "--config",
-            path.to_str().unwrap(),
-            "serve",
-            "--listen",
-            "127.0.0.1:0",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let url = wait_for_listening(&mut child);
+    let mut child = serve(&path);
+    let url = wait_for_banner(&mut child).url;
 
-    let before = ureq_get_auth(&format!("{url}/v1/models"), "cli-test-token");
+    let before = http_get(&format!("{url}/v1/models"), Some(TOKEN));
     assert!(
-        before.contains("\"m-one\"") && !before.contains("\"m-three\""),
+        before.contains("\"fast\"") && !before.contains("\"newcomer\""),
         "{before}"
     );
 
     let mut text = std::fs::read_to_string(&path).unwrap();
-    text.push_str("\n[[models]]\nid = \"m-three\"\nbackend = \"local\"\n");
+    text.push_str("\n[[models]]\nid = \"newcomer\"\nbackend = \"mock\"\n");
     std::fs::write(&path, text).unwrap();
     // SAFETY: plain libc call on a pid this test owns.
     unsafe { libc_signal(child.id() as i32, 1) };
@@ -353,21 +283,44 @@ fn sighup_reloads_the_configuration_file() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut after = String::new();
     while Instant::now() < deadline {
-        after = ureq_get_auth(&format!("{url}/v1/models"), "cli-test-token");
-        if after.contains("\"m-three\"") {
+        after = http_get(&format!("{url}/v1/models"), Some(TOKEN));
+        if after.contains("\"newcomer\"") {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     assert!(
-        after.contains("\"m-three\""),
+        after.contains("\"newcomer\""),
         "model table not reloaded: {after}"
     );
     child.kill().unwrap();
 }
 
-/// Reads the banner until the listening line appears; returns the base URL.
-fn wait_for_listening(child: &mut std::process::Child) -> String {
+/// `anthroxy serve` on an ephemeral port with its output captured.
+fn serve(config: &std::path::Path) -> std::process::Child {
+    spawnable()
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+#[derive(Debug)]
+struct Banner {
+    /// Base URL from the `listening on` line.
+    url: String,
+    lines: Vec<String>,
+}
+
+/// Reads the start-up banner through its last line.
+fn wait_for_banner(child: &mut std::process::Child) -> Banner {
     let stdout = BufReader::new(child.stdout.take().unwrap());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -376,36 +329,26 @@ fn wait_for_listening(child: &mut std::process::Child) -> String {
         }
     });
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut url = None;
+    let mut lines = Vec::new();
     while Instant::now() < deadline {
-        if let Ok(line) = rx.recv_timeout(Duration::from_millis(200))
-            && let Some(rest) = line.trim().strip_prefix("listening on ")
-        {
-            return rest.split_whitespace().next().unwrap().to_owned();
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(200)) {
+            if let Some(rest) = line.trim().strip_prefix("listening on ") {
+                url = Some(rest.split_whitespace().next().unwrap().to_owned());
+            }
+            let last = line.contains("Ctrl-C");
+            lines.push(line);
+            if last {
+                break;
+            }
         }
     }
-    panic!("serve never printed a listening line");
-}
-
-fn ureq_get_auth(url: &str, token: &str) -> String {
-    use std::io::Read;
-    let without_scheme = url.strip_prefix("http://").unwrap();
-    let (host, path) = without_scheme
-        .split_once('/')
-        .map(|(h, p)| (h, format!("/{p}")))
-        .unwrap();
-    let mut stream = std::net::TcpStream::connect(host).unwrap();
-    write!(
-        stream,
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nx-api-key: {token}\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
-    response
+    let url = url.unwrap_or_else(|| panic!("no listening line in {lines:?}"));
+    Banner { url, lines }
 }
 
 /// Minimal blocking GET; the test must not depend on tokio.
-fn ureq_get(url: &str) -> String {
+fn http_get(url: &str, token: Option<&str>) -> String {
     use std::io::Read;
     let without_scheme = url.strip_prefix("http://").unwrap();
     let (host, path) = without_scheme
@@ -413,9 +356,12 @@ fn ureq_get(url: &str) -> String {
         .map(|(h, p)| (h, format!("/{p}")))
         .unwrap();
     let mut stream = std::net::TcpStream::connect(host).unwrap();
+    let auth = token
+        .map(|t| format!("x-api-key: {t}\r\n"))
+        .unwrap_or_default();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}Connection: close\r\n\r\n"
     )
     .unwrap();
     let mut response = String::new();

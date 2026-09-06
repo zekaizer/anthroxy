@@ -2,7 +2,6 @@
 //! Decimal (`KB`, `MB`, `GB`) and binary (`KiB`, `MiB`, `GiB`) suffixes are
 //! accepted case-insensitively.
 
-use serde::Serializer;
 use serde::de::{self, Deserializer, Visitor};
 
 pub fn parse(text: &str) -> Result<usize, String> {
@@ -48,8 +47,4 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
         }
     }
     d.deserialize_any(V)
-}
-
-pub fn serialize<S: Serializer>(v: &usize, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_u64(*v as u64)
 }

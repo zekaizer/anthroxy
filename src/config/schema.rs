@@ -6,11 +6,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::byte_size;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub server: ServerConfig,
@@ -26,7 +26,7 @@ pub struct Config {
     pub routing: RoutingConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Socket the router listens on. `0.0.0.0` so the Windows host can reach a
@@ -49,47 +49,32 @@ impl ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
     /// `tracing` filter directive, e.g. `info` or `anthroxy=debug,info`.
-    #[serde(default = "LoggingConfig::default_level")]
     pub level: String,
-    #[serde(default)]
     pub format: LogFormat,
     /// When set, every proxied request and response body is written under this
     /// directory.
-    #[serde(default)]
     pub body_dir: Option<PathBuf>,
     /// Recorded exchanges older than this are deleted; `0` keeps them forever.
-    #[serde(
-        default = "LoggingConfig::default_body_retention",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub body_retention: Duration,
-}
-
-impl LoggingConfig {
-    pub fn default_level() -> String {
-        "info".to_owned()
-    }
-    pub const fn default_body_retention() -> Duration {
-        Duration::from_secs(7 * 24 * 3600)
-    }
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
-            level: Self::default_level(),
+            level: "info".to_owned(),
             format: LogFormat::default(),
             body_dir: None,
-            body_retention: Self::default_body_retention(),
+            body_retention: Duration::from_secs(7 * 24 * 3600),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum LogFormat {
     #[default]
@@ -97,62 +82,36 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct UpstreamConfig {
-    #[serde(
-        default = "UpstreamConfig::default_connect_timeout",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
     /// Maximum silence between two chunks of an upstream response.
-    #[serde(
-        default = "UpstreamConfig::default_read_timeout",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub read_timeout: Duration,
     /// Additional attempts after a connection failure.
-    #[serde(default = "UpstreamConfig::default_retries")]
     pub retries: u32,
     /// Delay before the first retry; doubles on each further attempt.
-    #[serde(
-        default = "UpstreamConfig::default_retry_backoff",
-        with = "humantime_serde"
-    )]
+    #[serde(with = "humantime_serde")]
     pub retry_backoff: Duration,
     /// Upstream status codes that are retried like a connection failure.
-    #[serde(default)]
     pub retry_on_status: Vec<u16>,
-}
-
-impl UpstreamConfig {
-    pub const fn default_connect_timeout() -> Duration {
-        Duration::from_secs(10)
-    }
-    pub const fn default_read_timeout() -> Duration {
-        Duration::from_secs(300)
-    }
-    pub const fn default_retries() -> u32 {
-        2
-    }
-    pub const fn default_retry_backoff() -> Duration {
-        Duration::from_millis(200)
-    }
 }
 
 impl Default for UpstreamConfig {
     fn default() -> Self {
         Self {
-            connect_timeout: Self::default_connect_timeout(),
-            read_timeout: Self::default_read_timeout(),
-            retries: Self::default_retries(),
-            retry_backoff: Self::default_retry_backoff(),
+            connect_timeout: Duration::from_secs(10),
+            read_timeout: Duration::from_secs(300),
+            retries: 2,
+            retry_backoff: Duration::from_millis(200),
             retry_on_status: Vec::new(),
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackendConfig {
     /// Origin of the backend, e.g. `http://127.0.0.1:8000`. The request path is
@@ -168,7 +127,7 @@ pub struct BackendConfig {
     pub anthropic_beta: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialConfig {
     #[default]
@@ -211,7 +170,7 @@ impl CredentialConfig {
 }
 
 /// How a credential is presented to the backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialHeader {
     /// `Authorization: Bearer <credential>`
@@ -221,7 +180,7 @@ pub enum CredentialHeader {
     XApiKey,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelConfig {
     /// Identifier Claude Code sees and sends in `model`.
@@ -237,7 +196,7 @@ pub struct ModelConfig {
     pub aliases: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
     /// Model that receives requests naming an unknown model. Unset rejects them.

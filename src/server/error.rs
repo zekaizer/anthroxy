@@ -5,6 +5,7 @@ use http::StatusCode;
 
 use super::RequestId;
 use crate::anthropic::{ErrorResponse, ErrorType, PeekError};
+use crate::routing::Registry;
 use crate::upstream::UpstreamError;
 
 #[derive(Debug, thiserror::Error)]
@@ -21,15 +22,22 @@ pub enum RouterError {
     UnknownModel { model: String, known: Vec<String> },
     #[error("no route for {method} {path}")]
     NoRoute { method: String, path: String },
-    #[error("model `{model}` refers to backend `{backend}`, which is not configured")]
-    BackendMissing { model: String, backend: String },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
-    #[error("cannot rewrite request body: {0}")]
-    Rewrite(#[from] serde_json::Error),
 }
 
 impl RouterError {
+    pub fn unknown_model(model: impl Into<String>, registry: &Registry) -> Self {
+        RouterError::UnknownModel {
+            model: model.into(),
+            known: registry
+                .known_names()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        }
+    }
+
     pub fn error_type(&self) -> ErrorType {
         match self {
             RouterError::Unauthorized => ErrorType::AuthenticationError,
@@ -38,9 +46,7 @@ impl RouterError {
             RouterError::UnknownModel { .. } | RouterError::NoRoute { .. } => {
                 ErrorType::NotFoundError
             }
-            RouterError::BackendMissing { .. }
-            | RouterError::Upstream(_)
-            | RouterError::Rewrite(_) => ErrorType::ApiError,
+            RouterError::Upstream(_) => ErrorType::ApiError,
         }
     }
 
@@ -56,9 +62,11 @@ impl RouterError {
     /// Backend involved, for the `x-anthroxy-backend` header.
     pub fn backend(&self) -> Option<&str> {
         match self {
-            RouterError::Upstream(UpstreamError::Credential { backend, .. })
-            | RouterError::Upstream(UpstreamError::Transport { backend, .. })
-            | RouterError::BackendMissing { backend, .. } => Some(backend),
+            RouterError::Upstream(
+                UpstreamError::Credential { backend, .. }
+                | UpstreamError::Transport { backend, .. }
+                | UpstreamError::Body { backend, .. },
+            ) => Some(backend),
             _ => None,
         }
     }
@@ -71,7 +79,7 @@ impl RouterError {
         if let Some(backend) = self.backend() {
             response.headers_mut().insert(
                 crate::upstream::X_ROUTER_BACKEND.clone(),
-                http::HeaderValue::from_str(backend).expect("backend names are header-safe"),
+                crate::upstream::header_value(backend),
             );
         }
         response

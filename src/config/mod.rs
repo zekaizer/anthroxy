@@ -25,6 +25,11 @@ pub use schema::{
 /// Environment variable naming the configuration file.
 pub const CONFIG_ENV: &str = "ANTHROXY_CONFIG";
 
+/// The `lookup` for [`Config::parse`] that reads the process environment.
+pub fn process_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
 /// Default configuration path: `$XDG_CONFIG_HOME/anthroxy/config.toml`.
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
@@ -40,7 +45,7 @@ impl Config {
             path: path.to_path_buf(),
             source,
         })?;
-        Config::parse(&text, |name| std::env::var(name).ok())
+        Config::parse(&text, process_env)
     }
 
     /// Parses `text`, resolving `${NAME}` in string values through `lookup`,
@@ -58,6 +63,29 @@ impl Config {
         normalize(&mut config);
         validate::validate(&config)?;
         Ok(config)
+    }
+}
+
+/// Command-line values that replace what the file says.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Overrides {
+    pub listen: Option<std::net::SocketAddr>,
+    pub body_dir: Option<PathBuf>,
+}
+
+impl Config {
+    /// Applies `overrides`, then normalizes and validates again so an
+    /// override obeys the same rules as the file.
+    pub fn with_overrides(mut self, overrides: &Overrides) -> Result<Config, ConfigError> {
+        if let Some(listen) = overrides.listen {
+            self.server.listen = listen;
+        }
+        if let Some(dir) = &overrides.body_dir {
+            self.logging.body_dir = Some(dir.clone());
+        }
+        normalize(&mut self);
+        validate::validate(&self)?;
+        Ok(self)
     }
 }
 
