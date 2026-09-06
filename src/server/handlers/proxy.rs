@@ -87,6 +87,7 @@ async fn handle(
         let record = request_record(
             request_id,
             &parts,
+            path_and_query,
             &requested_model,
             route,
             backend,
@@ -166,6 +167,7 @@ async fn handle(
 fn request_record(
     request_id: &RequestId,
     parts: &http::request::Parts,
+    path_and_query: &str,
     requested_model: &str,
     route: &crate::routing::Route,
     backend: &crate::upstream::Backend,
@@ -175,12 +177,7 @@ fn request_record(
         request_id: request_id.as_str().to_owned(),
         received_at: jiff::Timestamp::now().to_string(),
         method: parts.method.to_string(),
-        path: parts
-            .uri
-            .path_and_query()
-            .map(|p| p.as_str())
-            .unwrap_or("/")
-            .to_owned(),
+        path: path_and_query.to_owned(),
         requested_model: requested_model.to_owned(),
         model: route.id.clone(),
         upstream_model: route.upstream_model.clone(),
