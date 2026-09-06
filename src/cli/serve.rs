@@ -49,7 +49,7 @@ fn print_banner(config: &Config, path: &std::path::Path, addr: SocketAddr, style
     let registry = Registry::from_config(config);
     println!(
         "{} {}",
-        style.bold(&format!("claude-router {}", env!("CARGO_PKG_VERSION"))),
+        style.bold(&format!("claude-router {}", crate::build_info::VERSION)),
         style.dim(&format!("({})", display_path(path)))
     );
     let shown = if addr.ip().is_unspecified() {

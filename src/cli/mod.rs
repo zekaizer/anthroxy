@@ -17,6 +17,15 @@ use crate::config::{self, Config, LogFormat};
 
 pub use style::Style;
 
+/// clap's default template omits the author; this one prints it under the
+/// version line of `--help` only.
+const HELP_TEMPLATE: &str = "\
+{name} {version}
+{author-with-newline}{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}{after-help}";
+
 const AFTER_HELP: &str = "\
 Getting started:
   1. claude-router init            write a commented config with a fresh token
@@ -30,9 +39,11 @@ Then pick any configured model with /model inside Claude Code.";
 #[derive(Debug, Parser)]
 #[command(
     name = "claude-router",
-    version,
+    version = crate::build_info::VERSION,
+    author,
     about = "One endpoint for Claude Code in front of several Anthropic-compatible backends",
     after_help = AFTER_HELP,
+    help_template = HELP_TEMPLATE,
     propagate_version = true
 )]
 pub struct Cli {

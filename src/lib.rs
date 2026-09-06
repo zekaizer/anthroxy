@@ -5,6 +5,7 @@
 //! calls into this crate.
 
 pub mod anthropic;
+pub mod build_info;
 pub mod cli;
 pub mod config;
 pub mod credential;

@@ -70,6 +70,24 @@ fn help_lists_every_command() {
 }
 
 #[test]
+fn version_shows_git_state_and_help_shows_author() {
+    let out = bin().arg("--version").output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    let re = regex_lite::Regex::new(
+        r"^claude-router \d+\.\d+\.\d+ \(([0-9a-f]{7,}(-dirty)?|unknown)\)\n$",
+    )
+    .unwrap();
+    assert!(re.is_match(&text), "unexpected version line: {text:?}");
+
+    bin()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Luke Lee"))
+        .stdout(predicate::str::is_match(r"claude-router \d+\.\d+\.\d+ \(").unwrap());
+}
+
+#[test]
 fn init_writes_a_loadable_config_and_refuses_to_overwrite() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("nested").join("config.toml");
