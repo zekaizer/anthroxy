@@ -189,7 +189,7 @@ fn models_prints_the_table() {
         .stdout(predicate::str::contains("upstream-one"))
         .stdout(predicate::str::contains("Model One"))
         .stdout(predicate::str::contains("alias-one"))
-        .stdout(predicate::str::contains("routed to m-two"));
+        .stdout(predicate::str::contains("unknown model ids → m-two"));
 }
 
 #[test]

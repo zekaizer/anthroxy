@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 
+use super::models::default_route_line;
 use super::{Cli, Style, display_path};
 use crate::config::Config;
 use crate::server::{AppState, Server, Snapshot};
@@ -124,9 +125,7 @@ fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, s
             style.dim(&aliases)
         );
     }
-    if let Some(route) = snapshot.registry.default_route() {
-        println!("  unknown model ids → {}", route.id);
-    }
+    println!("  {}", default_route_line(&snapshot.registry, style));
     match &snapshot.body_log {
         Some(log) => println!("  body log {}", display_path(log.root())),
         None => println!(

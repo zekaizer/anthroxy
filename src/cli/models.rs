@@ -1,23 +1,39 @@
 use super::style::table;
 use super::{Cli, Style};
-use crate::routing::Registry;
+use crate::routing::{Registry, Route};
 
 pub fn run(cli: &Cli, style: &Style) -> anyhow::Result<()> {
     let config = cli.load_config()?;
     let registry = Registry::from_config(&config)?;
-    print!("{}", render(&registry, style));
+    print!("{}", table(&table_rows(&registry, style, None)));
+    println!();
+    println!("{}", default_route_line(&registry, style));
     Ok(())
 }
 
-pub fn render(registry: &Registry, style: &Style) -> String {
-    let mut rows = vec![
+/// A header row plus one row per route: `mark` (when given), id, backend,
+/// upstream model, picker label, aliases.
+pub fn table_rows(
+    registry: &Registry,
+    style: &Style,
+    mark: Option<&dyn Fn(&Route) -> String>,
+) -> Vec<Vec<String>> {
+    let mut header: Vec<String> = Vec::new();
+    if mark.is_some() {
+        header.push(String::new());
+    }
+    header.extend(
         ["id", "backend", "upstream model", "picker label", "aliases"]
             .iter()
-            .map(|h| style.dim(h))
-            .collect::<Vec<_>>(),
-    ];
+            .map(|h| style.dim(h)),
+    );
+    let mut rows = vec![header];
     for route in registry.routes() {
-        rows.push(vec![
+        let mut row = Vec::new();
+        if let Some(mark) = mark {
+            row.push(mark(route));
+        }
+        row.extend([
             style.bold(&route.id),
             route.backend.name.clone(),
             route.upstream_model.clone(),
@@ -28,15 +44,15 @@ pub fn render(registry: &Registry, style: &Style) -> String {
                 route.aliases.join(", ")
             },
         ]);
+        rows.push(row);
     }
-    let mut out = table(&rows);
-    out.push('\n');
+    rows
+}
+
+/// Where requests naming an unlisted model go.
+pub fn default_route_line(registry: &Registry, style: &Style) -> String {
     match registry.default_route() {
-        Some(route) => out.push_str(&format!(
-            "Unknown model ids are routed to {}.\n",
-            style.bold(&route.id)
-        )),
-        None => out.push_str("Unknown model ids are rejected with 404.\n"),
+        Some(route) => format!("unknown model ids → {}", style.bold(&route.id)),
+        None => "unknown model ids → rejected with 404".to_owned(),
     }
-    out
 }

@@ -7,10 +7,11 @@ use std::time::Duration;
 
 use clap::Args;
 
+use super::models::{default_route_line, table_rows};
 use super::style::table;
 use super::{Cli, Style, display_path};
 use crate::config::Config;
-use crate::routing::Registry;
+use crate::routing::{Registry, Route};
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
 use crate::upstream::{Backend, RetryPolicy, UpstreamClient, http_client};
 
@@ -91,37 +92,23 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
 
     println!();
     println!("{}", style.bold("Models"));
-    let mut rows = vec![
-        ["", "id", "backend", "upstream model", "picker label"]
-            .iter()
-            .map(|h| style.dim(h))
-            .collect::<Vec<_>>(),
-    ];
-    for route in registry.routes() {
+    let mark = |route: &Route| {
         let mark = match listed.get(&route.backend.name) {
             Some(ids) if ids.is_empty() => style.dim("-"),
             Some(ids) if ids.contains(&route.upstream_model) => style.ok_mark(),
             Some(_) => style.warn_mark(),
             None => style.dim("-"),
         };
-        rows.push(vec![
-            format!("  {mark}"),
-            style.bold(&route.id),
-            route.backend.name.clone(),
-            route.upstream_model.clone(),
-            route.display_name.clone(),
-        ]);
-    }
-    print!("{}", table(&rows));
+        format!("  {mark}")
+    };
+    print!("{}", table(&table_rows(&registry, style, Some(&mark))));
     if listed.values().any(|ids| !ids.is_empty()) {
         println!(
             "  {}",
             style.dim("✓ upstream model listed by the backend, ! not listed (check the name), - backend gave no list")
         );
     }
-    if let Some(route) = registry.default_route() {
-        println!("  unknown model ids → {}", style.bold(&route.id));
-    }
+    println!("  {}", default_route_line(&registry, style));
 
     println!();
     if problems == 0 {
