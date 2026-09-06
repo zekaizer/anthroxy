@@ -1,0 +1,69 @@
+name: Release
+
+# Builds a fully static Linux executable for a published GitHub release and
+# attaches it to that release. Asset names carry no version so
+# `releases/latest/download/<asset>` always resolves.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  linux-static:
+    name: linux static (${{ github.ref_name }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag must match Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::release tag v$tag does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.TARGET }}
+
+      - name: Install musl linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Verify the binary is static and runs
+        run: |
+          bin="target/$TARGET/release/claude-router"
+          file "$bin"
+          file "$bin" | grep -q 'statically linked'
+          ldd "$bin" 2>&1 | grep -q 'not a dynamic executable'
+          "$bin" --version
+
+      - name: Package
+        run: |
+          name="claude-router-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/claude-router" README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          ls -l dist
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --clobber
