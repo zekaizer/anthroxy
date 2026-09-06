@@ -74,7 +74,7 @@ impl Default for LoggingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum LogFormat {
     #[default]

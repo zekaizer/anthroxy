@@ -11,7 +11,7 @@ mod style;
 
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 use crate::config::{self, Config, LogFormat};
 
@@ -58,25 +58,10 @@ pub struct Cli {
 
     /// Log line format; overrides the file
     #[arg(long, global = true, value_enum, value_name = "FORMAT")]
-    pub log_format: Option<LogFormatArg>,
+    pub log_format: Option<LogFormat>,
 
     #[command(subcommand)]
     pub command: Command,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum LogFormatArg {
-    Text,
-    Json,
-}
-
-impl From<LogFormatArg> for LogFormat {
-    fn from(value: LogFormatArg) -> Self {
-        match value {
-            LogFormatArg::Text => LogFormat::Text,
-            LogFormatArg::Json => LogFormat::Json,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -118,7 +103,6 @@ impl Cli {
         );
         let format = self
             .log_format
-            .map(LogFormat::from)
             .or(config.map(|c| c.logging.format))
             .unwrap_or_default();
         crate::observability::init(&directives, format)
