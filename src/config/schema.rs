@@ -6,11 +6,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::byte_size;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub server: ServerConfig,
@@ -26,7 +26,7 @@ pub struct Config {
     pub routing: RoutingConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Socket the router listens on. `0.0.0.0` so the Windows host can reach a
@@ -49,7 +49,7 @@ impl ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
     /// `tracing` filter directive, e.g. `info` or `anthroxy=debug,info`.
@@ -74,7 +74,7 @@ impl Default for LoggingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogFormat {
     #[default]
@@ -82,7 +82,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpstreamConfig {
     #[serde(with = "humantime_serde")]
@@ -111,7 +111,7 @@ impl Default for UpstreamConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackendConfig {
     /// Origin of the backend, e.g. `http://127.0.0.1:8000`. The request path is
@@ -127,7 +127,7 @@ pub struct BackendConfig {
     pub anthropic_beta: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialConfig {
     #[default]
@@ -170,7 +170,7 @@ impl CredentialConfig {
 }
 
 /// How a credential is presented to the backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialHeader {
     /// `Authorization: Bearer <credential>`
@@ -180,7 +180,7 @@ pub enum CredentialHeader {
     XApiKey,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelConfig {
     /// Identifier Claude Code sees and sends in `model`.
@@ -196,7 +196,7 @@ pub struct ModelConfig {
     pub aliases: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
     /// Model that receives requests naming an unknown model. Unset rejects them.
