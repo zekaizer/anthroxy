@@ -196,24 +196,6 @@ fn split_quoted(line: &str) -> Vec<String> {
     words
 }
 
-/// Steps performed by `service install`, in order, for the report.
-pub fn install_steps(unit: &Path) -> Vec<(&'static str, Vec<String>)> {
-    vec![
-        ("write unit", vec![unit.display().to_string()]),
-        ("systemctl", vec!["--user".into(), "daemon-reload".into()]),
-        (
-            "systemctl",
-            vec![
-                "--user".into(),
-                "enable".into(),
-                "--now".into(),
-                UNIT_NAME.into(),
-            ],
-        ),
-        ("loginctl", vec!["enable-linger".into()]),
-    ]
-}
-
 pub fn write_unit(path: &Path, content: &str) -> Result<(), ServiceError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| ServiceError::Write {
@@ -274,12 +256,5 @@ mod tests {
     fn exec_start_missing_or_foreign_is_none() {
         assert!(parse_exec_start("[Unit]\nDescription=x\n").is_none());
         assert!(parse_exec_start("[Service]\nExecStart=/usr/bin/other --flag\n").is_none());
-    }
-
-    #[test]
-    fn install_steps_enable_linger_last() {
-        let steps = install_steps(Path::new("/u.service"));
-        assert_eq!(steps.last().unwrap().0, "loginctl");
-        assert_eq!(steps[2].1, vec!["--user", "enable", "--now", UNIT_NAME]);
     }
 }

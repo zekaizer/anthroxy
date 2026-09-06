@@ -41,13 +41,18 @@ pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result
             let unit_path = systemd::unit_path()?;
             systemd::write_unit(&unit_path, &systemd::render_unit(&systemd::exe()?, &config))?;
             println!("{} wrote {}", style.ok_mark(), display_path(&unit_path));
-            for (program, args) in systemd::install_steps(&unit_path).into_iter().skip(1) {
-                let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                systemd::run(program, &args)?;
+            // Linger last: the unit must exist and be enabled before it matters.
+            const STEPS: [(&str, &[&str]); 3] = [
+                ("systemctl", &["--user", "daemon-reload"]),
+                ("systemctl", &["--user", "enable", "--now", UNIT_NAME]),
+                ("loginctl", &["enable-linger"]),
+            ];
+            for (program, args) in STEPS {
+                systemd::run(program, args)?;
                 println!(
                     "{} {}",
                     style.ok_mark(),
-                    systemd::command_line(program, &args)
+                    systemd::command_line(program, args)
                 );
             }
             println!();
