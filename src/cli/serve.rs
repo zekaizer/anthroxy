@@ -5,7 +5,7 @@ use clap::Args;
 
 use super::models::default_route_line;
 use super::{Cli, Style, display_path};
-use crate::config::Config;
+use crate::config::{Config, Overrides};
 use crate::server::{AppState, Server, Snapshot};
 
 #[derive(Debug, Clone, Args)]
@@ -21,14 +21,11 @@ pub struct ServeArgs {
 
 /// The file plus command-line overrides; used at startup and on every reload.
 fn load_effective(cli: &Cli, args: &ServeArgs) -> anyhow::Result<Config> {
-    let mut config = cli.load_config()?;
-    if let Some(listen) = args.listen {
-        config.server.listen = listen;
-    }
-    if let Some(dir) = &args.body_dir {
-        config.logging.body_dir = Some(dir.clone());
-    }
-    Ok(config)
+    let overrides = Overrides {
+        listen: args.listen,
+        body_dir: args.body_dir.clone(),
+    };
+    Ok(cli.load_config()?.with_overrides(&overrides)?)
 }
 
 pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<()> {

@@ -61,6 +61,29 @@ impl Config {
     }
 }
 
+/// Command-line values that replace what the file says.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Overrides {
+    pub listen: Option<std::net::SocketAddr>,
+    pub body_dir: Option<PathBuf>,
+}
+
+impl Config {
+    /// Applies `overrides`, then normalizes and validates again so an
+    /// override obeys the same rules as the file.
+    pub fn with_overrides(mut self, overrides: &Overrides) -> Result<Config, ConfigError> {
+        if let Some(listen) = overrides.listen {
+            self.server.listen = listen;
+        }
+        if let Some(dir) = &overrides.body_dir {
+            self.logging.body_dir = Some(dir.clone());
+        }
+        normalize(&mut self);
+        validate::validate(&self)?;
+        Ok(self)
+    }
+}
+
 /// Canonical forms that later layers rely on: backend URLs carry no trailing
 /// slash, so `url + path` never produces `//`; a leading `~/` in paths means
 /// the home directory.

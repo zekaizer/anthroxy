@@ -310,6 +310,25 @@ upstream_model = "up\nbreak"
 }
 
 #[test]
+fn overrides_are_normalized_like_the_file() {
+    let overrides = Overrides {
+        listen: Some("127.0.0.1:1".parse().unwrap()),
+        body_dir: Some("~/override".into()),
+    };
+    let c = parse(MINIMAL).unwrap().with_overrides(&overrides).unwrap();
+    assert_eq!(c.server.listen, "127.0.0.1:1".parse().unwrap());
+    assert_eq!(
+        c.logging.body_dir.unwrap(),
+        dirs::home_dir().unwrap().join("override")
+    );
+    let untouched = parse(MINIMAL)
+        .unwrap()
+        .with_overrides(&Overrides::default())
+        .unwrap();
+    assert_eq!(untouched.logging.body_dir, None);
+}
+
+#[test]
 fn body_dir_tilde_expands_to_home() {
     let text = MINIMAL.to_owned() + "\n[logging]\nbody_dir = \"~/state/bodies\"\n";
     let c = parse(&text).unwrap();
