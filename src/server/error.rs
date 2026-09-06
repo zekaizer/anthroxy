@@ -22,8 +22,6 @@ pub enum RouterError {
     UnknownModel { model: String, known: Vec<String> },
     #[error("no route for {method} {path}")]
     NoRoute { method: String, path: String },
-    #[error("model `{model}` refers to backend `{backend}`, which is not configured")]
-    BackendMissing { model: String, backend: String },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
     #[error("cannot rewrite request body: {0}")]
@@ -50,9 +48,7 @@ impl RouterError {
             RouterError::UnknownModel { .. } | RouterError::NoRoute { .. } => {
                 ErrorType::NotFoundError
             }
-            RouterError::BackendMissing { .. }
-            | RouterError::Upstream(_)
-            | RouterError::Rewrite(_) => ErrorType::ApiError,
+            RouterError::Upstream(_) | RouterError::Rewrite(_) => ErrorType::ApiError,
         }
     }
 
@@ -69,8 +65,7 @@ impl RouterError {
     pub fn backend(&self) -> Option<&str> {
         match self {
             RouterError::Upstream(UpstreamError::Credential { backend, .. })
-            | RouterError::Upstream(UpstreamError::Transport { backend, .. })
-            | RouterError::BackendMissing { backend, .. } => Some(backend),
+            | RouterError::Upstream(UpstreamError::Transport { backend, .. }) => Some(backend),
             _ => None,
         }
     }

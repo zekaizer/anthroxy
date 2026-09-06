@@ -102,7 +102,7 @@ fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, s
         format!("http://{addr}")
     };
     println!("  listening on {shown}");
-    for backend in snapshot.backends.iter() {
+    for backend in snapshot.registry.backends() {
         println!(
             "  backend  {}  {}  {}",
             style.bold(&backend.name),
@@ -119,7 +119,7 @@ fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, s
         println!(
             "  model    {}  → {}/{}{}",
             style.bold(&route.id),
-            route.backend,
+            route.backend.name,
             route.upstream_model,
             style.dim(&aliases)
         );

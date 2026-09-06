@@ -4,7 +4,7 @@ use crate::routing::Registry;
 
 pub fn run(cli: &Cli, style: &Style) -> anyhow::Result<()> {
     let config = cli.load_config()?;
-    let registry = Registry::from_config(&config);
+    let registry = Registry::from_config(&config)?;
     print!("{}", render(&registry, style));
     Ok(())
 }
@@ -19,7 +19,7 @@ pub fn render(registry: &Registry, style: &Style) -> String {
     for route in registry.routes() {
         rows.push(vec![
             style.bold(&route.id),
-            route.backend.clone(),
+            route.backend.name.clone(),
             route.upstream_model.clone(),
             route.display_name.clone(),
             if route.aliases.is_empty() {

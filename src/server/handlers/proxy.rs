@@ -52,9 +52,10 @@ async fn handle(
         .resolve(&requested_model)
         .ok_or_else(|| RouterError::unknown_model(&requested_model, &state.registry))?;
     let route = resolution.route;
+    let backend = &route.backend;
     let span = tracing::Span::current();
     span.record("model", route.id.as_str());
-    span.record("backend", route.backend.as_str());
+    span.record("backend", backend.name.as_str());
     tracing::info!(
         requested_model = %requested_model,
         matched = ?resolution.matched,
@@ -63,15 +64,6 @@ async fn handle(
         body_bytes = body.len(),
         "routed"
     );
-    let backend =
-        state
-            .backends
-            .get(&route.backend)
-            .ok_or_else(|| RouterError::BackendMissing {
-                model: route.id.clone(),
-                backend: route.backend.clone(),
-            })?;
-
     let body = if requested_model == route.upstream_model {
         body
     } else {
@@ -90,7 +82,6 @@ async fn handle(
             path_and_query,
             &requested_model,
             route,
-            backend,
             peek.stream,
         );
         log.begin(record, &body, started)
@@ -170,9 +161,9 @@ fn request_record(
     path_and_query: &str,
     requested_model: &str,
     route: &crate::routing::Route,
-    backend: &crate::upstream::Backend,
     stream: bool,
 ) -> RequestRecord {
+    let backend = &route.backend;
     RequestRecord {
         request_id: request_id.as_str().to_owned(),
         received_at: jiff::Timestamp::now().to_string(),

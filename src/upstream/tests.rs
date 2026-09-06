@@ -1,27 +1,25 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
-use crate::config::CredentialHeader;
-use crate::credential::{Credential, FixedCredential};
+use crate::config::{BackendConfig, CredentialConfig, CredentialHeader};
+use crate::credential::Credential;
 
 fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
-    let mut map = HeaderMap::new();
-    for (k, v) in headers {
-        map.insert(
-            http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
-            HeaderValue::from_str(v).unwrap(),
-        );
-    }
-    Backend {
-        name: "b".into(),
-        url: "http://backend".into(),
-        credential: Arc::new(FixedCredential::none()),
-        headers: map,
-        anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
-    }
+    Backend::from_config(
+        "b",
+        &BackendConfig {
+            url: "http://backend".into(),
+            credential: CredentialConfig::None,
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
+        },
+    )
+    .unwrap()
 }
 
 fn client_headers() -> HeaderMap {

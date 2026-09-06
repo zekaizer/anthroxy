@@ -126,11 +126,9 @@ fn model_ids(body: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use crate::config::CredentialHeader;
-    use crate::credential::FixedCredential;
+    use crate::config::{BackendConfig, CredentialConfig, CredentialHeader};
 
     async fn slow_backend(name: &str, delay: Duration) -> Backend {
         let app = axum::Router::new().route(
@@ -143,13 +141,16 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Backend {
-            name: name.to_owned(),
-            url,
-            credential: Arc::new(FixedCredential::none()),
-            headers: http::HeaderMap::new(),
-            anthropic_beta: Vec::new(),
-        }
+        Backend::from_config(
+            name,
+            &BackendConfig {
+                url,
+                credential: CredentialConfig::None,
+                headers: Default::default(),
+                anthropic_beta: Vec::new(),
+            },
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -179,9 +180,11 @@ mod tests {
     #[tokio::test]
     async fn credential_line_is_the_source_plus_the_masked_value() {
         let mut backend = slow_backend("a", Duration::ZERO).await;
-        backend.credential = Arc::new(
-            FixedCredential::secret(CredentialHeader::XApiKey, "key-1234567890".into()).unwrap(),
-        );
+        backend.credential = crate::credential::build(&CredentialConfig::Static {
+            value: "key-1234567890".into(),
+            header: CredentialHeader::XApiKey,
+        })
+        .unwrap();
         let probe = probe(&reqwest::Client::new(), &backend).await;
         assert_eq!(probe.credential.unwrap(), "static (key-…7890)");
         assert!(matches!(

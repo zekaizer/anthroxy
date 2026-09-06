@@ -9,12 +9,11 @@ use super::{ClientToken, ServerBuildError};
 use crate::config::Config;
 use crate::observability::BodyLog;
 use crate::routing::Registry;
-use crate::upstream::{Backends, UpstreamClient};
+use crate::upstream::UpstreamClient;
 
 /// Configuration-derived state, built once per (re)load.
 pub struct Snapshot {
     pub registry: Registry,
-    pub backends: Backends,
     pub upstream: UpstreamClient,
     pub client_token: ClientToken,
     pub max_body_bytes: usize,
@@ -36,8 +35,7 @@ impl Snapshot {
             None => None,
         };
         Ok(Self {
-            registry: Registry::from_config(config),
-            backends: Backends::from_config(config)?,
+            registry: Registry::from_config(config)?,
             upstream: UpstreamClient::from_config(&config.upstream)?,
             client_token: ClientToken::new(&config.server.token),
             max_body_bytes: config.server.max_body_bytes,
@@ -87,8 +85,8 @@ impl AppState {
     pub fn apply(&self, config: &Config) -> Result<ReloadReport, ServerBuildError> {
         let snapshot = Snapshot::from_config(config)?;
         let report = ReloadReport {
-            backends: snapshot.backends.len(),
-            models: snapshot.registry.len(),
+            backends: snapshot.registry.backends().len(),
+            models: snapshot.registry.routes().len(),
             listen_changed: config.server.listen != self.listen,
         };
         *self

@@ -7,7 +7,6 @@ mod fixed;
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -125,21 +124,21 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
 
 /// Builds the source for a backend. Static inputs (environment) are resolved
 /// here so misconfiguration surfaces at startup rather than on first request.
-pub fn build(config: &CredentialConfig) -> Result<Arc<dyn CredentialSource>, CredentialError> {
+pub fn build(config: &CredentialConfig) -> Result<Box<dyn CredentialSource>, CredentialError> {
     Ok(match config {
-        CredentialConfig::None => Arc::new(FixedCredential::none()),
+        CredentialConfig::None => Box::new(FixedCredential::none()),
         CredentialConfig::Static { value, header } => {
-            Arc::new(FixedCredential::secret(*header, value.clone())?)
+            Box::new(FixedCredential::secret(*header, value.clone())?)
         }
         CredentialConfig::Env { name, header } => {
-            Arc::new(FixedCredential::from_env(*header, name)?)
+            Box::new(FixedCredential::from_env(*header, name)?)
         }
         CredentialConfig::Command {
             command,
             refresh,
             timeout,
             header,
-        } => Arc::new(CommandCredential::new(
+        } => Box::new(CommandCredential::new(
             command.clone(),
             *header,
             *refresh,

@@ -1,6 +1,5 @@
 //! Sends one client request to a backend, with credential refresh and retry.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -17,7 +16,7 @@ pub struct UpstreamClient {
 }
 
 pub struct UpstreamRequest<'a> {
-    pub backend: &'a Arc<Backend>,
+    pub backend: &'a Backend,
     pub method: Method,
     /// Path and query exactly as the client sent them, e.g. `/v1/messages`.
     pub path_and_query: &'a str,

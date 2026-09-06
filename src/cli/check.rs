@@ -11,8 +11,8 @@ use super::style::table;
 use super::{Cli, Style, display_path};
 use crate::config::Config;
 use crate::routing::Registry;
+use crate::upstream::Backend;
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
-use crate::upstream::{Backend, Backends};
 
 #[derive(Debug, Clone, Args)]
 pub struct CheckArgs {
@@ -47,21 +47,20 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         ))
     );
 
-    let backends = match Backends::from_config(&config) {
-        Ok(b) => b,
+    let registry = match Registry::from_config(&config) {
+        Ok(registry) => registry,
         Err(error) => {
             println!("{} {error}", style.err_mark());
             anyhow::bail!("configuration is not usable");
         }
     };
-    let registry = Registry::from_config(&config);
 
     let mut problems = 0usize;
     let mut listed: std::collections::HashMap<String, Vec<String>> = Default::default();
     println!();
     println!("{}", style.bold("Backends"));
     if args.no_probe {
-        for backend in backends.iter() {
+        for backend in registry.backends() {
             println!(
                 "  {}  {}  {}",
                 style.dim("-"),
@@ -73,8 +72,8 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
     } else {
         let http = reqwest::Client::builder().timeout(args.timeout).build()?;
-        let results = probe_all(&http, backends.iter().map(Arc::as_ref)).await;
-        for (backend, result) in backends.iter().zip(&results) {
+        let results = probe_all(&http, registry.backends().map(Arc::as_ref)).await;
+        for (backend, result) in registry.backends().zip(&results) {
             let (ok, ids) = report_backend(backend, result, style);
             if !ok {
                 problems += 1;
@@ -94,7 +93,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
             .collect::<Vec<_>>(),
     ];
     for route in registry.routes() {
-        let mark = match listed.get(&route.backend) {
+        let mark = match listed.get(&route.backend.name) {
             Some(ids) if ids.is_empty() => style.dim("-"),
             Some(ids) if ids.contains(&route.upstream_model) => style.ok_mark(),
             Some(_) => style.warn_mark(),
@@ -103,7 +102,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         rows.push(vec![
             format!("  {mark}"),
             style.bold(&route.id),
-            route.backend.clone(),
+            route.backend.name.clone(),
             route.upstream_model.clone(),
             route.display_name.clone(),
         ]);
