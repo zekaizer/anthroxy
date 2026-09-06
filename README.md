@@ -1,5 +1,8 @@
 # claude-router
 
+[![CI](https://github.com/zekaizer/claude-router/actions/workflows/ci.yml/badge.svg)](https://github.com/zekaizer/claude-router/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zekaizer/claude-router?sort=semver)](https://github.com/zekaizer/claude-router/releases/latest)
+
 One endpoint for Claude Code in front of several Anthropic-API-compatible backends (vLLM, LM Studio, api.anthropic.com, …). Claude Code points at the router once; every configured model shows up in its `/model` picker, and switching between them takes effect on the next request without restarting the session.
 
 ```
@@ -19,11 +22,20 @@ What the router does:
 
 ## Install
 
+**Linux x86_64 (WSL2 included), no toolchain needed** — every release ships a fully static executable:
+
+```sh
+curl -fsSLO https://github.com/zekaizer/claude-router/releases/latest/download/claude-router-x86_64-unknown-linux-musl.tar.gz
+tar -xzf claude-router-x86_64-unknown-linux-musl.tar.gz
+install -m 755 claude-router-x86_64-unknown-linux-musl/claude-router ~/.local/bin/
+claude-router --version        # prints the version and the commit it was built from
+```
+
+**From source** (Linux and macOS, Rust 1.85+ for edition 2024):
+
 ```sh
 cargo install --path .        # or: cargo build --release && cp target/release/claude-router ~/.local/bin/
 ```
-
-Requires a Rust toolchain with edition 2024 support (1.85+). Linux and macOS.
 
 Claude Code **2.1.152 or newer** on the client side: gateway model discovery arrived in 2.1.129, and 2.1.152 added the recovery that lets a session switch from a non-Anthropic backend back to Anthropic (older versions fail with a 400 on the `thinking` blocks the other model left in the history).
 
