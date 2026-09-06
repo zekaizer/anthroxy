@@ -22,4 +22,4 @@ The router needs to know its listen address, the client token, each backend's or
 - TOML has comments and nested tables, so a generated example file can document every option in place.
 - Interpolation runs on the parsed document, so schema errors (unknown or mistyped fields) are reported without line numbers; syntax errors keep them. Field names in the message identify the spot.
 - Adding a config option requires touching the schema, the validator when cross-field rules apply, and the generated example; there is no reflection-based fallback.
-- No hot reload. The model table changes only when the process restarts. Model *switching* (choosing among configured models) needs no reload.
+- Reload is explicit, by `SIGHUP` (`claude-router service reload` under systemd), and atomic: a new snapshot of models, backends, credentials, token and logging replaces the old one; requests already in flight finish on the snapshot they started with. The listen socket is not re-bound, so `server.listen` needs a restart. A file that fails to load or validate is rejected whole and the running configuration stays. Model *switching* (choosing among configured models) needs no reload.

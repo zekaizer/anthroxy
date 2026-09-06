@@ -9,9 +9,9 @@ use crate::routing::Registry;
 use crate::server::Server;
 use crate::upstream::Backends;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ServeArgs {
-    /// Listen address; overrides server.listen
+    /// Listen address; overrides server.listen. A reload cannot change it.
     #[arg(long, value_name = "ADDR")]
     pub listen: Option<SocketAddr>,
     /// Record every request and response body under this directory;
@@ -20,8 +20,8 @@ pub struct ServeArgs {
     pub body_dir: Option<PathBuf>,
 }
 
-pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<()> {
-    let path = cli.config_path();
+/// The file plus command-line overrides; used at startup and on every reload.
+fn load_effective(cli: &Cli, args: &ServeArgs) -> anyhow::Result<Config> {
     let mut config = cli.load_config()?;
     if let Some(listen) = args.listen {
         config.server.listen = listen;
@@ -29,6 +29,12 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     if let Some(dir) = &args.body_dir {
         config.logging.body_dir = Some(dir.clone());
     }
+    Ok(config)
+}
+
+pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<()> {
+    let path = cli.config_path();
+    let config = load_effective(cli, args)?;
     cli.init_tracing(Some(&config), "info")?;
 
     let server = Server::new(&config)?;
@@ -40,9 +46,52 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     print_banner(&config, &path, addr, style);
     tracing::info!(%addr, config = %path.display(), "claude-router listening");
 
-    bound.serve(shutdown_signal()).await?;
+    let reloader = tokio::spawn(reload_on_hangup(
+        bound.reload_handle(),
+        cli.clone(),
+        args.clone(),
+    ));
+    let result = bound.serve(shutdown_signal()).await;
+    reloader.abort();
+    result?;
     tracing::info!("claude-router stopped");
     Ok(())
+}
+
+/// Re-reads the configuration on SIGHUP. A file that fails to load or build
+/// leaves the running configuration untouched.
+#[cfg(unix)]
+async fn reload_on_hangup(handle: crate::server::ReloadHandle, cli: Cli, args: ServeArgs) {
+    let Ok(mut hangup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+    else {
+        return;
+    };
+    let path = cli.config_path();
+    while hangup.recv().await.is_some() {
+        tracing::info!(config = %path.display(), "SIGHUP received, reloading configuration");
+        match load_effective(&cli, &args).and_then(|c| Ok(handle.apply(&c)?)) {
+            Ok(report) => {
+                tracing::info!(
+                    backends = report.backends,
+                    models = report.models,
+                    "configuration reloaded"
+                );
+                if report.listen_changed {
+                    tracing::warn!(
+                        "server.listen changed in the file; restart the router to apply it"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, "reload failed; keeping the previous configuration");
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn reload_on_hangup(_: crate::server::ReloadHandle, _: Cli, _: ServeArgs) {
+    std::future::pending::<()>().await
 }
 
 fn print_banner(config: &Config, path: &std::path::Path, addr: SocketAddr, style: &Style) {

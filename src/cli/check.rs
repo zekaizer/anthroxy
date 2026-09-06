@@ -14,7 +14,7 @@ use crate::routing::Registry;
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
 use crate::upstream::{Backend, Backends};
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct CheckArgs {
     /// Only validate the file; do not contact backends
     #[arg(long)]

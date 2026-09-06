@@ -18,6 +18,7 @@ pub fn render_unit(exe: &Path, config: &Path) -> String {
          [Service]\n\
          Type=simple\n\
          ExecStart={exe} --config {config} serve\n\
+         ExecReload=/bin/kill -HUP $MAINPID\n\
          Restart=on-failure\n\
          RestartSec=2\n\
          # Log lines already carry timestamps and levels.\n\
@@ -216,6 +217,10 @@ mod tests {
         );
         assert!(unit.contains("ExecStart=/usr/local/bin/claude-router --config /home/u/.config/claude-router/config.toml serve\n"));
         assert!(unit.contains("Restart=on-failure"));
+        assert!(
+            unit.contains("ExecReload=/bin/kill -HUP $MAINPID\n"),
+            "{unit}"
+        );
         assert!(unit.contains("WantedBy=default.target"));
         assert!(unit.starts_with("[Unit]\n"));
     }

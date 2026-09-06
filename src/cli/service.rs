@@ -5,13 +5,13 @@ use super::{Cli, Style, display_path};
 use crate::service::status::{Check, Expected, Verdict, collect};
 use crate::service::systemd::{self, ServiceError, SystemRunner, UNIT_NAME};
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ServiceArgs {
     #[command(subcommand)]
     pub action: ServiceAction,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum ServiceAction {
     /// Write the unit, enable it now and allow it to run without a login
     Install {
@@ -19,6 +19,8 @@ pub enum ServiceAction {
         #[arg(long)]
         print: bool,
     },
+    /// Ask the running service to re-read its configuration (SIGHUP)
+    Reload,
     /// Stop and disable the unit, then delete it
     Uninstall,
     /// Check the installation: systemd, unit file and paths, enabled, active,
@@ -51,6 +53,15 @@ pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result
             println!("  systemctl --user status {UNIT_NAME}");
             println!("  journalctl --user -u {UNIT_NAME} -f");
             println!("  claude-router service uninstall");
+            Ok(())
+        }
+        ServiceAction::Reload => {
+            require_linux()?;
+            systemd::run("systemctl", &["--user", "reload", UNIT_NAME])?;
+            println!(
+                "{} reload signalled; check `journalctl --user -u {UNIT_NAME} -n 5`",
+                style.ok_mark()
+            );
             Ok(())
         }
         ServiceAction::Uninstall => {

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use claude_router::config::Config;
-use claude_router::server::Server;
+use claude_router::server::{ReloadHandle, Server};
 
 pub const TOKEN: &str = "router-test-token";
 
@@ -9,6 +9,7 @@ pub const TOKEN: &str = "router-test-token";
 pub struct TestRouter {
     pub addr: SocketAddr,
     pub http: reqwest::Client,
+    pub reload: ReloadHandle,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -22,12 +23,14 @@ impl TestRouter {
             .await
             .expect("bind");
         let addr = bound.local_addr();
+        let reload = bound.reload_handle();
         let task = tokio::spawn(async move {
             bound.serve(std::future::pending::<()>()).await.unwrap();
         });
         Self {
             addr,
             http: reqwest::Client::new(),
+            reload,
             _task: task,
         }
     }

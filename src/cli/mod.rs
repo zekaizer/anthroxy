@@ -36,7 +36,7 @@ Getting started:
 
 Then pick any configured model with /model inside Claude Code.";
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 #[command(
     name = "claude-router",
     version = crate::build_info::VERSION,
@@ -79,9 +79,10 @@ impl From<LogFormatArg> for LogFormat {
     }
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    /// Start the router
+    /// Start the router. SIGHUP (or `claude-router service reload`) re-reads
+    /// the configuration without dropping connections.
     Serve(serve::ServeArgs),
     /// Validate the configuration and probe every backend
     Check(check::CheckArgs),

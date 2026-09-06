@@ -307,12 +307,102 @@ fn serve_starts_answers_health_and_stops_on_sigterm() {
 
 #[cfg(unix)]
 unsafe fn libc_kill(pid: i32) {
+    unsafe { libc_signal(pid, 15) }
+}
+
+#[cfg(unix)]
+unsafe fn libc_signal(pid: i32, sig: i32) {
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     unsafe {
-        kill(pid, 15);
+        kill(pid, sig);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn sighup_reloads_the_configuration_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "");
+    let mut child = spawnable()
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let url = wait_for_listening(&mut child);
+
+    let before = ureq_get_auth(&format!("{url}/v1/models"), "cli-test-token");
+    assert!(
+        before.contains("\"m-one\"") && !before.contains("\"m-three\""),
+        "{before}"
+    );
+
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    text.push_str("\n[[models]]\nid = \"m-three\"\nbackend = \"local\"\n");
+    std::fs::write(&path, text).unwrap();
+    // SAFETY: plain libc call on a pid this test owns.
+    unsafe { libc_signal(child.id() as i32, 1) };
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut after = String::new();
+    while Instant::now() < deadline {
+        after = ureq_get_auth(&format!("{url}/v1/models"), "cli-test-token");
+        if after.contains("\"m-three\"") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        after.contains("\"m-three\""),
+        "model table not reloaded: {after}"
+    );
+    child.kill().unwrap();
+}
+
+/// Reads the banner until the listening line appears; returns the base URL.
+fn wait_for_listening(child: &mut std::process::Child) -> String {
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stdout.lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(200))
+            && let Some(rest) = line.trim().strip_prefix("listening on ")
+        {
+            return rest.split_whitespace().next().unwrap().to_owned();
+        }
+    }
+    panic!("serve never printed a listening line");
+}
+
+fn ureq_get_auth(url: &str, token: &str) -> String {
+    use std::io::Read;
+    let without_scheme = url.strip_prefix("http://").unwrap();
+    let (host, path) = without_scheme
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap();
+    let mut stream = std::net::TcpStream::connect(host).unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nx-api-key: {token}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
 }
 
 /// Minimal blocking GET; the test must not depend on tokio.

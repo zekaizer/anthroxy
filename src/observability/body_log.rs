@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -116,19 +115,6 @@ impl BodyLog {
             }
         }
         removed
-    }
-
-    /// Prunes now and then every `interval` until the task is aborted.
-    pub fn spawn_pruner(self: Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                let removed = self.prune(jiff::Timestamp::now());
-                if removed > 0 {
-                    tracing::info!(removed, dir = %self.root.display(), "pruned body log entries");
-                }
-                tokio::time::sleep(interval).await;
-            }
-        })
     }
 
     /// Starts a record and writes `request.json` plus a first `meta.json`.

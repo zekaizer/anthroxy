@@ -5,7 +5,7 @@ use clap::{Args, ValueEnum};
 use super::Cli;
 use crate::config::Config;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct EnvArgs {
     /// Host name or address clients use to reach the router
     /// [default: derived from server.listen; "localhost" when it binds every interface]

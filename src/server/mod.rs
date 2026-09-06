@@ -10,20 +10,16 @@ mod routes;
 mod state;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use axum::Router;
 use tokio::net::TcpListener;
 
 use crate::config::Config;
-use crate::observability::BodyLog;
-use crate::routing::Registry;
-use crate::upstream::{Backends, UpstreamClient};
 
 pub use auth::ClientToken;
 pub use error::RouterError;
 pub use request_id::RequestId;
-pub use state::AppState;
+pub use state::{AppState, Snapshot};
 
 /// How often expired body-log entries are swept.
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
@@ -42,39 +38,55 @@ pub enum ServerBuildError {
     },
 }
 
+/// Outcome of a successful [`ReloadHandle::apply`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReloadReport {
+    pub backends: usize,
+    pub models: usize,
+    /// The new file names a different `server.listen`; that needs a restart.
+    pub listen_changed: bool,
+}
+
+/// Swaps the router's configuration while it keeps serving.
+#[derive(Clone)]
+pub struct ReloadHandle {
+    state: AppState,
+}
+
+impl ReloadHandle {
+    /// Builds a new snapshot from `config` and makes it current. On error the
+    /// previous snapshot stays in place.
+    pub fn apply(&self, config: &Config) -> Result<ReloadReport, ServerBuildError> {
+        let snapshot = Snapshot::from_config(config)?;
+        let report = ReloadReport {
+            backends: snapshot.backends.len(),
+            models: snapshot.registry.len(),
+            listen_changed: config.server.listen != self.state.listen(),
+        };
+        self.state.replace(snapshot);
+        Ok(report)
+    }
+}
+
 /// A configured but not yet listening router.
 pub struct Server {
     app: Router,
-    body_log: Option<Arc<BodyLog>>,
+    state: AppState,
 }
 
 impl Server {
     pub fn new(config: &Config) -> Result<Self, ServerBuildError> {
-        let body_log = match &config.logging.body_dir {
-            Some(dir) => Some(Arc::new(
-                BodyLog::open(dir, config.logging.body_retention).map_err(|source| {
-                    ServerBuildError::BodyLog {
-                        dir: dir.clone(),
-                        source,
-                    }
-                })?,
-            )),
-            None => None,
-        };
-        let state = AppState {
-            registry: Arc::new(Registry::from_config(config)),
-            backends: Arc::new(Backends::from_config(config)?),
-            upstream: Arc::new(UpstreamClient::from_config(&config.upstream)?),
-            client_token: Arc::new(ClientToken::new(&config.server.token)),
-            max_body_bytes: config.server.max_body_bytes,
-            started_at: jiff::Timestamp::now(),
-            body_log,
-        };
-        let body_log = state.body_log.clone();
+        let state = AppState::new(Snapshot::from_config(config)?, config.server.listen);
         Ok(Self {
-            app: routes::build(state),
-            body_log,
+            app: routes::build(state.clone()),
+            state,
         })
+    }
+
+    pub fn reload_handle(&self) -> ReloadHandle {
+        ReloadHandle {
+            state: self.state.clone(),
+        }
     }
 
     pub async fn bind(self, listen: SocketAddr) -> std::io::Result<BoundServer> {
@@ -82,7 +94,7 @@ impl Server {
         Ok(BoundServer {
             listener,
             app: self.app,
-            body_log: self.body_log,
+            state: self.state,
         })
     }
 }
@@ -91,10 +103,16 @@ impl Server {
 pub struct BoundServer {
     listener: TcpListener,
     app: Router,
-    body_log: Option<Arc<BodyLog>>,
+    state: AppState,
 }
 
 impl BoundServer {
+    pub fn reload_handle(&self) -> ReloadHandle {
+        ReloadHandle {
+            state: self.state.clone(),
+        }
+    }
+
     pub fn local_addr(&self) -> SocketAddr {
         self.listener
             .local_addr()
@@ -102,24 +120,32 @@ impl BoundServer {
     }
 
     /// Serves until `shutdown` resolves, then lets in-flight requests finish.
-    /// Body-log pruning runs alongside and stops with the server.
+    /// Body-log pruning runs alongside on whichever snapshot is current and
+    /// stops with the server.
     pub async fn serve(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
-        let pruner = self
-            .body_log
-            .filter(|log| log.retention().is_some())
-            .map(|log| log.spawn_pruner(PRUNE_INTERVAL));
+        let pruner = tokio::spawn(prune_loop(self.state.clone()));
         let result = axum::serve(
             self.listener,
             self.app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown)
         .await;
-        if let Some(task) = pruner {
-            task.abort();
-        }
+        pruner.abort();
         result
+    }
+}
+
+async fn prune_loop(state: AppState) {
+    loop {
+        if let Some(log) = &state.snapshot().body_log {
+            let removed = log.prune(jiff::Timestamp::now());
+            if removed > 0 {
+                tracing::info!(removed, dir = %log.root().display(), "pruned body log entries");
+            }
+        }
+        tokio::time::sleep(PRUNE_INTERVAL).await;
     }
 }

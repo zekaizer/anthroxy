@@ -39,6 +39,8 @@ async fn handle(
     request_id: &RequestId,
     request: Request,
 ) -> Result<Response, RouterError> {
+    // One snapshot per request: a reload mid-flight does not mix configurations.
+    let state = state.snapshot();
     let started = Instant::now();
     let (parts, body) = request.into_parts();
     let body = read_body(body, state.max_body_bytes).await?;

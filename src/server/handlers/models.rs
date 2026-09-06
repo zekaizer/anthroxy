@@ -14,7 +14,8 @@ fn object(state: &AppState, route: &Route) -> ModelObject {
 }
 
 pub async fn list(State(state): State<AppState>) -> Json<ModelList> {
-    let data = state
+    let snapshot = state.snapshot();
+    let data = snapshot
         .registry
         .routes()
         .iter()
@@ -28,13 +29,14 @@ pub async fn get_one(
     request_id: RequestId,
     Path(id): Path<String>,
 ) -> Response {
-    match state.registry.resolve(&id) {
+    let snapshot = state.snapshot();
+    match snapshot.registry.resolve(&id) {
         Some(resolution) if resolution.matched != crate::routing::Match::Default => {
             Json(object(&state, resolution.route)).into_response()
         }
         _ => RouterError::UnknownModel {
             model: id,
-            known: state
+            known: snapshot
                 .registry
                 .known_names()
                 .into_iter()

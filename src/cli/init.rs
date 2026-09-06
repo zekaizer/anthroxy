@@ -3,7 +3,7 @@ use clap::Args;
 use super::{Cli, Style, display_path};
 use crate::config::example;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct InitArgs {
     /// Overwrite an existing file
     #[arg(long)]

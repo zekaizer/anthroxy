@@ -123,18 +123,19 @@ Notes:
 - Credential kinds: `none` (default), `static`, `env` (`name = "VAR"`), `command`. `header` is `bearer` (default) or `x_api_key`.
 - A `command` credential runs through `sh -c`; trimmed stdout is the token. It is re-run after `refresh`, and once more immediately if the backend answers 401/403.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
+- Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `claude-router service reload`): models, backends, credentials, token, logging and upstream settings swap atomically; in-flight requests finish on the old configuration. Changing `server.listen` still needs a restart. A file that fails to load leaves the running configuration untouched and logs the error.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `serve [--listen ADDR] [--body-dir DIR]` | Run the router. Prints a banner with the listen URL, backends and models. |
+| `serve [--listen ADDR] [--body-dir DIR]` | Run the router. Prints a banner with the listen URL, backends and models. `SIGHUP` re-reads the file without dropping connections (everything except `server.listen`). |
 | `check [--no-probe] [--timeout 10s]` | Validate the file; acquire each credential and call `GET /v1/models` on each backend; flag upstream model names the backend does not list. Exit 1 on any problem. |
 | `models` | The model table: id, backend, upstream name, picker label, aliases. |
 | `init [--force] [--stdout]` | Write (or print) a commented configuration with a fresh random token. |
 | `env [--host H] [--format sh\|powershell\|json]` | Variables for Claude Code. |
-| `service install [--print] \| uninstall \| status` | systemd user service on Linux (see below). `status` prints a ✓/✗ list: systemd reachable, unit file present and pointing at this binary and config, enabled, active, linger, `/healthz` answering. |
+| `service install [--print] \| reload \| uninstall \| status` | systemd user service on Linux (see below). `reload` sends SIGHUP through systemd. `status` prints a ✓/✗ list: systemd reachable, unit file present and pointing at this binary and config, enabled, active, linger, `/healthz` answering. |
 
 Global options: `--config PATH`, `--log-level FILTER`, `--log-format text|json`.
 
@@ -155,6 +156,7 @@ Errors the router produces are `{"type":"error","error":{"type":…,"message":�
 ```sh
 claude-router service install     # writes ~/.config/systemd/user/claude-router.service, enables it, enables linger
 claude-router service status      # ✓/✗ per check; exit 1 if anything is wrong
+claude-router service reload      # re-read the config (systemctl --user reload)
 journalctl --user -u claude-router -f
 claude-router service uninstall
 ```

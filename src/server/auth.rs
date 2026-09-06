@@ -48,7 +48,7 @@ pub async fn require_client_token(
                 .and_then(|v| v.as_bytes().strip_prefix(b"Bearer "))
         });
     match presented {
-        Some(token) if state.client_token.matches(token) => next.run(request).await,
+        Some(token) if state.snapshot().client_token.matches(token) => next.run(request).await,
         Some(_) => {
             tracing::warn!("rejected request: client token mismatch");
             RouterError::Unauthorized.into_response(&request_id)
