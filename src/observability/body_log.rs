@@ -135,7 +135,7 @@ impl BodyLog {
         let pending = write_files(
             dir.clone(),
             vec![
-                ("request.json", body.to_vec()),
+                ("request.json", body.clone()),
                 ("meta.json", to_pretty_json(&meta)),
             ],
             None,
@@ -174,8 +174,8 @@ fn entry_stamp(name: &str) -> Option<jiff::Timestamp> {
         .map(|z| z.timestamp())
 }
 
-fn to_pretty_json(value: &impl Serialize) -> Vec<u8> {
-    serde_json::to_vec_pretty(value).expect("records serialize")
+fn to_pretty_json(value: &impl Serialize) -> Bytes {
+    Bytes::from(serde_json::to_vec_pretty(value).expect("records serialize"))
 }
 
 /// Writes off the request path, after `after` when given; failures are
@@ -184,7 +184,7 @@ fn to_pretty_json(value: &impl Serialize) -> Vec<u8> {
 /// runtime: a handler, or the relay stream's poll and drop.
 fn write_files(
     dir: PathBuf,
-    files: Vec<(&'static str, Vec<u8>)>,
+    files: Vec<(&'static str, Bytes)>,
     after: Option<tokio::task::JoinHandle<()>>,
 ) -> tokio::task::JoinHandle<()> {
     let span = tracing::Span::current();
@@ -269,7 +269,10 @@ impl Recorder {
         write_files(
             self.dir.clone(),
             vec![
-                (self.response_file, std::mem::take(&mut self.response)),
+                (
+                    self.response_file,
+                    Bytes::from(std::mem::take(&mut self.response)),
+                ),
                 ("meta.json", to_pretty_json(&self.meta)),
             ],
             Some(self.pending),
