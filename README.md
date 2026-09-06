@@ -131,7 +131,7 @@ Notes:
 | `models` | The model table: id, backend, upstream name, picker label, aliases. |
 | `init [--force] [--stdout]` | Write (or print) a commented configuration with a fresh random token. |
 | `env [--host H] [--format sh\|powershell\|json]` | Variables for Claude Code. |
-| `service install [--print] \| uninstall \| status` | systemd user service on Linux (see below). |
+| `service install [--print] \| uninstall \| status` | systemd user service on Linux (see below). `status` prints a ✓/✗ list: systemd reachable, unit file present and pointing at this binary and config, enabled, active, linger, `/healthz` answering. |
 
 Global options: `--config PATH`, `--log-level FILTER`, `--log-format text|json`.
 
@@ -151,7 +151,7 @@ Errors the router produces are `{"type":"error","error":{"type":…,"message":�
 
 ```sh
 claude-router service install     # writes ~/.config/systemd/user/claude-router.service, enables it, enables linger
-systemctl --user status claude-router
+claude-router service status      # ✓/✗ per check; exit 1 if anything is wrong
 journalctl --user -u claude-router -f
 claude-router service uninstall
 ```

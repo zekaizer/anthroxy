@@ -10,7 +10,7 @@ mod retry;
 mod tests;
 
 pub use backend::{Backend, BackendBuildError, Backends};
-pub use client::{UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse};
+pub use client::{UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse, describe};
 pub use headers::{
     X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, response_headers, upstream_headers,
 };

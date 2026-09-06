@@ -1,7 +1,9 @@
 use clap::{Args, Subcommand};
 
+use super::style::table;
 use super::{Cli, Style, display_path};
-use crate::service::systemd::{self, ServiceError, UNIT_NAME};
+use crate::service::status::{Check, Expected, Verdict, collect};
+use crate::service::systemd::{self, ServiceError, SystemRunner, UNIT_NAME};
 
 #[derive(Debug, Args)]
 pub struct ServiceArgs {
@@ -19,11 +21,12 @@ pub enum ServiceAction {
     },
     /// Stop and disable the unit, then delete it
     Uninstall,
-    /// Show `systemctl --user status`
+    /// Check the installation: systemd, unit file and paths, enabled, active,
+    /// linger, health endpoint. Exit 1 when anything fails.
     Status,
 }
 
-pub fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result<()> {
+pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result<()> {
     let config = cli.config_path();
     let config = std::path::absolute(&config)?;
     match &args.action {
@@ -74,14 +77,72 @@ pub fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result<()> {
         }
         ServiceAction::Status => {
             require_linux()?;
-            match systemd::run("systemctl", &["--user", "status", UNIT_NAME]) {
-                Ok(out) => println!("{out}"),
-                Err(ServiceError::Command { detail, .. }) => println!("{detail}"),
-                Err(e) => return Err(e.into()),
+            let exe = std::env::current_exe().map_err(ServiceError::Exe)?;
+            let unit_path = systemd::unit_path().ok_or(ServiceError::NoConfigDir)?;
+            let user = std::env::var("USER").unwrap_or_else(|_| "-".to_owned());
+            let health_url = cli
+                .load_config()
+                .map(|c| format!("http://127.0.0.1:{}/healthz", c.server.listen.port()))
+                .map_err(|e| e.to_string());
+            let expected = Expected {
+                exe: &exe,
+                config: &config,
+                unit_path: &unit_path,
+                user: &user,
+                health_url,
+            };
+            let checks = collect(&expected, &SystemRunner).await;
+            print!("{}", render(&checks, style));
+            if is_wsl() {
+                println!(
+                    "{}",
+                    style.dim("WSL: the VM stops when idle unless %USERPROFILE%\\.wslconfig sets [wsl2] vmIdleTimeout=-1 (not checkable from here).")
+                );
             }
-            Ok(())
+            let failures = checks.iter().filter(|c| c.verdict == Verdict::Fail).count();
+            if failures == 0 {
+                Ok(())
+            } else {
+                anyhow::bail!("{failures} check(s) failed")
+            }
         }
     }
+}
+
+/// One line per check: mark, name, detail.
+pub fn render(checks: &[Check], style: &Style) -> String {
+    let rows: Vec<Vec<String>> = checks
+        .iter()
+        .map(|c| {
+            let mark = match c.verdict {
+                Verdict::Ok => style.ok_mark(),
+                Verdict::Fail => style.err_mark(),
+                Verdict::Skip => style.dim("-"),
+            };
+            vec![format!("  {mark}"), style.bold(c.name), c.detail.clone()]
+        })
+        .collect();
+    let mut out = table(&rows);
+    let failures = checks.iter().filter(|c| c.verdict == Verdict::Fail).count();
+    out.push('\n');
+    if failures == 0 {
+        out.push_str(&format!(
+            "{} service installed and running\n",
+            style.ok_mark()
+        ));
+    } else {
+        out.push_str(&format!(
+            "{} {failures} check(s) failed\n",
+            style.err_mark()
+        ));
+    }
+    out
+}
+
+fn is_wsl() -> bool {
+    std::fs::read_to_string("/proc/version")
+        .map(|v| v.to_ascii_lowercase().contains("microsoft"))
+        .unwrap_or(false)
 }
 
 fn require_linux() -> Result<(), ServiceError> {
@@ -89,5 +150,40 @@ fn require_linux() -> Result<(), ServiceError> {
         Ok(())
     } else {
         Err(ServiceError::Unsupported)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_marks_each_verdict_and_counts_failures() {
+        let checks = vec![
+            Check {
+                name: "systemd",
+                verdict: Verdict::Ok,
+                detail: "user manager running".into(),
+            },
+            Check {
+                name: "unit file",
+                verdict: Verdict::Fail,
+                detail: "not found".into(),
+            },
+            Check {
+                name: "unit paths",
+                verdict: Verdict::Skip,
+                detail: "no unit file".into(),
+            },
+        ];
+        let out = render(&checks, &Style::plain());
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "  ✓  systemd     user manager running");
+        assert_eq!(lines[1], "  ✗  unit file   not found");
+        assert_eq!(lines[2], "  -  unit paths  no unit file");
+        assert_eq!(lines.last().unwrap(), &"✗ 1 check(s) failed");
+
+        let ok = render(&checks[..1], &Style::plain());
+        assert!(ok.ends_with("✓ service installed and running\n"), "{ok}");
     }
 }

@@ -123,7 +123,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Models => models::run(&cli, &style),
         Command::Init(args) => init::run(&cli, args, &style),
         Command::Env(args) => env::run(&cli, args),
-        Command::Service(args) => service::run(&cli, args, &style),
+        Command::Service(args) => block_on(service::run(&cli, args, &style)),
     }
 }
 

@@ -10,7 +10,7 @@ The router runs inside WSL2 (Ubuntu) and must be reachable from Claude Code on t
 
 ## Decision
 
-- `claude-router service install` writes `~/.config/systemd/user/claude-router.service`, runs `systemctl --user daemon-reload`, `systemctl --user enable --now`, then `loginctl enable-linger`. `uninstall` reverses it; `status` shows `systemctl --user status`.
+- `claude-router service install` writes `~/.config/systemd/user/claude-router.service`, runs `systemctl --user daemon-reload`, `systemctl --user enable --now`, then `loginctl enable-linger`. `uninstall` reverses it; `status` reports one verdict per precondition (systemd reachable, unit present and matching the current binary and configuration path, enabled, active, linger, `/healthz` answering) and exits non-zero when any fails, so a broken installation is diagnosable without reading `systemctl` output.
 - The unit runs `<absolute exe> --config <absolute config> serve` with `Restart=on-failure`, so the router follows the binary and file the operator installed it with.
 - The command is Linux-only and reports a clear error elsewhere; `--print` renders the unit on any platform for inspection or manual installation.
 - Binding to `0.0.0.0` (ADR-0003 defaults) is what makes the Windows host reach the service under both NAT and mirrored networking; the service itself does not touch networking.
