@@ -18,20 +18,18 @@ pub struct Snapshot {
     pub client_token: ClientToken,
     pub max_body_bytes: usize,
     /// Set when `logging.body_dir` is configured.
-    pub body_log: Option<Arc<BodyLog>>,
+    pub body_log: Option<BodyLog>,
 }
 
 impl Snapshot {
     pub fn from_config(config: &Config) -> Result<Self, ServerBuildError> {
         let body_log = match &config.logging.body_dir {
-            Some(dir) => Some(Arc::new(
-                BodyLog::open(dir, config.logging.body_retention).map_err(|source| {
-                    ServerBuildError::BodyLog {
-                        dir: dir.clone(),
-                        source,
-                    }
-                })?,
-            )),
+            Some(dir) => Some(BodyLog::open(dir, config.logging.body_retention).map_err(
+                |source| ServerBuildError::BodyLog {
+                    dir: dir.clone(),
+                    source,
+                },
+            )?),
             None => None,
         };
         Ok(Self {
