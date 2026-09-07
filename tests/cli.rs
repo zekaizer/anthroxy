@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use support::MockUpstream;
+use support::mock_upstream::echo;
 use support::router::{TOKEN, config_with_backend};
 
 /// For tests that keep the process running and read its output live.
@@ -15,6 +17,8 @@ fn spawnable() -> std::process::Command {
     let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin!("anthroxy"));
     cmd.env_remove("ANTHROXY_CONFIG")
         .env_remove("RUST_LOG")
+        .env_remove("SSL_CERT_FILE")
+        .env_remove("SSL_CERT_DIR")
         .env("NO_COLOR", "1");
     cmd
 }
@@ -141,6 +145,37 @@ fn check_probe_reports_unreachable_backend() {
         .failure()
         .stdout(predicate::str::contains("unreachable"))
         .stdout(predicate::str::contains("1 backend problem"));
+}
+
+#[test]
+fn check_trusts_the_ca_named_by_ssl_cert_file() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (upstream, ca_pem) = runtime.block_on(MockUpstream::start_tls(echo));
+    let dir = tempfile::tempdir().unwrap();
+    let ca = dir.path().join("corp-ca.pem");
+    std::fs::write(&ca, ca_pem).unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, config_with_backend(&upstream.url(), "")).unwrap();
+    let args = [
+        "--config",
+        path.to_str().unwrap(),
+        "check",
+        "--timeout",
+        "5s",
+    ];
+
+    bin()
+        .args(args)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("UnknownIssuer"));
+
+    bin()
+        .args(args)
+        .env("SSL_CERT_FILE", &ca)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ready"));
 }
 
 #[test]

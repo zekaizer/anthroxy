@@ -5,6 +5,7 @@
 
 pub mod mock_upstream;
 pub mod router;
+pub mod tls;
 
 pub use mock_upstream::MockUpstream;
 pub use router::TestRouter;
