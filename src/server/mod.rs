@@ -28,8 +28,8 @@ const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
 pub enum ServerBuildError {
     #[error(transparent)]
     Backend(#[from] crate::upstream::BackendBuildError),
-    #[error("cannot build HTTP client: {0}")]
-    Client(#[from] reqwest::Error),
+    #[error(transparent)]
+    Client(#[from] crate::upstream::ClientBuildError),
     #[error("cannot open body log directory {dir}: {source}")]
     BodyLog {
         dir: std::path::PathBuf,

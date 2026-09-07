@@ -148,6 +148,20 @@ fn check_probe_reports_unreachable_backend() {
 }
 
 #[test]
+fn check_reports_an_unreadable_ca_certificate() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(
+        dir.path(),
+        "\n[upstream]\nca_certificate = \"/nonexistent/corp-ca.pem\"\n",
+    );
+    bin()
+        .args(["--config", path.to_str().unwrap(), "check", "--no-probe"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("/nonexistent/corp-ca.pem"));
+}
+
+#[test]
 fn check_trusts_the_ca_named_by_ssl_cert_file() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (upstream, ca_pem) = runtime.block_on(MockUpstream::start_tls(echo));

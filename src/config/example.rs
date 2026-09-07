@@ -44,6 +44,10 @@ retries = 2
 retry_backoff = "200ms"
 # Upstream status codes retried like a connection failure, e.g. [502, 503].
 retry_on_status = []
+# HTTPS backends are verified against the built-in Mozilla roots plus the OS
+# certificate store (or SSL_CERT_FILE when set). Uncomment to trust a private
+# CA from a PEM file as well, e.g. behind a corporate TLS proxy.
+# ca_certificate = "~/.config/anthroxy/corp-root.pem"
 
 # ---------------------------------------------------------------------------
 # Backends: one table per server. `url` is the origin; the request path

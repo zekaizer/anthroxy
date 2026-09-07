@@ -104,6 +104,7 @@ read_timeout = "5m"              # silence tolerated between response chunks
 retries = 2                      # after connection failures only
 retry_backoff = "200ms"
 retry_on_status = []             # e.g. [502, 503]
+# ca_certificate = "~/.config/anthroxy/corp-root.pem"   # extra trust anchor (see Notes)
 
 [backends.vllm]
 url = "http://10.0.0.5:8000"
@@ -140,7 +141,7 @@ Notes:
 - Credential kinds: `none` (default), `static`, `env` (`name = "VAR"`), `command`. `header` is `bearer` (default, `Authorization: Bearer <token>`), `x_api_key` (`x-api-key: <token>`), or any header as `{ name = "api-key" }` / `{ name = "authorization", scheme = "Token" }`; a `scheme` is written before the token with one space.
 - A `command` credential runs through `sh -c`. With `output = "text"` (default) trimmed stdout is the token; with `output = "json"` stdout is `{"token": "...", "expires_at": ...}`, where the optional `expires_at` is an RFC 3339 timestamp or unix seconds (milliseconds when ≥ 10^11). The command is re-run after `refresh`, two minutes before `expires_at`, and once more immediately if the backend answers 401/403. A token whose `expires_at` has passed is an error, not sent upstream.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
-- HTTPS backends are verified against the Mozilla roots built into the binary plus the OS certificate store (`update-ca-certificates` on Ubuntu, the keychain on macOS). `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the OS store when set; under systemd they go in the unit as `Environment=`. There is no way to skip verification.
+- HTTPS backends are verified against the Mozilla roots built into the binary plus the OS certificate store (`update-ca-certificates` on Ubuntu, the keychain on macOS). `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the OS store when set; under systemd they go in the unit as `Environment=`. `upstream.ca_certificate` adds every certificate in a PEM file on top, for a private CA that should travel with the configuration file; a file that cannot be read or holds no certificate fails `check` and `serve`. There is no way to skip verification.
 - Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, logging and upstream settings swap atomically; in-flight requests finish on the old configuration. Changing `server.listen` still needs a restart. A file that fails to load leaves the running configuration untouched and logs the error.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.
 

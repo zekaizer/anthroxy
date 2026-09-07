@@ -100,10 +100,15 @@ fn normalize(config: &mut Config) {
             backend.url.pop();
         }
     }
-    if let Some(dir) = &config.logging.body_dir
-        && let Ok(rest) = dir.strip_prefix("~")
+    expand_home(&mut config.logging.body_dir);
+    expand_home(&mut config.upstream.ca_certificate);
+}
+
+fn expand_home(path: &mut Option<PathBuf>) {
+    if let Some(p) = path
+        && let Ok(rest) = p.strip_prefix("~")
         && let Some(home) = dirs::home_dir()
     {
-        config.logging.body_dir = Some(home.join(rest));
+        *p = home.join(rest);
     }
 }
