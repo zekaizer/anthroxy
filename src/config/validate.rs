@@ -60,6 +60,17 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
         }
+        for path in &backend.drop_fields {
+            if path == "model" {
+                problems.push(format!(
+                    "backends.{name}.drop_fields: `model` is the routing key and cannot be dropped"
+                ));
+            } else if path.split('.').any(str::is_empty) {
+                problems.push(format!(
+                    "backends.{name}.drop_fields: `{path}` has an empty segment"
+                ));
+            }
+        }
         for flag in &backend.anthropic_beta {
             if flag.contains(',') || http::HeaderValue::from_str(flag).is_err() {
                 problems.push(format!(

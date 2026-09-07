@@ -92,6 +92,55 @@ async fn lists_configured_models_in_order() {
 }
 
 #[tokio::test]
+async fn drops_configured_fields_before_forwarding() {
+    let upstream = MockUpstream::start(echo).await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.vllm]
+url = "{}"
+drop_fields = ["context_management", "metadata.user_id"]
+
+[[models]]
+id = "fast"
+backend = "vllm"
+upstream_model = "mock-fast-v1"
+"#,
+        upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+    let mut body = messages_body("fast");
+    body["context_management"] = json!({"edits": [{"type": "clear_tool_uses_20250919"}]});
+
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    assert_eq!(sent.get("context_management"), None);
+    assert_eq!(
+        sent["metadata"],
+        json!({}),
+        "only the listed key is removed"
+    );
+    assert_eq!(sent["model"], "mock-fast-v1");
+    assert_eq!(sent["future_field"]["nested"], json!([1, 2, 3]));
+    let keys: Vec<&String> = sent.as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        [
+            "model",
+            "max_tokens",
+            "messages",
+            "metadata",
+            "future_field"
+        ],
+        "order kept"
+    );
+}
+
+#[tokio::test]
 async fn forwards_messages_with_rewritten_model_and_backend_credential() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

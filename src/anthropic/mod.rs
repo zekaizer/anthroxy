@@ -10,4 +10,4 @@ mod tests;
 
 pub use error::{ErrorResponse, ErrorType};
 pub use models::{ModelList, ModelObject};
-pub use request::{PeekError, RequestPeek, peek, rewrite_model};
+pub use request::{PeekError, RequestPeek, peek, rewrite};

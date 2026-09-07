@@ -109,6 +109,7 @@ retry_on_status = []             # e.g. [502, 503]
 [backends.vllm]
 url = "http://10.0.0.5:8000"
 credential = { kind = "static", value = "${VLLM_API_KEY}", header = "bearer" }
+drop_fields = ["context_management"]        # body fields this backend rejects as unknown
 
 [backends.claude]
 url = "https://api.anthropic.com"
@@ -140,6 +141,7 @@ Notes:
 - `${NAME}` in any string value is replaced with the environment variable `NAME` at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands.
 - Credential kinds: `none` (default), `static`, `env` (`name = "VAR"`), `command`. `header` is `bearer` (default, `Authorization: Bearer <token>`), `x_api_key` (`x-api-key: <token>`), or any header as `{ name = "api-key" }` / `{ name = "authorization", scheme = "Token" }`; a `scheme` is written before the token with one space.
 - A `command` credential runs through `sh -c`. With `output = "text"` (default) trimmed stdout is the token; with `output = "json"` stdout is `{"token": "...", "expires_at": ...}`, where the optional `expires_at` is an RFC 3339 timestamp or unix seconds (milliseconds when ≥ 10^11). The command is re-run after `refresh`, two minutes before `expires_at`, and once more immediately if the backend answers 401/403. A token whose `expires_at` has passed is an error, not sent upstream.
+- `drop_fields` removes request body fields before forwarding to that backend, for servers that reject parameters they do not know (vLLM and `context_management`, for example). Paths are dot-separated object keys (`metadata.user_id`); arrays cannot be reached and `model` cannot be dropped. The `anthropic-beta` header is left alone. Claude Code's own `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is the client-side alternative, but it applies to every backend in the session.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
 - HTTPS backends are verified against the Mozilla roots built into the binary plus the OS certificate store (`update-ca-certificates` on Ubuntu, the keychain on macOS). `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the OS store when set; under systemd they go in the unit as `Environment=`. `upstream.ca_certificate` adds every certificate in a PEM file on top, for a private CA that should travel with the configuration file; a file that cannot be read or holds no certificate fails `check` and `serve`. There is no way to skip verification.
 - Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, logging and upstream settings swap atomically; in-flight requests finish on the old configuration. Changing `server.listen` still needs a restart. A file that fails to load leaves the running configuration untouched and logs the error.

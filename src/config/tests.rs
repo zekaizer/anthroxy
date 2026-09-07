@@ -83,6 +83,7 @@ headers = { "x-extra" = "1" }
 [backends.vllm]
 url = "http://10.0.0.2:8000"
 credential = { kind = "static", value = "k", header = "x_api_key" }
+drop_fields = ["context_management", "metadata.user_id"]
 
 [[models]]
 id = "opus"
@@ -133,6 +134,11 @@ default_model = "qwen"
         }
         other => panic!("{other:?}"),
     }
+    assert_eq!(
+        c.backends["vllm"].drop_fields,
+        ["context_management", "metadata.user_id"]
+    );
+    assert!(c.backends["claude"].drop_fields.is_empty());
     // Trailing slash is dropped so path concatenation is unambiguous.
     assert_eq!(c.backends["claude"].url, "https://api.anthropic.com");
     assert_eq!(c.models[0].aliases, vec!["claude-opus-5", "big"]);
@@ -375,6 +381,34 @@ upstream_model = "up\nbreak"
     assert!(joined.contains("backends.line\\nbreak"), "{joined}");
     assert!(joined.contains("models[0].id"), "{joined}");
     assert!(joined.contains("models[0].upstream_model"), "{joined}");
+    assert_eq!(p.len(), 3, "{joined}");
+}
+
+#[test]
+fn validation_rejects_unusable_drop_fields() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+drop_fields = ["context_management", "metadata.user_id", "", "a..b", "model"]
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    assert!(joined.contains("backends.a.drop_fields: `` "), "{joined}");
+    assert!(
+        joined.contains("backends.a.drop_fields: `a..b` "),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("backends.a.drop_fields: `model` is the routing key"),
+        "{joined}"
+    );
     assert_eq!(p.len(), 3, "{joined}");
 }
 

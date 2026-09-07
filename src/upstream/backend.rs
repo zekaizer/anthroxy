@@ -14,6 +14,8 @@ pub struct Backend {
     pub headers: HeaderMap,
     /// Beta flags merged into `anthropic-beta`.
     pub anthropic_beta: Vec<String>,
+    /// Body paths removed before forwarding.
+    pub drop_fields: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -44,6 +46,7 @@ impl Backend {
             credential,
             headers,
             anthropic_beta: config.anthropic_beta.clone(),
+            drop_fields: config.drop_fields.clone(),
         })
     }
 }

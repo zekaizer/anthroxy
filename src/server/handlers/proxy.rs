@@ -63,10 +63,10 @@ async fn handle(
         body_bytes = body.len(),
         "routed"
     );
-    let body = if requested_model == route.upstream_model {
-        body
-    } else {
-        Bytes::from(anthropic::rewrite_model(&body, &route.upstream_model))
+    let rename = (requested_model != route.upstream_model).then_some(route.upstream_model.as_str());
+    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields) {
+        Some(rewritten) => Bytes::from(rewritten),
+        None => body,
     };
 
     let path_and_query = parts

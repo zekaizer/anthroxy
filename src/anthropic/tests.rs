@@ -68,12 +68,50 @@ fn peek_rejects_missing_model_and_non_json() {
 }
 
 #[test]
-fn rewrite_model_preserves_everything_else_in_order() {
+fn rewrite_of_model_preserves_everything_else_in_order() {
     let body = br#"{"model":"exposed","max_tokens":1024,"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"x"}],"metadata":{"user_id":"u"},"temperature":1.0,"big":12345678901234567890}"#;
-    let out = rewrite_model(body, "upstream-name");
+    let out = rewrite(body, Some("upstream-name"), &[]).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert_eq!(
         text,
         r#"{"model":"upstream-name","max_tokens":1024,"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"x"}],"metadata":{"user_id":"u"},"temperature":1.0,"big":12345678901234567890}"#
+    );
+}
+
+#[test]
+fn rewrite_drops_paths_and_keeps_order() {
+    let body = br#"{"model":"m","context_management":{"edits":[]},"metadata":{"user_id":"u","keep":1},"messages":[]}"#;
+    let drop = [
+        "context_management".to_owned(),
+        "metadata.user_id".to_owned(),
+    ];
+    let out = rewrite(body, None, &drop).expect("something was dropped");
+    assert_eq!(
+        std::str::from_utf8(&out).unwrap(),
+        r#"{"model":"m","metadata":{"keep":1},"messages":[]}"#
+    );
+
+    let out = rewrite(body, Some("up"), &drop).unwrap();
+    assert_eq!(
+        std::str::from_utf8(&out).unwrap(),
+        r#"{"model":"up","metadata":{"keep":1},"messages":[]}"#
+    );
+}
+
+#[test]
+fn rewrite_is_a_no_op_when_nothing_matches() {
+    let body = br#"{"model":"m","messages":[{"a":1}],"metadata":{"k":1}}"#;
+    let drop = [
+        "absent".to_owned(),
+        "metadata.absent".to_owned(),
+        "messages.a".to_owned(),
+        "model.x".to_owned(),
+    ];
+    assert_eq!(rewrite(body, None, &drop), None);
+    assert_eq!(rewrite(body, None, &[]), None);
+    let out = rewrite(body, Some("up"), &drop).unwrap();
+    assert_eq!(
+        std::str::from_utf8(&out).unwrap(),
+        r#"{"model":"up","messages":[{"a":1}],"metadata":{"k":1}}"#
     );
 }

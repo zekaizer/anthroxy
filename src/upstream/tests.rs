@@ -16,6 +16,7 @@ fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
+            drop_fields: Vec::new(),
         },
     )
     .unwrap()

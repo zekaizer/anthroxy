@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted
+accepted; body passthrough rule superseded by ADR-0009
 
 ## Context
 

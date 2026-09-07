@@ -70,6 +70,9 @@ credential = { kind = "none" }
 # [backends.vllm]
 # url = "http://10.0.0.5:8000"
 # credential = { kind = "static", value = "${VLLM_API_KEY}" }
+# # Request body fields this backend rejects as unknown, removed before
+# # forwarding. Dot-separated paths reach into objects (not arrays).
+# drop_fields = ["context_management", "metadata.user_id"]
 
 # A backend whose token another program keeps fresh; the command is re-run
 # every `refresh`, and once more immediately if the backend answers 401.
