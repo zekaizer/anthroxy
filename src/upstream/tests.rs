@@ -3,7 +3,7 @@ use std::time::Duration;
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
-use crate::config::{BackendConfig, CredentialConfig};
+use crate::config::{BackendConfig, CredentialConfig, UpstreamConfig};
 
 fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
     Backend::from_config(
@@ -16,6 +16,7 @@ fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
+            drop_fields: Vec::new(),
         },
     )
     .unwrap()
@@ -198,4 +199,24 @@ async fn retry_policy_retries_connection_refused_but_not_timeouts() {
     assert!(!is_connection_failure(&timeout));
     assert_eq!(policy.on_transport_error(1, &timeout), Decision::GiveUp);
     drop(listener);
+}
+
+#[test]
+fn ca_certificate_must_be_a_readable_pem_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let with = |path: &std::path::Path| UpstreamConfig {
+        ca_certificate: Some(path.to_path_buf()),
+        ..UpstreamConfig::default()
+    };
+
+    let missing = dir.path().join("missing.pem");
+    let error = http_client(&with(&missing)).expect_err("a missing file is an error");
+    assert!(error.to_string().contains("missing.pem"), "{error}");
+
+    let empty = dir.path().join("empty.pem");
+    std::fs::write(&empty, "no certificate here\n").unwrap();
+    let error = http_client(&with(&empty)).expect_err("a file without a certificate is an error");
+    assert!(error.to_string().contains("empty.pem"), "{error}");
+
+    assert!(http_client(&UpstreamConfig::default()).is_ok());
 }

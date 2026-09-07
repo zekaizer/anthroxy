@@ -72,6 +72,7 @@ read_timeout = "2m"
 retries = 1
 retry_backoff = "50ms"
 retry_on_status = [502, 503]
+ca_certificate = "/etc/ssl/corp-root.pem"
 
 [backends.claude]
 url = "https://api.anthropic.com/"
@@ -82,6 +83,7 @@ headers = { "x-extra" = "1" }
 [backends.vllm]
 url = "http://10.0.0.2:8000"
 credential = { kind = "static", value = "k", header = "x_api_key" }
+drop_fields = ["context_management", "metadata.user_id"]
 
 [[models]]
 id = "opus"
@@ -106,6 +108,10 @@ default_model = "qwen"
     );
     assert_eq!(c.upstream.read_timeout, Duration::from_secs(120));
     assert_eq!(c.upstream.retry_on_status, vec![502, 503]);
+    assert_eq!(
+        c.upstream.ca_certificate.as_deref(),
+        Some(std::path::Path::new("/etc/ssl/corp-root.pem"))
+    );
     match &c.backends["claude"].credential {
         CredentialConfig::Command {
             command,
@@ -128,6 +134,11 @@ default_model = "qwen"
         }
         other => panic!("{other:?}"),
     }
+    assert_eq!(
+        c.backends["vllm"].drop_fields,
+        ["context_management", "metadata.user_id"]
+    );
+    assert!(c.backends["claude"].drop_fields.is_empty());
     // Trailing slash is dropped so path concatenation is unambiguous.
     assert_eq!(c.backends["claude"].url, "https://api.anthropic.com");
     assert_eq!(c.models[0].aliases, vec!["claude-opus-5", "big"]);
@@ -374,6 +385,34 @@ upstream_model = "up\nbreak"
 }
 
 #[test]
+fn validation_rejects_unusable_drop_fields() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+drop_fields = ["context_management", "metadata.user_id", "", "a..b", "model"]
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    assert!(joined.contains("backends.a.drop_fields: `` "), "{joined}");
+    assert!(
+        joined.contains("backends.a.drop_fields: `a..b` "),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("backends.a.drop_fields: `model` is the routing key"),
+        "{joined}"
+    );
+    assert_eq!(p.len(), 3, "{joined}");
+}
+
+#[test]
 fn overrides_are_normalized_like_the_file() {
     let overrides = Overrides {
         listen: Some("127.0.0.1:1".parse().unwrap()),
@@ -390,6 +429,16 @@ fn overrides_are_normalized_like_the_file() {
         .with_overrides(&Overrides::default())
         .unwrap();
     assert_eq!(untouched.logging.body_dir, None);
+}
+
+#[test]
+fn ca_certificate_tilde_expands_to_home() {
+    let text = MINIMAL.to_owned() + "\n[upstream]\nca_certificate = \"~/corp-root.pem\"\n";
+    let c = parse(&text).unwrap();
+    assert_eq!(
+        c.upstream.ca_certificate.unwrap(),
+        dirs::home_dir().unwrap().join("corp-root.pem")
+    );
 }
 
 #[test]

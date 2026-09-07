@@ -153,6 +153,7 @@ mod tests {
                 credential: CredentialConfig::None,
                 headers: Default::default(),
                 anthropic_beta: Vec::new(),
+                drop_fields: Vec::new(),
             },
         )
         .unwrap()

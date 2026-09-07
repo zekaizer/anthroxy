@@ -98,6 +98,9 @@ pub struct UpstreamConfig {
     pub retry_backoff: Duration,
     /// Upstream status codes that are retried like a connection failure.
     pub retry_on_status: Vec<u16>,
+    /// PEM file of CA certificates trusted for HTTPS backends, on top of the
+    /// bundled Mozilla roots and the OS store.
+    pub ca_certificate: Option<PathBuf>,
 }
 
 impl Default for UpstreamConfig {
@@ -108,6 +111,7 @@ impl Default for UpstreamConfig {
             retries: 2,
             retry_backoff: Duration::from_millis(200),
             retry_on_status: Vec::new(),
+            ca_certificate: None,
         }
     }
 }
@@ -126,6 +130,11 @@ pub struct BackendConfig {
     /// Beta flags merged into the client's `anthropic-beta` header.
     #[serde(default)]
     pub anthropic_beta: Vec<String>,
+    /// Request body fields removed before forwarding, as dot-separated paths
+    /// (`context_management`, `metadata.user_id`), for a backend that rejects
+    /// parameters it does not know.
+    #[serde(default)]
+    pub drop_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted
+accepted; egress TLS trust store superseded by ADR-0008
 
 ## Context
 

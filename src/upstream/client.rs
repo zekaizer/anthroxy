@@ -1,5 +1,6 @@
 //! Sends one client request to a backend, with credential refresh and retry.
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -71,19 +72,67 @@ pub fn describe(error: &reqwest::Error) -> String {
     text
 }
 
-/// How every backend is reached: the configured timeouts and no redirects,
-/// since a redirect would resend the body and the credential elsewhere.
-pub fn http_client(config: &UpstreamConfig) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
+#[derive(Debug, thiserror::Error)]
+pub enum ClientBuildError {
+    #[error("cannot read upstream.ca_certificate {}: {source}", path.display())]
+    ReadCaCertificate {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("upstream.ca_certificate {}: {source}", path.display())]
+    ParseCaCertificate {
+        path: PathBuf,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("upstream.ca_certificate {} holds no certificate", path.display())]
+    NoCaCertificate { path: PathBuf },
+    #[error("cannot build HTTP client: {0}")]
+    Http(#[from] reqwest::Error),
+}
+
+/// How every backend is reached: the configured timeouts, the extra trust
+/// anchors from `ca_certificate`, and no redirects, since a redirect would
+/// resend the body and the credential elsewhere.
+pub fn http_client(config: &UpstreamConfig) -> Result<reqwest::ClientBuilder, ClientBuildError> {
+    let mut builder = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
         .read_timeout(config.read_timeout)
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(path) = &config.ca_certificate {
+        for certificate in ca_certificates(path)? {
+            builder = builder.add_root_certificate(certificate);
+        }
+    }
+    Ok(builder)
+}
+
+/// Every certificate in the PEM bundle at `path`; an empty bundle is an
+/// error because it silently trusts nothing.
+fn ca_certificates(path: &Path) -> Result<Vec<reqwest::Certificate>, ClientBuildError> {
+    let pem = std::fs::read(path).map_err(|source| ClientBuildError::ReadCaCertificate {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|source| {
+        ClientBuildError::ParseCaCertificate {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    if certificates.is_empty() {
+        return Err(ClientBuildError::NoCaCertificate {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(certificates)
 }
 
 impl UpstreamClient {
-    pub fn from_config(config: &UpstreamConfig) -> reqwest::Result<Self> {
+    pub fn from_config(config: &UpstreamConfig) -> Result<Self, ClientBuildError> {
         Ok(Self::new(
-            http_client(config).build()?,
+            http_client(config)?.build()?,
             RetryPolicy::from_config(config),
         ))
     }

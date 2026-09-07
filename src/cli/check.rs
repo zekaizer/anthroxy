@@ -56,6 +56,14 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
     };
 
+    let client = match http_client(&config.upstream) {
+        Ok(client) => client,
+        Err(error) => {
+            println!("{} {error}", style.err_mark());
+            anyhow::bail!("configuration is not usable");
+        }
+    };
+
     let mut problems = 0usize;
     let mut listed: std::collections::HashMap<String, Vec<String>> = Default::default();
     println!();
@@ -72,12 +80,8 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
     } else {
-        let client = UpstreamClient::new(
-            http_client(&config.upstream)
-                .timeout(args.timeout)
-                .build()?,
-            RetryPolicy::never(),
-        );
+        let client =
+            UpstreamClient::new(client.timeout(args.timeout).build()?, RetryPolicy::never());
         let results = probe_all(&client, registry.backends().map(Arc::as_ref)).await;
         for (backend, result) in registry.backends().zip(&results) {
             let (ok, ids) = report_backend(backend, result, style);

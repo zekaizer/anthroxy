@@ -11,7 +11,8 @@ mod tests;
 
 pub use backend::{Backend, BackendBuildError};
 pub use client::{
-    UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse, describe, http_client,
+    ClientBuildError, UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse, describe,
+    http_client,
 };
 pub use headers::{
     X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, header_value, response_headers,

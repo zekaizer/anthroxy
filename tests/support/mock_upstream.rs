@@ -8,6 +8,8 @@ use axum::http::{HeaderMap, Method, Uri};
 use axum::response::Response;
 use axum::routing::any;
 
+use super::tls::TestCa;
+
 /// One request as the backend saw it.
 #[derive(Debug, Clone)]
 pub struct Received {
@@ -38,18 +40,14 @@ struct MockState {
 /// An Anthropic-compatible backend whose behaviour is a closure.
 pub struct MockUpstream {
     pub addr: SocketAddr,
+    url: String,
     received: Arc<Mutex<Vec<Received>>>,
     _task: tokio::task::JoinHandle<()>,
 }
 
 impl MockUpstream {
     pub async fn start(handler: impl Fn(&Received) -> Response + Send + Sync + 'static) -> Self {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let state = MockState {
-            handler: Arc::new(handler),
-            received: received.clone(),
-        };
-        let app = Router::new().fallback(any(record)).with_state(state);
+        let (app, received) = app(handler);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
@@ -57,13 +55,36 @@ impl MockUpstream {
         });
         Self {
             addr,
+            url: format!("http://{addr}"),
             received,
             _task: task,
         }
     }
 
+    /// HTTPS with a certificate signed by a CA generated for this backend;
+    /// returns that CA as PEM.
+    pub async fn start_tls(
+        handler: impl Fn(&Received) -> Response + Send + Sync + 'static,
+    ) -> (Self, String) {
+        let (app, received) = app(handler);
+        let ca = TestCa::generate();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let listener = ca.listener(listener);
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let upstream = Self {
+            addr,
+            url: format!("https://{addr}"),
+            received,
+            _task: task,
+        };
+        (upstream, ca.pem)
+    }
+
     pub fn url(&self) -> String {
-        format!("http://{}", self.addr)
+        self.url.clone()
     }
 
     pub fn received(&self) -> Vec<Received> {
@@ -75,6 +96,20 @@ impl MockUpstream {
             .pop()
             .expect("upstream received at least one request")
     }
+}
+
+fn app(
+    handler: impl Fn(&Received) -> Response + Send + Sync + 'static,
+) -> (Router, Arc<Mutex<Vec<Received>>>) {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let state = MockState {
+        handler: Arc::new(handler),
+        received: received.clone(),
+    };
+    (
+        Router::new().fallback(any(record)).with_state(state),
+        received,
+    )
 }
 
 async fn record(
