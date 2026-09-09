@@ -14,9 +14,9 @@ use crate::anthropic;
 use crate::observability::body_log::headers_for_record;
 use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
-use crate::server::error::short;
 use crate::server::relay::{Relay, RelayOutcome};
 use crate::server::{RequestId, RouterError, Snapshot};
+use crate::text::short;
 use crate::upstream::{
     UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
     header_value, response_headers, upstream_headers,

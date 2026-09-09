@@ -6,6 +6,7 @@ use http::StatusCode;
 use super::RequestId;
 use crate::anthropic::{ErrorResponse, ErrorType, PeekError};
 use crate::routing::Registry;
+use crate::text::{cut, short};
 use crate::upstream::UpstreamError;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,22 +25,6 @@ pub enum RouterError {
     NoRoute { method: String, path: String },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
-}
-
-/// A string the client chose — a model name, a request path, a method — as a
-/// message or a log line may carry it.
-pub(crate) fn short(name: &str) -> String {
-    cut(name, 64)
-}
-
-/// `text` escaped, so a log line stays one line, and cut to `max` characters,
-/// so what the client sent cannot be echoed back at its own length.
-fn cut(text: &str, max: usize) -> String {
-    let escaped: Vec<char> = text.escape_debug().take(max + 1).collect();
-    match escaped.len() > max {
-        true => escaped[..max].iter().collect::<String>() + "…",
-        false => escaped.iter().collect(),
-    }
 }
 
 impl RouterError {

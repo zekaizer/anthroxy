@@ -11,7 +11,7 @@ use http::request::Parts;
 use tracing::Instrument;
 
 use super::AppState;
-use super::error::short;
+use crate::text::short;
 
 pub static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
