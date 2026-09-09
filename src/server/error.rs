@@ -12,7 +12,7 @@ use crate::upstream::UpstreamError;
 pub enum RouterError {
     #[error("missing or invalid router token; send it as `x-api-key` or `Authorization: Bearer`")]
     Unauthorized,
-    #[error("{0}")]
+    #[error("{}", cut(&.0.to_string(), 200))]
     BadRequest(#[from] PeekError),
     #[error("request body exceeds the router limit of {limit} bytes")]
     BodyTooLarge { limit: usize },
@@ -27,13 +27,17 @@ pub enum RouterError {
 }
 
 /// A string the client chose — a model name, a request path, a method — as a
-/// message or a log line may carry it: escaped, so a log line stays one line,
-/// and cut, so what the client sent cannot be echoed back at its own length.
+/// message or a log line may carry it.
 pub(crate) fn short(name: &str) -> String {
-    const MAX: usize = 64;
-    let escaped: Vec<char> = name.escape_debug().take(MAX + 1).collect();
-    match escaped.len() > MAX {
-        true => escaped[..MAX].iter().collect::<String>() + "…",
+    cut(name, 64)
+}
+
+/// `text` escaped, so a log line stays one line, and cut to `max` characters,
+/// so what the client sent cannot be echoed back at its own length.
+fn cut(text: &str, max: usize) -> String {
+    let escaped: Vec<char> = text.escape_debug().take(max + 1).collect();
+    match escaped.len() > max {
+        true => escaped[..max].iter().collect::<String>() + "…",
         false => escaped.iter().collect(),
     }
 }
@@ -110,6 +114,17 @@ mod tests {
             known: vec!["m".to_owned()],
         };
         assert!(error.to_string().len() < 200, "{}", error.to_string().len());
+    }
+
+    #[test]
+    fn a_body_that_will_not_parse_does_not_reach_the_message_in_full() {
+        let quoted = format!("\"{}\"", "x".repeat(5_000));
+        let error = RouterError::BadRequest(PeekError::NotJson(
+            serde_json::from_str::<bool>(&quoted).unwrap_err(),
+        ));
+        let text = error.to_string();
+        assert!(text.len() < 300, "{} chars", text.len());
+        assert!(text.contains("invalid type: string"), "{text}");
     }
 
     #[test]

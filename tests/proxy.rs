@@ -386,6 +386,28 @@ async fn malformed_body_is_400() {
     assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
+/// The reason a body did not parse quotes the value that broke it, and that
+/// value is as large as `server.max_body_bytes` allows.
+#[tokio::test]
+async fn a_body_that_will_not_parse_is_not_quoted_back_in_full() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router
+        .post(
+            "/v1/messages",
+            &json!({"model": "fast", "stream": "x".repeat(5000)}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.len() < 300, "{} chars", message.len());
+    assert!(message.contains("invalid type: string"), "{message}");
+}
+
 #[tokio::test]
 async fn oversized_body_is_413() {
     let upstream = MockUpstream::start(echo).await;
