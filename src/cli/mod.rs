@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
-use crate::config::{self, Config, LogFormat};
+use crate::config::{self, Config, ConfigError, LogFormat};
 
 pub use style::Style;
 
@@ -90,9 +90,14 @@ impl Cli {
         self.config.clone().unwrap_or_else(config::default_path)
     }
 
+    /// The file is named once: a problem with its contents does not say which
+    /// file it was, a problem reading it already does.
     fn load_config(&self) -> anyhow::Result<Config> {
         let path = self.config_path();
-        Config::load(&path).map_err(|e| anyhow::anyhow!("{e}\n  (file: {})", path.display()))
+        Config::load(&path).map_err(|error| match &error {
+            ConfigError::Read { .. } => anyhow::anyhow!("{error}"),
+            _ => anyhow::anyhow!("{error}\n  (file: {})", path.display()),
+        })
     }
 
     /// Installs the tracing subscriber. `fallback` applies when neither the

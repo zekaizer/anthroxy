@@ -201,12 +201,18 @@ fn check_trusts_the_ca_named_by_ssl_cert_file() {
 
 #[test]
 fn missing_config_is_a_clear_error() {
-    bin()
+    let out = bin()
         .args(["--config", "/nonexistent/anthroxy.toml", "models"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("cannot read"))
-        .stderr(predicate::str::contains("/nonexistent/anthroxy.toml"));
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot read"), "{stderr}");
+    assert_eq!(
+        stderr.matches("/nonexistent/anthroxy.toml").count(),
+        1,
+        "the file is named twice: {stderr}"
+    );
 }
 
 /// Backends covering each credential kind, one of them broken.
@@ -369,6 +375,32 @@ fn service_install_print_renders_a_unit_anywhere() {
         .stdout(predicate::str::starts_with("[Unit]"))
         .stdout(predicate::str::contains("serve"))
         .stdout(predicate::str::contains(path.to_str().unwrap()));
+}
+
+#[test]
+fn a_failure_reports_its_cause_once() {
+    // Hold the port so `serve` cannot bind it.
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = taken.local_addr().unwrap().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "");
+    let out = bin()
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            &addr,
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot listen on"), "{stderr}");
+    assert_eq!(
+        stderr.matches("in use").count(),
+        1,
+        "the cause is repeated: {stderr}"
+    );
 }
 
 #[test]
