@@ -43,19 +43,35 @@ struct JsonOutput {
     expires_at: Option<ExpiresAt>,
 }
 
+/// 9999-12-31T23:59:59Z. A timestamp past it cannot be printed as RFC 3339,
+/// so it is refused rather than carried into a log line.
+const MAX_EPOCH_SECONDS: f64 = 253_402_300_799.0;
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ExpiresAt {
-    Unix(u64),
+    /// A number, since a token store may write the epoch with a fraction.
+    Unix(f64),
     Rfc3339(String),
 }
 
 impl ExpiresAt {
     fn resolve(self) -> Result<SystemTime, CredentialError> {
         match self {
-            // 10^11 seconds is year 5138; anything larger can only be milliseconds.
-            ExpiresAt::Unix(n) if n >= 100_000_000_000 => Ok(UNIX_EPOCH + Duration::from_millis(n)),
-            ExpiresAt::Unix(n) => Ok(UNIX_EPOCH + Duration::from_secs(n)),
+            ExpiresAt::Unix(n) => {
+                // 10^11 seconds is year 5138; anything larger can only be milliseconds.
+                let seconds = if n >= 100_000_000_000.0 {
+                    n / 1000.0
+                } else {
+                    n
+                };
+                if !(0.0..=MAX_EPOCH_SECONDS).contains(&seconds) {
+                    return Err(CredentialError::Json(format!(
+                        "expires_at: {n} is not a usable unix timestamp"
+                    )));
+                }
+                Ok(UNIX_EPOCH + Duration::from_secs_f64(seconds))
+            }
             ExpiresAt::Rfc3339(text) => humantime::parse_rfc3339(&text)
                 .map_err(|e| CredentialError::Json(format!("expires_at: {e}"))),
         }

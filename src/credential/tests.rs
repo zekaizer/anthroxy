@@ -294,6 +294,36 @@ async fn json_output_that_already_expired_is_an_error() {
 }
 
 #[tokio::test]
+async fn json_expiry_accepts_the_epoch_shapes_a_token_store_writes() {
+    // Claude Code's own credential file carries fractional milliseconds.
+    let expires_at = SystemTime::now() + Duration::from_secs(3600);
+    let millis = expires_at.duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let source = json_command(
+        &format!(r#"echo '{{"token": "tok-abcdefgh", "expires_at": {millis}.98}}'"#),
+        Duration::from_secs(3600),
+    );
+    assert_eq!(
+        source.credential().await.unwrap(),
+        Some(bearer("tok-abcdefgh"))
+    );
+}
+
+#[tokio::test]
+async fn json_expiry_out_of_range_is_an_error_not_a_panic() {
+    for expires_at in ["18446744073709551615", "-1", "1e400"] {
+        let source = json_command(
+            &format!(r#"echo '{{"token": "tok", "expires_at": {expires_at}}}'"#),
+            Duration::ZERO,
+        );
+        let err = source.credential().await.err().unwrap();
+        assert!(
+            matches!(err, CredentialError::Json(_)),
+            "{expires_at}: {err}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn json_output_must_be_a_token_object() {
     for cmd in [
         "echo not-json",
