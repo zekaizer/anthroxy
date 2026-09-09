@@ -59,6 +59,20 @@ async fn rejects_missing_or_wrong_client_token() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200, "bearer form accepted");
+
+    // Claude Code sends `x-api-key` for ANTHROPIC_API_KEY and the bearer for
+    // ANTHROPIC_AUTH_TOKEN, so a shell with both variables set presents both
+    // headers; one of them carrying the router token is enough.
+    let res = router
+        .http
+        .get(router.url("/v1/models"))
+        .header("x-api-key", "sk-ant-a-key-for-somewhere-else")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "either header may carry the token");
+
     assert!(
         upstream.received().is_empty(),
         "auth failures never reach a backend"
