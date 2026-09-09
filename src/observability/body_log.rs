@@ -77,7 +77,7 @@ pub struct Recorder {
 impl BodyLog {
     /// `retention` of zero disables pruning.
     pub fn open(root: &Path, retention: Duration) -> std::io::Result<Self> {
-        std::fs::create_dir_all(root)?;
+        create_dir_private(root)?;
         Ok(Self {
             root: root.to_path_buf(),
             retention: (!retention.is_zero()).then_some(retention),
@@ -190,7 +190,7 @@ fn write_files(
     let span = tracing::Span::current();
     let write = move || {
         let _guard = span.enter();
-        if let Err(error) = std::fs::create_dir_all(&dir) {
+        if let Err(error) = create_dir_private(&dir) {
             tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
             return;
         }
@@ -198,7 +198,7 @@ fn write_files(
             let path = dir.join(name);
             let temp = dir.join(format!("{name}.tmp"));
             if let Err(error) =
-                std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, &path))
+                write_private(&temp, &bytes).and_then(|()| std::fs::rename(&temp, &path))
             {
                 tracing::error!(path = %path.display(), %error, "cannot write body log file");
             }
@@ -210,6 +210,46 @@ fn write_files(
         }
         let _ = tokio::task::spawn_blocking(write).await;
     })
+}
+
+/// A recorded exchange is the conversation itself, so what the router creates
+/// belongs to the user running it whatever the umask says. A `body_dir` that
+/// already exists keeps the mode it has — the operator owns that one — and the
+/// entries inside it are private either way.
+#[cfg(unix)]
+fn create_dir_private(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+}
+
+#[cfg(not(unix))]
+fn create_dir_private(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+/// Writes owner-only. The mode is in place before the body is, so the file is
+/// never briefly world-readable.
+#[cfg(unix)]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?
+        .write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
 }
 
 /// File name for the response body, by content type.

@@ -299,3 +299,33 @@ async fn one_directory_per_request() {
     let entries = wait_for_entries(dir.path(), 3).await;
     assert_eq!(entries.len(), 3);
 }
+
+/// The recording is the conversation itself, so it must not be readable by
+/// other users of the machine — `logging.body_dir` is often a shared path.
+#[cfg(unix)]
+#[tokio::test]
+async fn recordings_are_private_to_the_user_running_the_router() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("bodies");
+    let extra = format!("[logging]\nbody_dir = \"{}\"\n", root.display());
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+
+    let res = router
+        .post("/v1/messages", &body("fast", false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let _ = res.bytes().await.unwrap();
+
+    let entries = wait_for_entries(&root, 1).await;
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&root), 0o700, "body log root");
+    assert_eq!(mode(&entries[0]), 0o700, "entry directory");
+    for name in ["request.json", "response.json", "meta.json"] {
+        assert_eq!(mode(&entries[0].join(name)), 0o600, "{name}");
+    }
+}
