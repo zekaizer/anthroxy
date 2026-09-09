@@ -2,6 +2,7 @@
 
 pub mod status;
 pub mod systemd;
+pub mod transient;
 
 #[cfg(test)]
 mod tests;

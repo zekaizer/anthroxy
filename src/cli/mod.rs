@@ -2,6 +2,7 @@
 //! declares the grammar and dispatches.
 
 mod check;
+mod credential;
 mod env;
 mod init;
 mod models;
@@ -71,6 +72,8 @@ pub enum Command {
     Serve(serve::ServeArgs),
     /// Validate the configuration and probe every backend
     Check(check::CheckArgs),
+    /// Run each backend's credential command and report what it produced
+    Credential(credential::CredentialArgs),
     /// Show the models Claude Code will see and where each one goes
     Models,
     /// Write a commented example configuration with a fresh token
@@ -116,6 +119,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Serve(args) => block_on(serve::run(&cli, args, &style)),
         Command::Check(args) => block_on(check::run(&cli, args, &style)),
+        Command::Credential(args) => block_on(credential::run(&cli, args, &style)),
         Command::Models => models::run(&cli, &style),
         Command::Init(args) => init::run(&cli, args, &style),
         Command::Env(args) => env::run(&cli, args),

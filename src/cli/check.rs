@@ -179,6 +179,15 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
         style.dim(&backend.url)
     );
     println!("       {credential_line}");
+    if probe.credential.is_err() {
+        println!(
+            "       {}",
+            style.dim(&format!(
+                "`anthroxy credential {}` runs the command and shows its output",
+                backend.name
+            ))
+        );
+    }
     println!("       {models_line}");
     (ok, ids)
 }
