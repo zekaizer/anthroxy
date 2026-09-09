@@ -17,6 +17,18 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     if config.models.is_empty() {
         problems.push("at least one [[models]] entry is required".to_owned());
     }
+    // `0s` turns a limit off elsewhere in the file (`logging.body_retention`),
+    // so it is worth saying that here it expires instead of lifting.
+    for (field, value) in [
+        ("upstream.connect_timeout", config.upstream.connect_timeout),
+        ("upstream.read_timeout", config.upstream.read_timeout),
+    ] {
+        if value.is_zero() {
+            problems.push(format!(
+                "{field}: 0 is not `no limit` here; it expires before the backend can answer"
+            ));
+        }
+    }
     for status in &config.upstream.retry_on_status {
         if !(100..=599).contains(status) {
             problems.push(format!(
@@ -51,6 +63,13 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
             _ => {}
+        }
+        if let CredentialConfig::Command { timeout, .. } = &backend.credential
+            && timeout.is_zero()
+        {
+            problems.push(format!(
+                "backends.{name}.credential.timeout: 0 is not `no limit` here; it kills the command before it can print"
+            ));
         }
         for (header, value) in &backend.headers {
             if http::HeaderName::from_bytes(header.as_bytes()).is_err() {

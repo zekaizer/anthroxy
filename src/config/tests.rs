@@ -539,3 +539,40 @@ fn a_configuration_open_to_other_accounts_is_reported_with_its_mode() {
         "a file that is not there is a problem the loader reports"
     );
 }
+
+#[test]
+fn a_zero_timeout_is_rejected_where_zero_is_not_no_limit() {
+    let text = r#"
+[server]
+token = "secret"
+
+[upstream]
+connect_timeout = "0s"
+read_timeout = "0s"
+
+[backends.local]
+url = "http://127.0.0.1:1234"
+credential = { kind = "command", command = "cat token", timeout = "0s" }
+
+[[models]]
+id = "gemma"
+backend = "local"
+"#;
+    let problems = problems(text);
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    for field in [
+        "upstream.connect_timeout",
+        "upstream.read_timeout",
+        "backends.local.credential.timeout",
+    ] {
+        assert!(problems.iter().any(|p| p.contains(field)), "{problems:?}");
+    }
+
+    // `refresh` of zero has a meaning: run the command for every request.
+    let text = MINIMAL.to_owned()
+        + "\n[backends.local.credential]\nkind = \"command\"\ncommand = \"cat token\"\nrefresh = \"0s\"\n";
+    assert!(matches!(
+        parse(&text).unwrap().backends["local"].credential,
+        CredentialConfig::Command { refresh, .. } if refresh.is_zero()
+    ));
+}
