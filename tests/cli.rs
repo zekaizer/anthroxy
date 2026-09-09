@@ -432,6 +432,44 @@ fn a_failure_reports_its_cause_once() {
     );
 }
 
+/// `RUST_LOG=` exported empty is not a filter; the file still decides.
+#[test]
+fn an_empty_rust_log_does_not_silence_the_router() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "");
+    let mut child = spawnable()
+        .env("RUST_LOG", "")
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut logged = false;
+    while !logged && Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => logged = line.contains("anthroxy listening"),
+            Err(_) => continue,
+        }
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(logged, "the router logged nothing at the file's `info`");
+}
+
 /// `http_proxy` in the environment would send a backend the configuration
 /// named by URL — and the credential for it — to a host it never named.
 #[test]
