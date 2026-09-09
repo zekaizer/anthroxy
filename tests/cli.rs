@@ -96,6 +96,13 @@ fn init_writes_a_loadable_config_and_refuses_to_overwrite() {
         .args(["--config", path.to_str().unwrap(), "init", "--force"])
         .assert()
         .success();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "the file holds the client token");
+    }
 }
 
 #[test]

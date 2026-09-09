@@ -45,12 +45,24 @@ pub fn run(cli: &Cli, args: &InitArgs, style: &Style) -> anyhow::Result<()> {
 }
 
 /// The file holds the client token: owner read/write only where supported.
+/// The mode is in place before the token is written, and is tightened on a
+/// file `--force` overwrites.
+#[cfg(unix)]
 fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    std::fs::write(path, text)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(text.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    std::fs::write(path, text)
 }
