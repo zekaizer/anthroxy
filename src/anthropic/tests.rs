@@ -68,6 +68,23 @@ fn peek_rejects_missing_model_and_non_json() {
 }
 
 #[test]
+fn peek_rejects_a_body_that_is_not_a_json_object() {
+    // serde_json also reads a struct from an array; `rewrite` cannot.
+    for body in [
+        br#"["m1", true]"#.as_slice(),
+        br#"[]"#.as_slice(),
+        br#""m1""#.as_slice(),
+        br#"42"#.as_slice(),
+        br#"null"#.as_slice(),
+    ] {
+        let err = peek(body).err().unwrap_or_else(|| {
+            panic!("accepted {}", String::from_utf8_lossy(body));
+        });
+        assert!(matches!(err, PeekError::NotJson(_)), "{err}");
+    }
+}
+
+#[test]
 fn rewrite_of_model_preserves_everything_else_in_order() {
     let body = br#"{"model":"exposed","max_tokens":1024,"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"x"}],"metadata":{"user_id":"u"},"temperature":1.0,"big":12345678901234567890}"#;
     let out = rewrite(body, Some("upstream-name"), &[]).unwrap();

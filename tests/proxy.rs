@@ -317,6 +317,17 @@ async fn malformed_body_is_400() {
     assert_eq!(res.status(), 400);
     let body: Value = res.json().await.unwrap();
     assert!(body["error"]["message"].as_str().unwrap().contains("model"));
+
+    // A JSON array also deserializes into the peek struct; the rewrite that
+    // follows only handles an object.
+    let res = router
+        .post("/v1/messages", &json!(["fast", true]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
 #[tokio::test]

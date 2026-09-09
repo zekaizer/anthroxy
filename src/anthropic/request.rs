@@ -1,14 +1,50 @@
 //! Minimal inspection of a request body. Only `model` and `stream` are read;
 //! the body is otherwise opaque except for the rewrites in [`rewrite`].
 
-use serde::Deserialize;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+use serde::Deserialize;
+use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RequestPeek {
-    #[serde(default)]
     pub model: Option<String>,
-    #[serde(default)]
     pub stream: bool,
+}
+
+/// Only an object: `rewrite` edits the body as one, and a derived
+/// `Deserialize` would also accept a JSON array, whose fields it reads
+/// positionally.
+impl<'de> Deserialize<'de> for RequestPeek {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(PeekVisitor)
+    }
+}
+
+struct PeekVisitor;
+
+impl<'de> Visitor<'de> for PeekVisitor {
+    type Value = RequestPeek;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON object")
+    }
+
+    /// A repeated key takes its last value, as every JSON parser downstream
+    /// does, so the router routes on what the backend will read.
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<RequestPeek, A::Error> {
+        let mut peek = RequestPeek::default();
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "model" => peek.model = map.next_value()?,
+                "stream" => peek.stream = map.next_value()?,
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(peek)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
