@@ -133,12 +133,21 @@ fn header_safe(text: &str) -> bool {
     http::HeaderValue::from_str(text).is_ok()
 }
 
+/// The request path is appended to this URL unchanged, so it may carry a path
+/// prefix but nothing that has to stay last.
 fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
     match url.parse::<http::Uri>() {
-        Ok(uri) if matches!(uri.scheme_str(), Some("http" | "https")) && uri.host().is_some() => {}
-        Ok(_) => problems.push(format!(
-            "{field}: `{url}` must be an http:// or https:// origin"
-        )),
+        Ok(uri) if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.host().is_none() => {
+            problems.push(format!(
+                "{field}: `{url}` must be an http:// or https:// origin"
+            ));
+        }
+        Ok(uri) if uri.query().is_some() || url.contains('#') => {
+            problems.push(format!(
+                "{field}: `{url}` must carry no query or fragment; the request path is appended to it"
+            ));
+        }
+        Ok(_) => {}
         Err(e) => problems.push(format!("{field}: `{url}` is not a valid URL ({e})")),
     }
 }

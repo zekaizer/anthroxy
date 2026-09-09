@@ -265,6 +265,24 @@ fn env_expansion_leaves_bare_dollar_alone() {
 }
 
 #[test]
+fn backend_url_carries_no_query_or_fragment() {
+    // The request path is appended verbatim, so anything after it silently
+    // lands in the wrong place.
+    for url in ["http://h/v1?beta=1", "http://h/v1#frag", "http://h?x=1"] {
+        let text = MINIMAL.replace("http://127.0.0.1:1234", url);
+        let p = problems(&text);
+        assert!(
+            p.iter().any(|m| m.contains("backends.local.url")),
+            "{url} accepted: {p:?}"
+        );
+    }
+
+    let text = MINIMAL.replace("http://127.0.0.1:1234", "http://h/openai/v1");
+    let c = parse(&text).expect("a path prefix is what the request path extends");
+    assert_eq!(c.backends["local"].url, "http://h/openai/v1");
+}
+
+#[test]
 fn validation_collects_every_problem() {
     let text = r#"
 [server]
