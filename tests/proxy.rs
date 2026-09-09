@@ -251,6 +251,28 @@ async fn unknown_model_is_404_listing_known_models() {
 }
 
 #[tokio::test]
+async fn a_model_id_that_is_not_utf8_is_404_in_the_router_shape() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router.get("/v1/models/%FF").send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    assert_eq!(res.headers()["content-type"], "application/json");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "not_found_error");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("%FF"),
+        "{body}"
+    );
+    assert!(
+        body["request_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("rtr_")),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn unknown_model_uses_default_when_configured() {
     let upstream = MockUpstream::start(echo).await;
     let extra = "[routing]\ndefault_model = \"fast\"\n";
