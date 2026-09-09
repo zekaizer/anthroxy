@@ -154,6 +154,8 @@ impl UpstreamClient {
         let url = format!("{}{}", backend.url, request.path_and_query);
         let started = Instant::now();
         let mut attempt: u32 = 0;
+        // Of the retry budget; the credential re-send below is not one of them.
+        let mut failures: u32 = 0;
         let mut credential_refreshed = false;
         loop {
             attempt += 1;
@@ -188,8 +190,9 @@ impl UpstreamClient {
                         credential_refreshed = true;
                         continue;
                     }
-                    match self.retry.on_status(attempt, status) {
+                    match self.retry.on_status(failures + 1, status) {
                         Decision::Retry(delay) => {
+                            failures += 1;
                             tracing::warn!(attempt, %status, delay_ms = delay.as_millis(), "retrying on upstream status");
                             tokio::time::sleep(delay).await;
                         }
@@ -202,8 +205,9 @@ impl UpstreamClient {
                         }
                     }
                 }
-                Err(error) => match self.retry.on_transport_error(attempt, &error) {
+                Err(error) => match self.retry.on_transport_error(failures + 1, &error) {
                     Decision::Retry(delay) => {
+                        failures += 1;
                         tracing::warn!(attempt, error = %describe(&error), delay_ms = delay.as_millis(), "retrying after connection failure");
                         tokio::time::sleep(delay).await;
                     }

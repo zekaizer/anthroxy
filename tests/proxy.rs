@@ -466,6 +466,49 @@ async fn refreshes_command_credential_on_401_and_retries_once() {
 }
 
 #[tokio::test]
+async fn a_credential_refresh_does_not_spend_the_retry_budget() {
+    // 401 once, then the retryable status for as many attempts as the budget
+    // allows; the refresh re-send must not be one of them.
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let upstream = MockUpstream::start(move |received| {
+        match seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            0 => json_response(
+                401,
+                json!({"type":"error","error":{"type":"authentication_error","message":"stale"}}),
+            ),
+            1 | 2 => json_response(
+                429,
+                json!({"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}),
+            ),
+            _ => echo(received),
+        }
+    })
+    .await;
+    let config = config_with_backend(
+        &upstream.url(),
+        "[upstream]\nretries = 2\nretry_backoff = \"1ms\"\nretry_on_status = [429]\n",
+    )
+    .replace(
+        r#"credential = { kind = "static", value = "backend-secret-key" }"#,
+        r#"credential = { kind = "command", command = "echo tok" }"#,
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        upstream.received().len(),
+        4,
+        "401 re-send, then both retries"
+    );
+}
+
+#[tokio::test]
 async fn static_credential_is_not_retried_on_401() {
     let upstream = MockUpstream::start(|_| {
         json_response(
