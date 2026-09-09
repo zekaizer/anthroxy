@@ -202,6 +202,106 @@ fn missing_config_is_a_clear_error() {
         .stderr(predicate::str::contains("/nonexistent/anthroxy.toml"));
 }
 
+/// Backends covering each credential kind, one of them broken.
+fn credential_config(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[server]
+token = "t"
+listen = "127.0.0.1:0"
+
+[backends.good]
+url = "http://127.0.0.1:1"
+credential = { kind = "command", command = "printf '  tok-abcdefgh \n'", refresh = "90s" }
+
+[backends.bad]
+url = "http://127.0.0.1:1"
+credential = { kind = "command", command = "echo boom >&2; exit 3" }
+
+[backends.from-env]
+url = "http://127.0.0.1:1"
+credential = { kind = "env", name = "ANTHROXY_TEST_ABSENT" }
+
+[[models]]
+id = "m"
+backend = "good"
+"#,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn credential_reports_every_command_and_fails_on_a_broken_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = credential_config(dir.path());
+    bin()
+        .args(["--config", path.to_str().unwrap(), "credential"])
+        .env_remove("ANTHROXY_TEST_ABSENT")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("credential  tok-…efgh (12 chars)"))
+        .stdout(predicate::str::contains("re-run in   1m 30s"))
+        .stdout(predicate::str::contains("✗ exit 3 in"))
+        .stdout(predicate::str::contains("stderr      boom"))
+        .stdout(predicate::str::contains(
+            "from-env  env $ANTHROXY_TEST_ABSENT",
+        ))
+        .stdout(predicate::str::contains("✗ not set"))
+        .stdout(predicate::str::contains("2 credential problem(s)"))
+        .stdout(predicate::str::contains("--reveal"));
+}
+
+#[test]
+fn credential_takes_backend_names_and_reveals_on_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = credential_config(dir.path());
+    let path = path.to_str().unwrap();
+    bin()
+        .args(["--config", path, "credential", "good"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tok-…efgh"))
+        .stdout(predicate::str::contains("every credential acquired"))
+        .stdout(predicate::str::contains("bad").not());
+
+    bin()
+        .args(["--config", path, "credential", "good", "--reveal"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("credential  tok-abcdefgh"));
+
+    bin()
+        .args(["--config", path, "credential", "nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no backend named `nope`"))
+        .stderr(predicate::str::contains("good"));
+}
+
+#[test]
+fn credential_as_service_needs_the_systemd_user_manager() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = credential_config(dir.path());
+    // Fails everywhere: without a user manager it cannot start, and where it
+    // can, `bad` still exits 3.
+    let out = bin()
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "credential",
+            "--as-service",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("systemd"), "{text}");
+}
+
 #[test]
 fn models_prints_the_table() {
     let dir = tempfile::tempdir().unwrap();

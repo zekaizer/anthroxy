@@ -153,6 +153,7 @@ Notes:
 | --- | --- |
 | `serve [--listen ADDR] [--body-dir DIR]` | Run the router. Prints a banner with the listen URL, backends and models. `SIGHUP` re-reads the file without dropping connections (everything except `server.listen`). |
 | `check [--no-probe] [--timeout 10s]` | Validate the file; acquire each credential and call `GET /v1/models` on each backend; flag upstream model names the backend does not list. Exit 1 on any problem. |
+| `credential [BACKEND…] [--as-service] [--reveal]` | Run each backend's credential command as the router runs it: exit status, timing, what it printed, the masked value with its length, any reported expiry and when the router would re-run it. `--as-service` runs it again in the systemd user service's environment and prints how that environment differs from this shell's. Exit 1 on any problem. |
 | `models` | The model table: id, backend, upstream name, picker label, aliases. |
 | `init [--force] [--stdout]` | Write (or print) a commented configuration with a fresh random token. |
 | `env [--host H] [--format sh\|powershell\|json]` | Variables for Claude Code. |
@@ -189,6 +190,7 @@ From Claude Code on the Windows host, use the distribution's address (`hostname 
 ## Debugging
 
 - **Logs.** Text by default, `--log-format json` for shippers. Each request runs in a span `request{id=… method=… path=… model=… backend=…}`; the lines you will look for are `routed`, `upstream responded` (status, attempts, latency), `response body complete` (bytes, chunks, time to first byte) and the `WARN`s: retries, credential refreshes, client disconnects, upstream errors.
+- **Credentials.** `anthroxy credential` runs every backend's credential command through the same code the router uses and reports what came back; `--reveal` prints values unmasked instead of `sk-a…9999 (108 chars)`. A command that works in your shell but not as a service is an environment difference: on Linux, `--as-service` runs it a second time in a transient unit under the systemd user manager — the environment `anthroxy.service` starts with — and prints the delta (`PATH` in full, other variables by name). Typical causes: the interpreter is `dash`, not your login shell; `PATH` has none of the directories your profile adds; a keychain or agent socket (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`) is absent.
 - **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`. Each request gets `<DIR>/<time>-<request id>/` with `request.json` (exactly what went upstream), `response.json|sse|bin` (exactly what came back) and `meta.json` (routing, headers with credentials redacted, status, timings, outcome). Entries older than `logging.body_retention` (default 7 days) are deleted at startup and every 10 minutes; set it to `0s` to keep everything.
 - **Levels.** `--log-level debug` (or `trace`) applies to the router only. To see the HTTP client internals, name them: `--log-level "anthroxy=debug,hyper=debug,h2=debug"`.
 
