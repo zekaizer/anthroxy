@@ -10,7 +10,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use support::MockUpstream;
 use support::mock_upstream::echo;
-use support::router::{TOKEN, config_with_backend};
+use support::router::{TOKEN, config_with_backend, messages_body};
 
 /// For tests that keep the process running and read its output live.
 fn spawnable() -> std::process::Command {
@@ -430,6 +430,50 @@ fn a_failure_reports_its_cause_once() {
         1,
         "the cause is repeated: {stderr}"
     );
+}
+
+/// `http_proxy` in the environment would send a backend the configuration
+/// named by URL — and the credential for it — to a host it never named.
+#[test]
+fn an_ambient_proxy_does_not_redirect_a_backend_request() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let upstream = runtime.block_on(MockUpstream::start(echo));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, config_with_backend(&upstream.url(), "")).unwrap();
+
+    let mut child = spawnable()
+        // Nothing listens there, so a proxied request cannot be answered.
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let url = wait_for_banner(&mut child).url;
+    let status = runtime.block_on(async {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(format!("{url}/v1/messages"))
+            .header("x-api-key", TOKEN)
+            .json(&messages_body("fast"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+    });
+    child.kill().unwrap();
+    assert_eq!(status, 200, "the backend is reached directly");
+    assert_eq!(upstream.received().len(), 1);
 }
 
 #[test]

@@ -93,12 +93,15 @@ pub enum ClientBuildError {
 }
 
 /// How every backend is reached: the configured timeouts, the extra trust
-/// anchors from `ca_certificate`, and no redirects, since a redirect would
-/// resend the body and the credential elsewhere.
+/// anchors from `ca_certificate`, no redirects, since a redirect would resend
+/// the body and the credential elsewhere, and no proxy, since `http_proxy` in
+/// the environment would do the same to every backend at once — a backend the
+/// operator named by URL is reached at that URL.
 pub fn http_client(config: &UpstreamConfig) -> Result<reqwest::ClientBuilder, ClientBuildError> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
         .read_timeout(config.read_timeout)
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none());
     if let Some(path) = &config.ca_certificate {
         for certificate in ca_certificates(path)? {
