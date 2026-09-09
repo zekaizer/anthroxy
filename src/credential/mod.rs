@@ -2,6 +2,7 @@
 //! (ADR-0004).
 
 mod command;
+pub mod exec;
 mod fixed;
 mod output;
 
@@ -15,8 +16,9 @@ use http::header::{HeaderName, HeaderValue};
 
 use crate::config::{CredentialConfig, CredentialHeader};
 
-pub use command::{CommandCredential, EXPIRY_MARGIN};
+pub use command::CommandCredential;
 pub use fixed::FixedCredential;
+pub use output::Output;
 
 /// A secret plus the header it is sent in. `Debug` never prints the secret.
 #[derive(Clone, PartialEq, Eq)]
@@ -81,7 +83,7 @@ pub enum CredentialError {
     Spawn(#[source] std::io::Error),
     #[error("credential command exceeded {}", humantime::format_duration(*.0))]
     Timeout(Duration),
-    #[error("credential command exited with {status}{}", stderr_suffix(.stderr))]
+    #[error("credential command failed with {status}{}", stderr_suffix(.stderr))]
     Failed { status: String, stderr: String },
     #[error("credential command printed nothing on stdout")]
     Empty,

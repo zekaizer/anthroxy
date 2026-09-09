@@ -1,5 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::exec::EXPIRY_MARGIN;
 use super::*;
 use crate::config::{CommandOutput, CredentialConfig, CredentialHeader};
 
@@ -313,4 +314,52 @@ async fn json_output_must_be_a_token_object() {
         .err()
         .unwrap();
     assert!(matches!(err, CredentialError::Empty), "{err}");
+}
+
+#[tokio::test]
+async fn exec_run_captures_both_streams_and_the_exit_status() {
+    let run = exec::run("printf out; printf err >&2; exit 3", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(!run.success);
+    assert_eq!(run.status, "exit 3");
+    assert_eq!(run.stdout, "out");
+    assert_eq!(run.stderr, "err");
+
+    let err = exec::interpret(&run, CommandOutput::Text).err().unwrap();
+    assert_eq!(
+        err.to_string(),
+        "credential command failed with exit 3: err"
+    );
+    assert!(
+        exec::interpret(
+            &exec::run("echo tok", Duration::from_secs(5)).await.unwrap(),
+            CommandOutput::Text
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn valid_for_is_the_refresh_interval_cut_short_by_the_expiry() {
+    let refresh = Duration::from_secs(300);
+    assert_eq!(exec::valid_for(refresh, None).unwrap(), refresh);
+    assert_eq!(
+        exec::valid_for(refresh, Some(SystemTime::now() + Duration::from_secs(3600))).unwrap(),
+        refresh,
+        "a distant expiry leaves the refresh interval alone"
+    );
+
+    let near = SystemTime::now() + EXPIRY_MARGIN + Duration::from_secs(30);
+    let valid = exec::valid_for(refresh, Some(near)).unwrap();
+    assert!(
+        valid <= Duration::from_secs(30) && valid > Duration::from_secs(25),
+        "{valid:?}"
+    );
+
+    let past = SystemTime::now() - Duration::from_secs(1);
+    assert!(matches!(
+        exec::valid_for(refresh, Some(past)),
+        Err(CredentialError::Expired(_))
+    ));
 }

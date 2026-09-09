@@ -1,19 +1,13 @@
 //! Credential produced by a shell command, cached until its refresh interval
 //! or reported expiry nears.
 
-use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use tokio::process::Command;
 use tokio::sync::Mutex;
 
-use super::{Credential, CredentialError, CredentialSource, output};
+use super::{Credential, CredentialError, CredentialSource, exec};
 use crate::config::{CommandOutput, CredentialHeader};
-
-/// A credential this close to its reported expiry is re-acquired instead of
-/// served from cache.
-pub const EXPIRY_MARGIN: Duration = Duration::from_secs(120);
 
 #[derive(Debug)]
 pub struct CommandCredential {
@@ -53,53 +47,16 @@ impl CommandCredential {
         }
     }
 
-    /// Runs the command once. A reported expiry that has already passed is
-    /// [`CredentialError::Expired`] rather than a credential the backend will
-    /// reject.
+    /// Runs the command once.
     async fn fetch(&self) -> Result<Cached, CredentialError> {
-        let output = self.run().await?;
-        let credential = Credential::new(self.header.clone(), output.secret)?;
-        let now = Instant::now();
-        let mut valid_until = now + self.refresh;
-        if let Some(expires_at) = output.expires_at {
-            let remaining = expires_at
-                .duration_since(SystemTime::now())
-                .map_err(|_| CredentialError::Expired(expires_at))?;
-            valid_until = valid_until.min(now + remaining.saturating_sub(EXPIRY_MARGIN));
-        }
+        let run = exec::run(&self.command, self.timeout).await?;
+        let output = exec::interpret(&run, self.output)?;
+        let valid_for = exec::valid_for(self.refresh, output.expires_at)?;
         Ok(Cached {
-            credential,
-            valid_until,
+            credential: Credential::new(self.header.clone(), output.secret)?,
+            valid_until: Instant::now() + valid_for,
             expires_at: output.expires_at,
         })
-    }
-
-    async fn run(&self) -> Result<output::Output, CredentialError> {
-        tracing::debug!(command = %self.command, "running credential command");
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg(&self.command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(CredentialError::Spawn)?;
-        let output = tokio::time::timeout(self.timeout, child.wait_with_output())
-            .await
-            .map_err(|_| CredentialError::Timeout(self.timeout))?
-            .map_err(CredentialError::Spawn)?;
-        if !output.status.success() {
-            return Err(CredentialError::Failed {
-                status: output
-                    .status
-                    .code()
-                    .map(|c| format!("status {c}"))
-                    .unwrap_or_else(|| output.status.to_string()),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        output::parse(self.output, &String::from_utf8_lossy(&output.stdout))
     }
 }
 
