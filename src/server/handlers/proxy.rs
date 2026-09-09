@@ -66,7 +66,7 @@ async fn handle(
         "routed"
     );
     let rename = (requested_model != route.upstream_model).then_some(route.upstream_model.as_str());
-    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields) {
+    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields)? {
         Some(rewritten) => Bytes::from(rewritten),
         None => body,
     };

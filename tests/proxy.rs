@@ -328,6 +328,26 @@ async fn malformed_body_is_400() {
     assert_eq!(res.status(), 400);
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"]["type"], "invalid_request_error");
+
+    // Nesting the router can skip but not rewrite: "fast" is renamed, so the
+    // body has to be read in full.
+    let deep = format!(
+        "{{\"model\": \"fast\", \"x\": {}{}}}",
+        "[".repeat(200),
+        "]".repeat(200)
+    );
+    let res = router
+        .http
+        .post(router.url("/v1/messages"))
+        .header("x-api-key", TOKEN)
+        .header("content-type", "application/json")
+        .body(deep)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
 #[tokio::test]

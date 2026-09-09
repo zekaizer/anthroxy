@@ -65,17 +65,25 @@ pub fn peek(body: &[u8]) -> Result<RequestPeek, PeekError> {
 }
 
 /// Returns `body` with `model` replaced when `model` is given and every path
-/// in `drop_fields` removed, other fields and their order intact; `None` when
-/// nothing changed, so the caller forwards the original bytes. A path is
+/// in `drop_fields` removed, other fields and their order intact; `Ok(None)`
+/// when nothing changed, so the caller forwards the original bytes. A path is
 /// dot-separated object keys; one whose prefix is missing or not an object
-/// removes nothing. `body` must already have passed [`peek`], which proves it
-/// is a JSON object.
-pub fn rewrite(body: &[u8], model: Option<&str>, drop_fields: &[String]) -> Option<Vec<u8>> {
+/// removes nothing.
+///
+/// Reading the whole document is stricter than [`peek`], which skips values it
+/// does not need: a body nested deeper than serde's recursion limit gets here
+/// and is [`PeekError::NotJson`], since the caller must not forward a request
+/// whose `model` it could not rewrite.
+pub fn rewrite(
+    body: &[u8],
+    model: Option<&str>,
+    drop_fields: &[String],
+) -> Result<Option<Vec<u8>>, PeekError> {
     if model.is_none() && drop_fields.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut value: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_slice(body).expect("peek accepted this body");
+        serde_json::from_slice(body).map_err(PeekError::NotJson)?;
     let mut changed = false;
     for path in drop_fields {
         changed |= remove_path(&mut value, path);
@@ -87,7 +95,7 @@ pub fn rewrite(body: &[u8], model: Option<&str>, drop_fields: &[String]) -> Opti
         );
         changed = true;
     }
-    changed.then(|| serde_json::to_vec(&value).expect("a parsed document serializes"))
+    Ok(changed.then(|| serde_json::to_vec(&value).expect("a parsed document serializes")))
 }
 
 /// Whether `path` named an existing field, which is now gone.
