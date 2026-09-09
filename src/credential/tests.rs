@@ -206,6 +206,23 @@ async fn command_failure_reports_status_and_stderr() {
     assert!(text.contains('3') && text.contains("boom"), "{text}");
 }
 
+/// Whatever the command wrote — a token server's answer, a shell trace —
+/// reaches a log line and the 502 the client is given.
+#[test]
+fn command_stderr_cannot_forge_a_log_line_or_fill_the_message() {
+    let error = CredentialError::Failed {
+        status: "exit 3".to_owned(),
+        stderr: format!(
+            "boom\n2026-09-09T00:00:00Z  INFO forged\n{}",
+            "z".repeat(3_000)
+        ),
+    };
+    let text = error.to_string();
+    assert!(!text.contains('\n'), "{text}");
+    assert!(text.len() < 300, "{} chars", text.len());
+    assert!(text.contains("boom\\n"), "{text}");
+}
+
 #[tokio::test]
 async fn command_empty_output_is_an_error() {
     let source = command("true", Duration::ZERO, Duration::from_secs(5));

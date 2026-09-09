@@ -93,12 +93,16 @@ pub enum CredentialError {
     Expired(std::time::SystemTime),
 }
 
+/// The command's stderr as an error message may carry it. It is whatever the
+/// command wrote — a token server's answer, a shell trace — and this message
+/// reaches both a log line and the client, so it travels escaped and cut.
+/// `anthroxy credential` prints the run's own stderr in full instead.
 fn stderr_suffix(stderr: &str) -> String {
     let trimmed = stderr.trim();
     if trimmed.is_empty() {
         String::new()
     } else {
-        format!(": {trimmed}")
+        format!(": {}", crate::text::cut(trimmed, 200))
     }
 }
 
