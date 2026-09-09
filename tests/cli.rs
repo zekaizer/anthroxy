@@ -508,7 +508,9 @@ fn a_logging_change_on_reload_says_it_needs_a_restart() {
     // SAFETY: plain libc call on a pid this test owns.
     unsafe { libc_signal(child.id() as i32, 1) };
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // A margin for a loaded machine, not a timing assertion: the loop ends as
+    // soon as the line arrives.
+    let deadline = Instant::now() + Duration::from_secs(60);
     let mut lines = Vec::new();
     while Instant::now() < deadline {
         if let Ok(line) = rx.recv_timeout(Duration::from_millis(200)) {

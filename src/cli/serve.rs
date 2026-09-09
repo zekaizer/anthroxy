@@ -35,15 +35,19 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
 
     let server = Server::bind(&config).await?;
     let addr = server.local_addr();
-    print_banner(&server.state().snapshot(), &path, addr, style);
-    tracing::info!(%addr, config = %path.display(), "anthroxy listening");
-
+    // Before the banner: until this handler exists SIGHUP terminates the
+    // process, and a reload signalled the moment the router looks ready would
+    // do exactly that.
     let reloader = tokio::spawn(reload_on_hangup(
+        hangup(),
         server.state(),
         cli.clone(),
         args.clone(),
         cli.logging(Some(&config), "info"),
     ));
+    print_banner(&server.state().snapshot(), &path, addr, style);
+    tracing::info!(%addr, config = %path.display(), "anthroxy listening");
+
     let result = server.serve(shutdown_signal()).await;
     reloader.abort();
     result?;
@@ -57,13 +61,13 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
 /// be swapped, so a change to either is reported rather than silently ignored.
 #[cfg(unix)]
 async fn reload_on_hangup(
+    hangup: Option<tokio::signal::unix::Signal>,
     state: AppState,
     cli: Cli,
     args: ServeArgs,
     installed: (String, LogFormat),
 ) {
-    let Ok(mut hangup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-    else {
+    let Some(mut hangup) = hangup else {
         return;
     };
     let path = cli.config_path();
@@ -97,9 +101,19 @@ async fn reload_on_hangup(
 }
 
 #[cfg(not(unix))]
-async fn reload_on_hangup(_: AppState, _: Cli, _: ServeArgs, _: (String, LogFormat)) {
+async fn reload_on_hangup(_: (), _: AppState, _: Cli, _: ServeArgs, _: (String, LogFormat)) {
     std::future::pending::<()>().await
 }
+
+/// Claims SIGHUP for the reload loop, before anything announces the router is
+/// up. `None` when the handler could not be installed.
+#[cfg(unix)]
+fn hangup() -> Option<tokio::signal::unix::Signal> {
+    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok()
+}
+
+#[cfg(not(unix))]
+fn hangup() {}
 
 fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, style: &Style) {
     println!(
