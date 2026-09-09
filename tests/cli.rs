@@ -484,6 +484,49 @@ fn sighup_reloads_the_configuration_file() {
     child.kill().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn a_logging_change_on_reload_says_it_needs_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "[logging]\nlevel = \"info\"\n");
+    let mut child = serve(&path);
+    let _ = wait_for_banner(&mut child);
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+
+    std::fs::write(
+        &path,
+        config_with_backend("http://127.0.0.1:1", "[logging]\nlevel = \"debug\"\n"),
+    )
+    .unwrap();
+    // SAFETY: plain libc call on a pid this test owns.
+    unsafe { libc_signal(child.id() as i32, 1) };
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut lines = Vec::new();
+    while Instant::now() < deadline {
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(200)) {
+            let done = line.contains("restart");
+            lines.push(line);
+            if done {
+                break;
+            }
+        }
+    }
+    child.kill().unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("logging") && l.contains("restart")),
+        "{lines:?}"
+    );
+}
+
 /// `anthroxy serve` on an ephemeral port with its output captured.
 fn serve(config: &std::path::Path) -> std::process::Child {
     spawnable()

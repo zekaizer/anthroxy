@@ -100,9 +100,9 @@ impl Cli {
         })
     }
 
-    /// Installs the tracing subscriber. `fallback` applies when neither the
-    /// command line, `RUST_LOG` nor the file says otherwise.
-    fn init_tracing(&self, config: Option<&Config>, fallback: &str) -> anyhow::Result<()> {
+    /// The filter and format this run installs. `fallback` applies when
+    /// neither the command line, `RUST_LOG` nor the file says otherwise.
+    fn logging(&self, config: Option<&Config>, fallback: &str) -> (String, LogFormat) {
         let from_file = config.map(|c| c.logging.level.as_str()).unwrap_or(fallback);
         let directives = crate::observability::resolve_directives(
             self.log_level.as_deref(),
@@ -113,6 +113,12 @@ impl Cli {
             .log_format
             .or(config.map(|c| c.logging.format))
             .unwrap_or_default();
+        (directives, format)
+    }
+
+    /// Installs the tracing subscriber, once per process.
+    fn init_tracing(&self, config: Option<&Config>, fallback: &str) -> anyhow::Result<()> {
+        let (directives, format) = self.logging(config, fallback);
         crate::observability::init(&directives, format)
             .map_err(|e| anyhow::anyhow!("invalid log filter `{directives}`: {e}"))
     }

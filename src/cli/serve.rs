@@ -5,7 +5,7 @@ use clap::Args;
 
 use super::models::default_route_line;
 use super::{Cli, Style, display_path};
-use crate::config::{Config, Overrides};
+use crate::config::{Config, LogFormat, Overrides};
 use crate::server::{AppState, Server, Snapshot};
 
 #[derive(Debug, Clone, Args)]
@@ -38,7 +38,12 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     print_banner(&server.state().snapshot(), &path, addr, style);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
-    let reloader = tokio::spawn(reload_on_hangup(server.state(), cli.clone(), args.clone()));
+    let reloader = tokio::spawn(reload_on_hangup(
+        server.state(),
+        cli.clone(),
+        args.clone(),
+        cli.logging(Some(&config), "info"),
+    ));
     let result = server.serve(shutdown_signal()).await;
     reloader.abort();
     result?;
@@ -47,9 +52,16 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
 }
 
 /// Re-reads the configuration on SIGHUP. A file that fails to load or build
-/// leaves the running configuration untouched.
+/// leaves the running configuration untouched. `installed` is the log filter
+/// and format this process started with; the subscriber is global and cannot
+/// be swapped, so a change to either is reported rather than silently ignored.
 #[cfg(unix)]
-async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
+async fn reload_on_hangup(
+    state: AppState,
+    cli: Cli,
+    args: ServeArgs,
+    installed: (String, LogFormat),
+) {
     let Ok(mut hangup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
     else {
         return;
@@ -57,8 +69,10 @@ async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
     let path = cli.config_path();
     while hangup.recv().await.is_some() {
         tracing::info!(config = %path.display(), "SIGHUP received, reloading configuration");
-        match load_effective(&cli, &args).and_then(|c| Ok(state.apply(&c)?)) {
-            Ok(report) => {
+        let reloaded = load_effective(&cli, &args)
+            .and_then(|config| Ok((state.apply(&config)?, cli.logging(Some(&config), "info"))));
+        match reloaded {
+            Ok((report, logging)) => {
                 tracing::info!(
                     backends = report.backends,
                     models = report.models,
@@ -67,6 +81,11 @@ async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
                 if report.listen_changed {
                     tracing::warn!(
                         "server.listen changed in the file; restart the router to apply it"
+                    );
+                }
+                if logging != installed {
+                    tracing::warn!(
+                        "logging level or format changed in the file; restart the router to apply it"
                     );
                 }
             }
@@ -78,7 +97,7 @@ async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
 }
 
 #[cfg(not(unix))]
-async fn reload_on_hangup(_: AppState, _: Cli, _: ServeArgs) {
+async fn reload_on_hangup(_: AppState, _: Cli, _: ServeArgs, _: (String, LogFormat)) {
     std::future::pending::<()>().await
 }
 
