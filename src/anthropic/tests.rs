@@ -27,14 +27,6 @@ fn error_response_serializes_to_anthropic_shape() {
 }
 
 #[test]
-fn error_response_parses_upstream_body() {
-    let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
-    let e: ErrorResponse = serde_json::from_str(body).unwrap();
-    assert_eq!(e.error.kind, ErrorType::OverloadedError);
-    assert_eq!(e.request_id, None);
-}
-
-#[test]
 fn model_list_fills_first_and_last() {
     let list = ModelList::all(vec![
         ModelObject::new("a", "A", "2026-01-01T00:00:00Z"),

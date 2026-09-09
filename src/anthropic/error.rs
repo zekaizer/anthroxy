@@ -1,8 +1,8 @@
 use http::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// `error.type` values defined by the Anthropic API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorType {
     InvalidRequestError,
@@ -31,16 +31,16 @@ impl ErrorType {
 }
 
 /// `{"type":"error","error":{"type":..,"message":..},"request_id":..}`
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ErrorResponse {
     #[serde(rename = "type")]
     pub kind: String,
     pub error: ErrorDetail,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ErrorDetail {
     #[serde(rename = "type")]
     pub kind: ErrorType,
