@@ -32,6 +32,13 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     let path = cli.config_path();
     let config = load_effective(cli, args)?;
     cli.init_tracing(Some(&config), "info")?;
+    if let Some(mode) = crate::config::open_to_other_accounts(&path) {
+        tracing::warn!(
+            config = %path.display(),
+            mode = %format!("{mode:o}"),
+            "the configuration holds the router token; `chmod 600` it to keep it to this account"
+        );
+    }
 
     let server = Server::bind(&config).await?;
     let addr = server.local_addr();

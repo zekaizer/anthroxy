@@ -136,6 +136,34 @@ fn check_reports_every_problem_and_fails() {
         .stdout(predicate::str::contains("at least one [backends"));
 }
 
+/// The file carries the router token and any `static` backend credential.
+#[cfg(unix)]
+#[test]
+fn check_reports_a_configuration_other_users_can_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "");
+    let chmod = |mode| {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    chmod(0o644);
+    bin()
+        .args(["--config", path.to_str().unwrap(), "check", "--no-probe"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("644"))
+        .stdout(predicate::str::contains("chmod 600"));
+
+    chmod(0o600);
+    bin()
+        .args(["--config", path.to_str().unwrap(), "check", "--no-probe"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("chmod 600").not());
+}
+
 #[test]
 fn check_probe_reports_unreachable_backend() {
     let dir = tempfile::tempdir().unwrap();

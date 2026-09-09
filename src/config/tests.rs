@@ -514,3 +514,28 @@ fn body_dir_tilde_expands_to_home() {
         std::path::PathBuf::from("/abs/path")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_configuration_open_to_other_accounts_is_reported_with_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "").unwrap();
+    let chmod = |mode| {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    chmod(0o600);
+    assert_eq!(open_to_other_accounts(&path), None);
+    chmod(0o640);
+    assert_eq!(open_to_other_accounts(&path), Some(0o640));
+    chmod(0o644);
+    assert_eq!(open_to_other_accounts(&path), Some(0o644));
+    assert_eq!(
+        open_to_other_accounts(&dir.path().join("absent.toml")),
+        None,
+        "a file that is not there is a problem the loader reports"
+    );
+}
