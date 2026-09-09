@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::Ipv6Addr;
 
 use clap::{Args, ValueEnum};
 
@@ -34,7 +34,7 @@ pub fn run(cli: &Cli, args: &EnvArgs) -> anyhow::Result<()> {
 
 pub fn render(config: &Config, host: Option<&str>, format: EnvFormat) -> String {
     let host = host
-        .map(str::to_owned)
+        .map(bracket_ipv6)
         .unwrap_or_else(|| default_host(config));
     let base_url = format!("http://{host}:{}", config.server.listen.port());
     let default_model = config
@@ -99,8 +99,16 @@ fn powershell_quote(value: &str) -> String {
 fn default_host(config: &Config) -> String {
     match config.server.listen.ip() {
         ip if ip.is_unspecified() => "localhost".to_owned(),
-        IpAddr::V6(v6) => format!("[{v6}]"),
-        ip => ip.to_string(),
+        ip => bracket_ipv6(&ip.to_string()),
+    }
+}
+
+/// A bare IPv6 literal only reads as a host once it is bracketed; anything
+/// else, brackets included, is already what the user meant.
+fn bracket_ipv6(host: &str) -> String {
+    match host.parse::<Ipv6Addr>() {
+        Ok(v6) => format!("[{v6}]"),
+        Err(_) => host.to_owned(),
     }
 }
 
@@ -154,6 +162,25 @@ mod tests {
         let out = render(&config, None, EnvFormat::Powershell);
         assert!(
             out.contains("$env:ANTHROPIC_AUTH_TOKEN = 'a\"b$c''d'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_ipv6_host_is_bracketed_wherever_it_came_from() {
+        let out = render(&config("[::1]:8787"), None, EnvFormat::Sh);
+        assert!(
+            out.contains("export ANTHROPIC_BASE_URL='http://[::1]:8787'"),
+            "{out}"
+        );
+        let out = render(&config("0.0.0.0:8787"), Some("::1"), EnvFormat::Sh);
+        assert!(
+            out.contains("export ANTHROPIC_BASE_URL='http://[::1]:8787'"),
+            "{out}"
+        );
+        let out = render(&config("0.0.0.0:8787"), Some("[::1]"), EnvFormat::Sh);
+        assert!(
+            out.contains("export ANTHROPIC_BASE_URL='http://[::1]:8787'"),
             "{out}"
         );
     }
