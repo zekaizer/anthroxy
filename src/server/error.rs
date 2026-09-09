@@ -18,14 +18,24 @@ pub enum RouterError {
     BodyTooLarge { limit: usize },
     #[error("cannot read request body: {0}")]
     BodyRead(String),
-    /// The name is whatever the client sent, so it is escaped: this message
-    /// reaches a log line that must stay one line.
-    #[error("model `{}` is not served by this router; configured models: {}", model.escape_debug(), known.join(", "))]
+    #[error("model `{}` is not served by this router; configured models: {}", short(model), known.join(", "))]
     UnknownModel { model: String, known: Vec<String> },
     #[error("no route for {method} {path}")]
     NoRoute { method: String, path: String },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
+}
+
+/// A name the client chose, as a message may carry it: escaped, so a log line
+/// stays one line, and cut, so a body the size of the request limit cannot be
+/// echoed into the log and the response.
+pub(crate) fn short(name: &str) -> String {
+    const MAX: usize = 64;
+    let escaped: Vec<char> = name.escape_debug().take(MAX + 1).collect();
+    match escaped.len() > MAX {
+        true => escaped[..MAX].iter().collect::<String>() + "…",
+        false => escaped.iter().collect(),
+    }
 }
 
 impl RouterError {
@@ -91,6 +101,15 @@ impl RouterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_model_name_does_not_reach_the_message_in_full() {
+        let error = RouterError::UnknownModel {
+            model: "m".repeat(10_000),
+            known: vec!["m".to_owned()],
+        };
+        assert!(error.to_string().len() < 200, "{}", error.to_string().len());
+    }
 
     #[test]
     fn an_unknown_model_name_cannot_forge_a_log_line() {

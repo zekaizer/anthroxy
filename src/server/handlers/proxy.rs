@@ -14,6 +14,7 @@ use crate::anthropic;
 use crate::observability::body_log::headers_for_record;
 use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
+use crate::server::error::short;
 use crate::server::relay::{Relay, RelayOutcome};
 use crate::server::{RequestId, RouterError, Snapshot};
 use crate::upstream::{
@@ -56,9 +57,9 @@ async fn handle(
     span.record("model", route.id.as_str());
     span.record("backend", backend.name.as_str());
     tracing::info!(
-        // Debug, not Display: a routed name is only checked against the model
-        // table, which `routing.default_model` makes optional.
-        requested_model = ?requested_model,
+        // Whatever the client sent: `routing.default_model` routes a name the
+        // model table never saw, so the log takes it escaped and cut.
+        requested_model = %short(&requested_model),
         matched = ?resolution.matched,
         upstream_model = %route.upstream_model,
         stream = peek.stream,
