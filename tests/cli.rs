@@ -340,15 +340,15 @@ fn env_prints_shell_exports_and_json() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "export ANTHROPIC_BASE_URL=\"http://router.example:0\"",
+            "export ANTHROPIC_BASE_URL='http://router.example:0'",
         ))
         .stdout(predicate::str::contains(format!(
-            "export ANTHROPIC_AUTH_TOKEN=\"{TOKEN}\""
+            "export ANTHROPIC_AUTH_TOKEN='{TOKEN}'"
         )))
         .stdout(predicate::str::contains(
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         ))
-        .stdout(predicate::str::contains("export ANTHROPIC_MODEL=\"fast\""));
+        .stdout(predicate::str::contains("export ANTHROPIC_MODEL='fast'"));
     bin()
         .args(["--config", path, "env", "--format", "json"])
         .assert()

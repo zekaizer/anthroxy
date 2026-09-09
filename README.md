@@ -74,10 +74,10 @@ Models
 Then, in the shell that runs Claude Code:
 
 ```sh
-export ANTHROPIC_BASE_URL="http://localhost:8787"
-export ANTHROPIC_AUTH_TOKEN="<token from the config>"
-export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1"
-export ANTHROPIC_MODEL="gemma-local"      # the model Claude Code starts with
+export ANTHROPIC_BASE_URL='http://localhost:8787'
+export ANTHROPIC_AUTH_TOKEN='<token from the config>'
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1'
+export ANTHROPIC_MODEL='gemma-local'      # the model Claude Code starts with
 claude
 ```
 
