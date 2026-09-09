@@ -60,7 +60,7 @@ pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
         out.insert(name.clone(), value.clone());
     }
     if !backend.anthropic_beta.is_empty() {
-        let merged = merge_beta(out.get(&ANTHROPIC_BETA), &backend.anthropic_beta);
+        let merged = merge_beta(out.get_all(&ANTHROPIC_BETA), &backend.anthropic_beta);
         out.insert(
             ANTHROPIC_BETA.clone(),
             HeaderValue::from_str(&merged).expect("validated flags"),
@@ -69,21 +69,23 @@ pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
     out
 }
 
-/// `existing` (comma-separated) plus every flag in `extra` not already listed.
-fn merge_beta(existing: Option<&HeaderValue>, extra: &[String]) -> String {
-    let mut flags: Vec<String> = existing
-        .and_then(|v| v.to_str().ok())
-        .map(|s| {
-            s.split(',')
-                .map(str::trim)
-                .filter(|f| !f.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    for flag in extra {
-        if !flags.iter().any(|f| f == flag) {
-            flags.push(flag.clone());
+/// Every flag of every `existing` header (each comma-separated), then those
+/// of `extra`, each listed once. The client may repeat the header, so all of
+/// them are folded into the single value that replaces them.
+fn merge_beta<'a>(existing: impl IntoIterator<Item = &'a HeaderValue>, extra: &[String]) -> String {
+    let mut flags: Vec<&str> = Vec::new();
+    let values: Vec<&str> = existing
+        .into_iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    let listed = values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|flag| !flag.is_empty());
+    for flag in listed.chain(extra.iter().map(String::as_str)) {
+        if !flags.contains(&flag) {
+            flags.push(flag);
         }
     }
     flags.join(",")
