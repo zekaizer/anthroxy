@@ -283,6 +283,26 @@ fn backend_url_carries_no_query_or_fragment() {
 }
 
 #[test]
+fn backend_headers_cannot_take_over_the_connection() {
+    for header in [
+        "content-length",
+        "Transfer-Encoding",
+        "connection",
+        "upgrade",
+    ] {
+        let text = format!("{MINIMAL}\n[backends.local.headers]\n\"{header}\" = \"x\"\n");
+        let p = problems(&text);
+        assert!(
+            p.iter().any(|m| m.contains("backends.local.headers")),
+            "{header} accepted: {p:?}"
+        );
+    }
+    // A backend that wants a different Host still may have one.
+    let text = format!("{MINIMAL}\n[backends.local.headers]\nhost = \"api.internal\"\n");
+    assert!(parse(&text).is_ok());
+}
+
+#[test]
 fn validation_collects_every_problem() {
     let text = r#"
 [server]

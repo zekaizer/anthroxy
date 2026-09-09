@@ -54,6 +54,10 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 problems.push(format!(
                     "backends.{name}.headers: `{header}` is not a valid header name"
                 ));
+            } else if CONNECTION_HEADERS.contains(&header.to_ascii_lowercase().as_str()) {
+                problems.push(format!(
+                    "backends.{name}.headers: `{header}` describes the connection the router makes and cannot be set here"
+                ));
             } else if http::HeaderValue::from_str(value).is_err() {
                 problems.push(format!(
                     "backends.{name}.headers: `{header}` has a value that cannot be sent in a header"
@@ -128,6 +132,20 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         Err(ConfigError::Invalid(problems))
     }
 }
+
+/// Framing and hop-by-hop headers: the HTTP client owns them, so a value set
+/// here is either dropped or produces a request no backend can read. `host` is
+/// not one of them; overriding it is how some gateways are addressed.
+const CONNECTION_HEADERS: [&str; 8] = [
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "upgrade",
+];
 
 fn header_safe(text: &str) -> bool {
     http::HeaderValue::from_str(text).is_ok()
