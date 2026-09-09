@@ -11,10 +11,10 @@ use bytes::Bytes;
 use http_body_util::LengthLimitError;
 
 use crate::anthropic;
-use crate::observability::RequestRecord;
 use crate::observability::body_log::headers_for_record;
+use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
-use crate::server::relay::Relay;
+use crate::server::relay::{Relay, RelayOutcome};
 use crate::server::{RequestId, RouterError, Snapshot};
 use crate::upstream::{
     UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
@@ -87,7 +87,7 @@ async fn handle(
         );
         log.begin(record, &body, started)
     });
-    let upstream = state
+    let upstream = match state
         .upstream
         .send(UpstreamRequest {
             backend,
@@ -96,7 +96,14 @@ async fn handle(
             headers,
             body,
         })
-        .await?;
+        .await
+    {
+        Ok(upstream) => upstream,
+        Err(error) => {
+            record_failure(recorder, &error);
+            return Err(error.into());
+        }
+    };
     let status = upstream.response.status();
     tracing::info!(
         status = status.as_u16(),
@@ -124,14 +131,17 @@ async fn handle(
     );
 
     let body = if status.is_client_error() || status.is_server_error() {
-        let raw = upstream
-            .response
-            .bytes()
-            .await
-            .map_err(|source| UpstreamError::Body {
-                backend: backend.name.clone(),
-                source,
-            })?;
+        let raw = match upstream.response.bytes().await {
+            Ok(raw) => raw,
+            Err(source) => {
+                let error = UpstreamError::Body {
+                    backend: backend.name.clone(),
+                    source,
+                };
+                record_failure(recorder, &error);
+                return Err(error.into());
+            }
+        };
         tracing::warn!(
             status = status.as_u16(),
             bytes = raw.len(),
@@ -157,6 +167,14 @@ async fn handle(
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     Ok(response)
+}
+
+/// Ends the record of an exchange that failed before a body was relayed;
+/// without it the entry keeps the shape it had when the request went out.
+fn record_failure(recorder: Option<Recorder>, error: &impl std::fmt::Display) {
+    if let Some(recorder) = recorder {
+        recorder.finish(&RelayOutcome::UpstreamError(error.to_string()));
+    }
 }
 
 /// Snapshot for the body log. `headers` are the ones going upstream; the

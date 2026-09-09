@@ -200,6 +200,36 @@ async fn records_upstream_error_bodies_too() {
 }
 
 #[tokio::test]
+async fn records_a_request_that_never_reached_the_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!(
+        "[logging]\nbody_dir = \"{}\"\n\n[upstream]\nretries = 0\n",
+        dir.path().join("bodies").display()
+    );
+    // Nothing listens there.
+    let router = TestRouter::start(&config_with_backend("http://127.0.0.1:1", &extra)).await;
+
+    let res = router
+        .post("/v1/messages", &body("fast", false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 502);
+
+    let entries = wait_for_entries(&dir.path().join("bodies"), 1).await;
+    let meta = read_json(&entries[0].join("meta.json"));
+    assert_eq!(meta["backend"], "mock");
+    assert!(
+        meta["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("upstream_error:"),
+        "{meta}"
+    );
+    assert!(meta.get("status").is_none(), "no response ever arrived");
+}
+
+#[tokio::test]
 async fn one_directory_per_request() {
     let upstream = MockUpstream::start(echo).await;
     let dir = tempfile::tempdir().unwrap();
