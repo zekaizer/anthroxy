@@ -125,6 +125,16 @@ async fn handle(
         recorder
     });
 
+    if let Some(location) = redirect_target(status, upstream.response.headers()) {
+        let error = UpstreamError::Redirected {
+            backend: backend.name.clone(),
+            status: status.as_u16(),
+            location: short(location),
+        };
+        record_failure(recorder, &error);
+        return Err(error.into());
+    }
+
     let mut headers = response_headers(upstream.response.headers());
     headers.insert(X_ROUTER_BACKEND.clone(), header_value(&backend.name));
     headers.insert(X_ROUTER_MODEL.clone(), header_value(&route.id));
@@ -170,6 +180,15 @@ async fn handle(
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     Ok(response)
+}
+
+/// Where a redirecting response points. A 3xx without a `Location` is nothing
+/// a client can follow, so it is relayed like any other status.
+fn redirect_target(status: http::StatusCode, headers: &http::HeaderMap) -> Option<&str> {
+    status
+        .is_redirection()
+        .then(|| headers.get(http::header::LOCATION)?.to_str().ok())
+        .flatten()
 }
 
 /// Ends the record of an exchange that failed before a body was relayed;

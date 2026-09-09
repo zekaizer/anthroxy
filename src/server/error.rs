@@ -77,6 +77,7 @@ impl RouterError {
             RouterError::Upstream(
                 UpstreamError::Credential { backend, .. }
                 | UpstreamError::Transport { backend, .. }
+                | UpstreamError::Redirected { backend, .. }
                 | UpstreamError::Body { backend, .. },
             ) => Some(backend),
             _ => None,

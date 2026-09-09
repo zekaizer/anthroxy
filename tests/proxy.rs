@@ -715,6 +715,37 @@ async fn upstream_error_body_that_breaks_off_is_a_502() {
     );
 }
 
+/// The router refuses to follow a redirect, so it must not hand one to the
+/// client either: Claude Code would follow it, with the conversation and the
+/// router token, to an address the configuration never named.
+#[tokio::test]
+async fn a_backend_redirect_is_not_passed_on_to_the_client() {
+    let upstream = MockUpstream::start(|_| {
+        Response::builder()
+            .status(302)
+            .header("location", "http://127.0.0.1:1/v1/messages")
+            .body(Body::empty())
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 502);
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "api_error");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("mock") && message.contains("302") && message.contains("127.0.0.1:1"),
+        "{message}"
+    );
+}
+
 #[tokio::test]
 async fn retries_configured_statuses() {
     let upstream = MockUpstream::start({

@@ -51,6 +51,17 @@ pub enum UpstreamError {
         #[source]
         source: reqwest::Error,
     },
+    /// The backend redirected. Following it is refused for the router itself,
+    /// and relaying it would only move the decision to a client that follows
+    /// redirects with the router's own token.
+    #[error(
+        "backend `{backend}` answered HTTP {status} redirecting to `{location}`; point its `url` there instead"
+    )]
+    Redirected {
+        backend: String,
+        status: u16,
+        location: String,
+    },
     /// The backend answered but its error body broke off before the end.
     #[error("backend `{backend}` failed while sending its error body: {}", describe(.source))]
     Body {
