@@ -200,6 +200,57 @@ async fn records_upstream_error_bodies_too() {
 }
 
 #[tokio::test]
+async fn records_a_stream_that_broke_off_mid_body() {
+    // Headers and one event go out, then the backend drops the connection.
+    let upstream = MockUpstream::start(|_| {
+        let chunks = futures_util::stream::iter(0..2).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(20 * i)).await;
+            if i == 0 {
+                Ok("event: ping\ndata: {}\n\n")
+            } else {
+                Err(std::io::Error::other("connection reset"))
+            }
+        });
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(chunks))
+            .unwrap()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!(
+        "[logging]\nbody_dir = \"{}\"\n",
+        dir.path().join("bodies").display()
+    );
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+
+    let res = router
+        .post("/v1/messages", &body("fast", true))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "the status was already on its way");
+    assert!(res.bytes().await.is_err(), "the body ends unfinished");
+
+    let entries = wait_for_entries(&dir.path().join("bodies"), 1).await;
+    let meta = read_json(&entries[0].join("meta.json"));
+    assert_eq!(meta["status"], 200);
+    assert!(
+        meta["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("upstream_error:"),
+        "{meta}"
+    );
+    let recorded = std::fs::read_to_string(entries[0].join("response.sse")).unwrap();
+    assert_eq!(
+        recorded, "event: ping\ndata: {}\n\n",
+        "what did arrive is kept"
+    );
+}
+
+#[tokio::test]
 async fn records_a_request_that_never_reached_the_backend() {
     let dir = tempfile::tempdir().unwrap();
     let extra = format!(
