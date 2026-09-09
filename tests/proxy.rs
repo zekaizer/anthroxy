@@ -372,6 +372,20 @@ async fn unknown_path_is_404_in_anthropic_shape() {
     assert_eq!(res.status(), 404);
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"]["type"], "not_found_error");
+
+    // A method no route takes is answered in the same shape, not with the
+    // empty body axum would send.
+    let res = router.get("/v1/messages").send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "not_found_error");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("GET /v1/messages"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
