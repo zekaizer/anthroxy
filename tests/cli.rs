@@ -208,6 +208,7 @@ fn missing_config_is_a_clear_error() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("cannot read"), "{stderr}");
+    assert!(stderr.contains("anthroxy init"), "{stderr}");
     assert_eq!(
         stderr.matches("/nonexistent/anthroxy.toml").count(),
         1,
