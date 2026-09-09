@@ -36,6 +36,15 @@ pub async fn shell(command: &str, timeout: Duration) -> Result<Run, ServiceError
     run(&["/bin/sh", "-c", command], timeout).await
 }
 
+/// The whole invocation. systemd-run needs an absolute program, so the command
+/// travels as an argument of `/bin/sh`, the interpreter the router itself uses.
+fn argv<'a>(program: &[&'a str]) -> Vec<&'a str> {
+    ARGS.iter()
+        .copied()
+        .chain(program.iter().copied())
+        .collect()
+}
+
 /// The environment a user unit starts with.
 pub async fn environment(timeout: Duration) -> Result<BTreeMap<String, String>, ServiceError> {
     let argv = ["/usr/bin/env", "-0"];
@@ -51,18 +60,17 @@ pub async fn environment(timeout: Duration) -> Result<BTreeMap<String, String>, 
 
 /// Starts one transient unit and waits for it. `Err` means no unit ran: the
 /// manager is out of reach, or it did not finish within `timeout`.
-async fn run(argv: &[&str], timeout: Duration) -> Result<Run, ServiceError> {
+async fn run(command: &[&str], timeout: Duration) -> Result<Run, ServiceError> {
     if !cfg!(target_os = "linux") {
         return Err(ServiceError::Unsupported);
     }
     let failed = |detail: String| ServiceError::Command {
-        command: line(argv),
+        command: line(command),
         detail,
     };
     let started = Instant::now();
     let child = Command::new(PROGRAM)
-        .args(ARGS)
-        .args(argv)
+        .args(argv(command))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -82,8 +90,8 @@ async fn run(argv: &[&str], timeout: Duration) -> Result<Run, ServiceError> {
 }
 
 /// The invocation as run, for an error a user has to act on.
-fn line(argv: &[&str]) -> String {
-    command_line(PROGRAM, &[&ARGS[..], argv].concat())
+fn line(command: &[&str]) -> String {
+    command_line(PROGRAM, &argv(command))
 }
 
 fn first_line(text: &str) -> &str {
@@ -161,6 +169,17 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
+    }
+
+    #[test]
+    fn the_unit_runs_the_command_the_way_the_router_would() {
+        assert_eq!(
+            line(&["/bin/sh", "-c", "cat ~/.token"]),
+            "systemd-run --user --pipe --wait --collect --quiet -- /bin/sh -c cat ~/.token",
+            "no flag may go missing: --pipe keeps the secret off the journal"
+        );
+        assert_eq!(argv(&["/usr/bin/env", "-0"]).last(), Some(&"-0"));
+        assert_eq!(argv(&[])[ARGS.len() - 1], "--", "the command follows `--`");
     }
 
     #[test]
