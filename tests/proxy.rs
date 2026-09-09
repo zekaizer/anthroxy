@@ -411,6 +411,37 @@ async fn unknown_path_is_404_in_anthropic_shape() {
 }
 
 #[tokio::test]
+async fn a_long_path_or_method_is_cut_before_it_is_echoed() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router
+        .get(&format!("/v1/{}", "a".repeat(4096)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.len() < 200 && message.contains('…'), "{message}");
+
+    let res = router
+        .http
+        .request(
+            reqwest::Method::from_bytes(&b"X".repeat(4096)).unwrap(),
+            router.url("/v1/messages"),
+        )
+        .header("x-api-key", TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.len() < 200 && message.contains('…'), "{message}");
+}
+
+#[tokio::test]
 async fn streams_sse_chunks_as_they_arrive() {
     let upstream = MockUpstream::start(|_| {
         let events = futures_util::stream::iter(0..3).then(|i| async move {
