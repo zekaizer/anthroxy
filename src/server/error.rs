@@ -18,7 +18,9 @@ pub enum RouterError {
     BodyTooLarge { limit: usize },
     #[error("cannot read request body: {0}")]
     BodyRead(String),
-    #[error("model `{model}` is not served by this router; configured models: {}", known.join(", "))]
+    /// The name is whatever the client sent, so it is escaped: this message
+    /// reaches a log line that must stay one line.
+    #[error("model `{}` is not served by this router; configured models: {}", model.escape_debug(), known.join(", "))]
     UnknownModel { model: String, known: Vec<String> },
     #[error("no route for {method} {path}")]
     NoRoute { method: String, path: String },
@@ -83,5 +85,22 @@ impl RouterError {
             );
         }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unknown_model_name_cannot_forge_a_log_line() {
+        let error = RouterError::UnknownModel {
+            model: "ghost\n2026-09-09T00:00:00Z  INFO forged".to_owned(),
+            known: vec!["m".to_owned()],
+        };
+        let text = error.to_string();
+        assert!(!text.contains('\n'), "{text}");
+        assert!(text.contains("ghost\\n2026"), "{text}");
+        assert_eq!(error.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -56,7 +56,9 @@ async fn handle(
     span.record("model", route.id.as_str());
     span.record("backend", backend.name.as_str());
     tracing::info!(
-        requested_model = %requested_model,
+        // Debug, not Display: a routed name is only checked against the model
+        // table, which `routing.default_model` makes optional.
+        requested_model = ?requested_model,
         matched = ?resolution.matched,
         upstream_model = %route.upstream_model,
         stream = peek.stream,
