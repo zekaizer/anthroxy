@@ -26,6 +26,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     }
 
     for (name, backend) in &config.backends {
+        if name.trim().is_empty() {
+            problems.push("backends: the name of a backend must not be empty".to_owned());
+        }
         if !header_safe(name) {
             problems.push(format!(
                 "backends.{}: the name is sent in `x-anthroxy-backend` and must be header-safe",
@@ -95,12 +98,21 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 model.id.escape_debug()
             ));
         }
-        if let Some(upstream_model) = &model.upstream_model
-            && !header_safe(upstream_model)
-        {
+        if let Some(upstream_model) = &model.upstream_model {
+            if upstream_model.trim().is_empty() {
+                problems.push(format!(
+                    "models[{index}].upstream_model must not be empty; leave it out to send the id"
+                ));
+            } else if !header_safe(upstream_model) {
+                problems.push(format!(
+                    "models[{index}].upstream_model: `{}` is sent in `x-anthroxy-upstream-model` and must be header-safe",
+                    upstream_model.escape_debug()
+                ));
+            }
+        }
+        if model.aliases.iter().any(|a| a.trim().is_empty()) {
             problems.push(format!(
-                "models[{index}].upstream_model: `{}` is sent in `x-anthroxy-upstream-model` and must be header-safe",
-                upstream_model.escape_debug()
+                "models[{index}].aliases: an alias must not be empty"
             ));
         }
         if !config.backends.contains_key(&model.backend) {

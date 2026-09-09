@@ -303,6 +303,28 @@ fn backend_headers_cannot_take_over_the_connection() {
 }
 
 #[test]
+fn names_that_are_empty_are_rejected_wherever_they_appear() {
+    let cases = [
+        ("\n[backends.\"\"]\nurl = \"http://a\"\n", "backends:"),
+        (
+            "\n[[models]]\nid = \"m2\"\nbackend = \"local\"\nupstream_model = \"\"\n",
+            "upstream_model",
+        ),
+        (
+            "\n[[models]]\nid = \"m3\"\nbackend = \"local\"\naliases = [\"\"]\n",
+            "aliases",
+        ),
+    ];
+    for (extra, needle) in cases {
+        let p = problems(&(MINIMAL.to_owned() + extra));
+        assert!(
+            p.iter().any(|m| m.contains(needle)),
+            "{extra} accepted: {p:?}"
+        );
+    }
+}
+
+#[test]
 fn validation_collects_every_problem() {
     let text = r#"
 [server]
