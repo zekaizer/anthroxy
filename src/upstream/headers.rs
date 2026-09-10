@@ -6,9 +6,10 @@ use http::header::{
 };
 
 use super::Backend;
-use crate::config::X_API_KEY;
+use crate::config::{BackendKind, X_API_KEY};
 
 pub static ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
+static ANTHROPIC_VERSION: HeaderName = HeaderName::from_static("anthropic-version");
 pub static X_ROUTER_BACKEND: HeaderName = HeaderName::from_static("x-anthroxy-backend");
 pub static X_ROUTER_MODEL: HeaderName = HeaderName::from_static("x-anthroxy-model");
 pub static X_ROUTER_UPSTREAM_MODEL: HeaderName =
@@ -41,8 +42,10 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// client library), the client's own `authorization`/`x-api-key` (replaced by
 /// the backend credential) and `accept-encoding` (bodies are relayed and
 /// logged uncompressed). Backend `headers` override, `anthropic_beta` flags
-/// are merged into the client's list.
+/// are merged into the client's list. An `openai` backend gets no
+/// `anthropic-version` or `anthropic-beta` at all (ADR-0010).
 pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
+    let anthropic = backend.kind == BackendKind::Anthropic;
     let mut out = HeaderMap::with_capacity(client.len() + backend.headers.len() + 1);
     for (name, value) in client {
         if is_hop_by_hop(name)
@@ -51,6 +54,7 @@ pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
             || *name == AUTHORIZATION
             || *name == X_API_KEY
             || *name == ACCEPT_ENCODING
+            || (!anthropic && (*name == ANTHROPIC_VERSION || *name == ANTHROPIC_BETA))
         {
             continue;
         }

@@ -3,12 +3,17 @@ use std::time::Duration;
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
-use crate::config::{BackendConfig, CredentialConfig, UpstreamConfig};
+use crate::config::{BackendConfig, BackendKind, CredentialConfig, UpstreamConfig};
 
 fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
+    backend_of_kind(BackendKind::Anthropic, beta, headers)
+}
+
+fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -> Backend {
     Backend::from_config(
         "b",
         &BackendConfig {
+            kind,
             url: "http://backend".into(),
             credential: CredentialConfig::None,
             headers: headers
@@ -109,6 +114,25 @@ fn upstream_headers_merge_beta_flags_without_duplicates() {
     no_beta.remove("anthropic-beta");
     let out = upstream_headers(&no_beta, &backend(&["oauth-2025-04-20"], &[]));
     assert_eq!(out["anthropic-beta"], "oauth-2025-04-20");
+}
+
+#[test]
+fn upstream_headers_for_openai_backends_carry_no_anthropic_headers() {
+    let out = upstream_headers(
+        &client_headers(),
+        &backend_of_kind(BackendKind::OpenAi, &[], &[("x-extra", "1")]),
+    );
+    for dropped in ["anthropic-version", "anthropic-beta"] {
+        assert!(!out.contains_key(dropped), "{dropped} should be dropped");
+    }
+    for kept in [
+        "content-type",
+        "user-agent",
+        "x-stainless-retry-count",
+        "x-extra",
+    ] {
+        assert!(out.contains_key(kept), "{kept} should be kept");
+    }
 }
 
 #[test]

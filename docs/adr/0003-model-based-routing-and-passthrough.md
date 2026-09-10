@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted; body passthrough rule superseded by ADR-0009
+accepted; body passthrough rule superseded by ADR-0009; body relay rules superseded by ADR-0010 for backends with `kind = "openai"`
 
 ## Context
 
