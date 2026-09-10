@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::{Credential, CredentialError, CredentialSource};
+use super::{Credential, CredentialError, CredentialSource, CredentialStatus};
 use crate::config::CredentialHeader;
 
 /// A credential fixed for the life of the process, or none at all.
@@ -50,6 +50,14 @@ impl CredentialSource for FixedCredential {
             (Some(name), _) => format!("env ${name}"),
             (None, Some(_)) => "static".to_owned(),
             (None, None) => "none".to_owned(),
+        }
+    }
+
+    fn status(&self) -> CredentialStatus {
+        CredentialStatus {
+            source: self.describe(),
+            masked: self.credential.as_ref().map(Credential::masked),
+            ..CredentialStatus::default()
         }
     }
 }

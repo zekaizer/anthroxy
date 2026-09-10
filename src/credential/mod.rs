@@ -106,6 +106,34 @@ fn stderr_suffix(stderr: &str) -> String {
     }
 }
 
+/// What a source holds right now and how its recent acquisitions went, for
+/// status output. Never the value itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct CredentialStatus {
+    /// [`CredentialSource::describe`].
+    pub source: String,
+    /// The value a request would carry now, masked; `None` when there is none
+    /// or nothing is cached.
+    pub masked: Option<String>,
+    pub fetched_at: Option<jiff::Timestamp>,
+    /// Reported by the command.
+    pub expires_at: Option<jiff::Timestamp>,
+    /// When the cached value stops being served and the command runs again.
+    pub refresh_at: Option<jiff::Timestamp>,
+    /// Recent runs, oldest first.
+    pub refreshes: Vec<RefreshRecord>,
+}
+
+/// One run of a credential command.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RefreshRecord {
+    pub at: jiff::Timestamp,
+    pub duration_ms: u64,
+    /// The value it produced, masked.
+    pub masked: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Source of a backend's credential.
 #[async_trait]
 pub trait CredentialSource: Send + Sync + std::fmt::Debug {
@@ -123,6 +151,8 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
 
     /// Where the credential comes from, for status output. Never the value.
     fn describe(&self) -> String;
+
+    fn status(&self) -> CredentialStatus;
 }
 
 /// Builds the source for a backend. Static inputs (environment) are resolved
