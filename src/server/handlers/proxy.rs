@@ -11,14 +11,16 @@ use bytes::Bytes;
 use http_body_util::LengthLimitError;
 
 use crate::anthropic;
-use crate::observability::RequestRecord;
+use crate::config::BackendKind;
 use crate::observability::body_log::headers_for_record;
+use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
+use crate::server::handlers::openai;
 use crate::server::relay::Relay;
 use crate::server::{RequestId, RouterError, Snapshot};
 use crate::upstream::{
-    UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
-    header_value, response_headers, upstream_headers,
+    Backend, UpstreamError, UpstreamRequest, UpstreamResponse, X_ROUTER_BACKEND, X_ROUTER_MODEL,
+    X_ROUTER_UPSTREAM_MODEL, header_value, response_headers, upstream_headers,
 };
 
 pub async fn proxy(
@@ -69,11 +71,15 @@ async fn handle(
         None => body,
     };
 
-    let path_and_query = parts
+    let client_path = parts
         .uri
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or("/");
+    let (path_and_query, body) = match backend.kind {
+        BackendKind::Anthropic => (client_path, body),
+        BackendKind::OpenAi => openai::prepare(&body, client_path, &backend.name)?,
+    };
     let headers = upstream_headers(&parts.headers, backend);
     let recorder = state.body_log.as_ref().map(|log| {
         let record = request_record(
@@ -123,7 +129,45 @@ async fn handle(
         header_value(&route.upstream_model),
     );
 
-    let body = if status.is_client_error() || status.is_server_error() {
+    let body = match backend.kind {
+        BackendKind::Anthropic => {
+            relay_body(upstream, backend, request_id, span, started, recorder).await?
+        }
+        BackendKind::OpenAi => {
+            let (overrides, body) = openai::body(
+                upstream,
+                backend,
+                &route.upstream_model,
+                peek.stream,
+                request_id,
+                span,
+                started,
+                recorder,
+            )
+            .await?;
+            headers.extend(overrides);
+            body
+        }
+    };
+
+    let mut response = Response::new(body);
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    Ok(response)
+}
+
+/// ADR-0003: error bodies are buffered and annotated, everything else is
+/// relayed as it arrives.
+async fn relay_body(
+    upstream: UpstreamResponse,
+    backend: &Backend,
+    request_id: &RequestId,
+    span: tracing::Span,
+    started: Instant,
+    recorder: Option<Recorder>,
+) -> Result<Body, RouterError> {
+    let status = upstream.response.status();
+    if status.is_client_error() || status.is_server_error() {
         let raw = upstream
             .response
             .bytes()
@@ -140,23 +184,19 @@ async fn handle(
         if let Some(recorder) = recorder {
             recorder.finish_with_body(&raw);
         }
-        match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
-            Some(annotated) => Body::from(annotated),
-            None => Body::from(raw),
-        }
-    } else {
-        Body::from_stream(Relay::new(
-            upstream.response.bytes_stream(),
-            span,
-            started,
-            recorder,
-        ))
-    };
-
-    let mut response = Response::new(body);
-    *response.status_mut() = status;
-    *response.headers_mut() = headers;
-    Ok(response)
+        return Ok(
+            match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
+                Some(annotated) => Body::from(annotated),
+                None => Body::from(raw),
+            },
+        );
+    }
+    Ok(Body::from_stream(Relay::new(
+        upstream.response.bytes_stream(),
+        span,
+        started,
+        recorder,
+    )))
 }
 
 /// Snapshot for the body log. `headers` are the ones going upstream; the

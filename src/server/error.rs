@@ -4,7 +4,7 @@ use axum::response::{IntoResponse, Response};
 use http::StatusCode;
 
 use super::RequestId;
-use crate::anthropic::{ErrorResponse, ErrorType, PeekError};
+use crate::anthropic::{DecodeError, ErrorResponse, ErrorType, PeekError};
 use crate::routing::Registry;
 use crate::upstream::UpstreamError;
 
@@ -24,6 +24,19 @@ pub enum RouterError {
     NoRoute { method: String, path: String },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
+    /// The request cannot be expressed in the backend's API (ADR-0010).
+    #[error("request cannot be sent to backend `{backend}`: {source}")]
+    Translate {
+        backend: String,
+        #[source]
+        source: DecodeError,
+    },
+    /// The route exists but the backend's API has no such operation.
+    #[error("{path} is not available on backend `{backend}` (kind = \"openai\")")]
+    NotOnOpenAi { backend: String, path: String },
+    /// A 2xx body the router cannot turn into a Messages response.
+    #[error("backend `{backend}` returned a response the router cannot translate: {detail}")]
+    BadUpstreamResponse { backend: String, detail: String },
 }
 
 impl RouterError {
@@ -41,12 +54,16 @@ impl RouterError {
     pub fn error_type(&self) -> ErrorType {
         match self {
             RouterError::Unauthorized => ErrorType::AuthenticationError,
-            RouterError::BadRequest(_) | RouterError::BodyRead(_) => ErrorType::InvalidRequestError,
+            RouterError::BadRequest(_)
+            | RouterError::BodyRead(_)
+            | RouterError::Translate { .. } => ErrorType::InvalidRequestError,
             RouterError::BodyTooLarge { .. } => ErrorType::RequestTooLarge,
-            RouterError::UnknownModel { .. } | RouterError::NoRoute { .. } => {
-                ErrorType::NotFoundError
+            RouterError::UnknownModel { .. }
+            | RouterError::NoRoute { .. }
+            | RouterError::NotOnOpenAi { .. } => ErrorType::NotFoundError,
+            RouterError::Upstream(_) | RouterError::BadUpstreamResponse { .. } => {
+                ErrorType::ApiError
             }
-            RouterError::Upstream(_) => ErrorType::ApiError,
         }
     }
 
@@ -54,7 +71,9 @@ impl RouterError {
     /// could not reach the backend" from a backend's own 500.
     pub fn status(&self) -> StatusCode {
         match self {
-            RouterError::Upstream(_) => StatusCode::BAD_GATEWAY,
+            RouterError::Upstream(_) | RouterError::BadUpstreamResponse { .. } => {
+                StatusCode::BAD_GATEWAY
+            }
             other => other.error_type().status(),
         }
     }
@@ -66,7 +85,10 @@ impl RouterError {
                 UpstreamError::Credential { backend, .. }
                 | UpstreamError::Transport { backend, .. }
                 | UpstreamError::Body { backend, .. },
-            ) => Some(backend),
+            )
+            | RouterError::Translate { backend, .. }
+            | RouterError::NotOnOpenAi { backend, .. }
+            | RouterError::BadUpstreamResponse { backend, .. } => Some(backend),
             _ => None,
         }
     }
