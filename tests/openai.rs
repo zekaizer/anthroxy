@@ -42,8 +42,10 @@ fn claude_code_request(stream: bool) -> Value {
             ]},
             {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": "fn main() {}"}]}
-            ]}
+            ]},
+            {"role": "system", "content": [{"type": "text", "text": "# Environment\ncwd changed", "cache_control": {"type": "ephemeral"}}]}
         ],
+        "output_config": {"effort": "high"},
         "tools": [{"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}],
         "tool_choice": {"type": "auto"},
         "metadata": {"user_id": "u1"},
@@ -88,7 +90,8 @@ async fn translates_messages_request_to_chat_completions() {
                 {"role": "assistant", "content": "Reading", "tool_calls": [
                     {"id": "toolu_1", "type": "function", "function": {"name": "Read", "arguments": "{\"path\":\"a.rs\"}"}}
                 ]},
-                {"role": "tool", "tool_call_id": "toolu_1", "content": "fn main() {}"}
+                {"role": "tool", "tool_call_id": "toolu_1", "content": "fn main() {}"},
+                {"role": "system", "content": "# Environment\ncwd changed"}
             ],
             "tools": [{"type": "function", "function": {"name": "Read", "description": "Read a file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}],
             "tool_choice": "auto",

@@ -24,6 +24,8 @@ pub struct Message {
 pub enum Role {
     User,
     Assistant,
+    /// Instructions placed mid-conversation; text only.
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq)]

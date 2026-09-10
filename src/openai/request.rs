@@ -120,6 +120,7 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
         json!(match message.role {
             Role::User => "user",
             Role::Assistant => "assistant",
+            Role::System => "system",
         }),
     );
     if let Some(content) = content {

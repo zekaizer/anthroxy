@@ -12,7 +12,7 @@ pub enum DecodeError {
     NotAnObject,
     #[error("`{0}` is missing or has the wrong type")]
     Field(&'static str),
-    #[error("messages[{index}].role `{role}` is not `user` or `assistant`")]
+    #[error("messages[{index}].role `{role}` is not `user`, `assistant` or `system`")]
     Role { index: usize, role: String },
     #[error("messages[{index}] has a `{block}` block, which cannot be sent to this backend")]
     UnsupportedBlock { index: usize, block: String },
@@ -121,6 +121,7 @@ fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, Decod
     let role = match field_str(message, "role")? {
         "user" => Role::User,
         "assistant" => Role::Assistant,
+        "system" => Role::System,
         other => {
             return Err(DecodeError::Role {
                 index,
@@ -140,7 +141,9 @@ fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, Decod
         let misplaced = match (role, part) {
             (Role::User, Part::ToolUse { .. }) => Some("tool_use"),
             (Role::Assistant, Part::ToolResult { .. }) => Some("tool_result"),
-            (Role::Assistant, Part::Image { .. }) => Some("image"),
+            (Role::Assistant | Role::System, Part::Image { .. }) => Some("image"),
+            (Role::System, Part::ToolUse { .. }) => Some("tool_use"),
+            (Role::System, Part::ToolResult { .. }) => Some("tool_result"),
             _ => None,
         };
         if let Some(block) = misplaced {
@@ -535,6 +538,32 @@ mod tests {
     }
 
     #[test]
+    fn mid_conversation_system_messages_keep_their_place() {
+        let mut v = base();
+        v["messages"] = json!([
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": [{"type": "text", "text": "env changed", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "assistant", "content": "ok"}
+        ]);
+        let messages = decode_json(v).unwrap().messages;
+        assert_eq!(messages[1].role, Role::System);
+        assert_eq!(messages[1].parts, vec![Part::Text("env changed".into())]);
+
+        let mut v = base();
+        v["messages"] = json!([{"role": "system", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
+        ]}]);
+        assert_eq!(
+            decode_json(v),
+            Err(DecodeError::WrongRole {
+                index: 0,
+                block: "image".into(),
+                role: "system".into()
+            })
+        );
+    }
+
+    #[test]
     fn structural_errors() {
         assert_eq!(decode(b"[]"), Err(DecodeError::NotAnObject));
         assert_eq!(decode(b"not json"), Err(DecodeError::NotAnObject));
@@ -543,12 +572,12 @@ mod tests {
             Err(DecodeError::Field("messages"))
         );
         let mut v = base();
-        v["messages"] = json!([{"role": "system", "content": "x"}]);
+        v["messages"] = json!([{"role": "tool", "content": "x"}]);
         assert_eq!(
             decode_json(v),
             Err(DecodeError::Role {
                 index: 0,
-                role: "system".into()
+                role: "tool".into()
             })
         );
         let mut v = base();

@@ -649,3 +649,25 @@ fn a_turn_whose_parts_were_all_dropped_still_keeps_role_alternation() {
         ])
     );
 }
+
+#[test]
+fn mid_conversation_system_messages_stay_in_place() {
+    let mut r = request(vec![
+        user(vec![Part::Text("hi".into())]),
+        RequestMessage {
+            role: Role::System,
+            parts: vec![Part::Text("env changed".into()), Part::Text("again".into())],
+        },
+        assistant(vec![Part::Text("ok".into())]),
+    ]);
+    r.system = Some("top".into());
+    assert_eq!(
+        encoded(&r)["messages"],
+        json!([
+            {"role": "system", "content": "top"},
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "env changed\n\nagain"},
+            {"role": "assistant", "content": "ok"}
+        ])
+    );
+}
