@@ -4,6 +4,8 @@ fn usage(input: u64, output: u64) -> Usage {
     Usage {
         input_tokens: input,
         output_tokens: output,
+        cache_read_tokens: 0,
+        thinking_tokens: 0,
     }
 }
 

@@ -165,6 +165,11 @@ pub(super) fn content_events(delta: &serde_json::Map<String, Value>, events: &mu
     if !reasoning.is_empty() {
         events.push(Event::ThinkingDelta(reasoning.to_owned()));
     }
+    if let Some(refusal) = delta.get("refusal").and_then(Value::as_str)
+        && !refusal.is_empty()
+    {
+        events.push(Event::TextDelta(refusal.to_owned()));
+    }
     match delta.get("content") {
         Some(Value::String(text)) if !text.is_empty() => {
             events.push(Event::TextDelta(text.clone()));
@@ -187,16 +192,29 @@ pub(super) fn stop_reason(finish_reason: &str) -> StopReason {
     match finish_reason {
         "length" => StopReason::MaxTokens,
         "tool_calls" | "function_call" => StopReason::ToolUse,
+        "content_filter" => StopReason::Refusal,
         _ => StopReason::EndTurn,
     }
 }
 
+/// `prompt_tokens` counts cached tokens too; the IR keeps them apart, as
+/// the Anthropic API does.
 pub(super) fn usage_event(root: &serde_json::Map<String, Value>) -> Option<Event> {
     let usage = root.get("usage")?.as_object()?;
     let count = |field: &str| usage.get(field).and_then(Value::as_u64).unwrap_or(0);
+    let detail = |group: &str, field: &str| {
+        usage
+            .get(group)
+            .and_then(|g| g.get(field))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let cache_read_tokens = detail("prompt_tokens_details", "cached_tokens");
     Some(Event::Usage(Usage {
-        input_tokens: count("prompt_tokens"),
+        input_tokens: count("prompt_tokens").saturating_sub(cache_read_tokens),
         output_tokens: count("completion_tokens"),
+        cache_read_tokens,
+        thinking_tokens: detail("completion_tokens_details", "reasoning_tokens"),
     }))
 }
 

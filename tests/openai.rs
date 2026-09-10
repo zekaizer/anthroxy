@@ -98,6 +98,8 @@ async fn translates_messages_request_to_chat_completions() {
             "max_tokens": 4096,
             "temperature": 1.0,
             "stop": ["END"],
+            "reasoning_effort": "high",
+            "user": "u1",
             "stream": false
         })
     );
@@ -275,7 +277,7 @@ async fn finish_reasons_map_to_stop_reasons() {
         ("stop", "end_turn"),
         ("length", "max_tokens"),
         ("tool_calls", "tool_use"),
-        ("content_filter", "end_turn"),
+        ("content_filter", "refusal"),
     ] {
         let upstream = MockUpstream::start(move |_| {
             let mut frames = vec![chunk(

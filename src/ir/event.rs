@@ -33,10 +33,17 @@ pub enum StopReason {
     EndTurn,
     MaxTokens,
     ToolUse,
+    /// The backend declined to continue (content filter).
+    Refusal,
 }
 
+/// Token counts in the Anthropic sense: `input_tokens` excludes what was
+/// read from a prompt cache, which is counted in `cache_read_tokens`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    /// Part of `output_tokens` spent on reasoning.
+    pub thinking_tokens: u64,
 }

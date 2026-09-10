@@ -161,10 +161,7 @@ impl StreamEncoder {
             json!({
                 "type": "message_delta",
                 "delta": {"stop_reason": stop_reason_name(stop_reason), "stop_sequence": null},
-                "usage": {
-                    "input_tokens": self.usage.input_tokens,
-                    "output_tokens": self.usage.output_tokens,
-                },
+                "usage": usage_json(&self.usage),
             }),
             out,
         );
@@ -255,7 +252,29 @@ pub(super) fn stop_reason_name(reason: StopReason) -> &'static str {
         StopReason::EndTurn => "end_turn",
         StopReason::MaxTokens => "max_tokens",
         StopReason::ToolUse => "tool_use",
+        StopReason::Refusal => "refusal",
     }
+}
+
+/// Anthropic usage: cache and thinking counters only when there are any,
+/// so a backend that reports none yields the plain two-field shape.
+pub(super) fn usage_json(usage: &Usage) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("input_tokens".into(), json!(usage.input_tokens));
+    out.insert("output_tokens".into(), json!(usage.output_tokens));
+    if usage.cache_read_tokens > 0 {
+        out.insert(
+            "cache_read_input_tokens".into(),
+            json!(usage.cache_read_tokens),
+        );
+    }
+    if usage.thinking_tokens > 0 {
+        out.insert(
+            "output_tokens_details".into(),
+            json!({"thinking_tokens": usage.thinking_tokens}),
+        );
+    }
+    Value::Object(out)
 }
 
 fn delta(block: u32, delta: Value, out: &mut String) {
@@ -324,6 +343,8 @@ mod tests {
             Event::Usage(Usage {
                 input_tokens: 12,
                 output_tokens: 34,
+                cache_read_tokens: 0,
+                thinking_tokens: 0,
             }),
             Event::Done,
         ]);
@@ -429,6 +450,53 @@ mod tests {
         ]);
         assert!(out.contains(r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"late"}}"#), "{out}");
         assert!(!out.contains("orphan"), "{out}");
+    }
+
+    #[test]
+    fn cache_reads_are_reported_only_when_present() {
+        let with_cache = run([
+            start(),
+            Event::TextDelta("x".into()),
+            Event::Usage(Usage {
+                input_tokens: 10,
+                output_tokens: 2,
+                cache_read_tokens: 500,
+                thinking_tokens: 0,
+            }),
+            Event::Done,
+        ]);
+        assert!(
+            with_cache.contains(
+                r#""usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":500}"#
+            ),
+            "{with_cache}"
+        );
+        let without = run([start(), Event::TextDelta("x".into()), Event::Done]);
+        assert!(
+            without.contains(r#""usage":{"input_tokens":0,"output_tokens":0}"#),
+            "{without}"
+        );
+    }
+
+    #[test]
+    fn thinking_tokens_and_refusals_are_reported() {
+        let out = run([
+            start(),
+            Event::TextDelta("no".into()),
+            Event::Finish(StopReason::Refusal),
+            Event::Usage(Usage {
+                input_tokens: 1,
+                output_tokens: 9,
+                cache_read_tokens: 0,
+                thinking_tokens: 7,
+            }),
+            Event::Done,
+        ]);
+        assert!(out.contains(r#""stop_reason":"refusal""#), "{out}");
+        assert!(
+            out.contains(r#""usage":{"input_tokens":1,"output_tokens":9,"output_tokens_details":{"thinking_tokens":7}}"#),
+            "{out}"
+        );
     }
 
     #[test]

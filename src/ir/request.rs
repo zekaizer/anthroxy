@@ -12,6 +12,12 @@ pub struct Request {
     pub top_p: Option<f64>,
     pub stop: Vec<String>,
     pub stream: bool,
+    /// Caller identifier for the backend's own accounting.
+    pub user: Option<String>,
+    /// `low`, `medium` or `high`.
+    pub reasoning_effort: Option<String>,
+    /// `Some(false)` when the caller forbids parallel tool calls.
+    pub parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

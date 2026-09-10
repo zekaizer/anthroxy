@@ -28,10 +28,7 @@ pub fn encode(message: &Message) -> Vec<u8> {
         "content": content,
         "stop_reason": super::stream::stop_reason_name(message.stop_reason),
         "stop_sequence": null,
-        "usage": {
-            "input_tokens": message.usage.input_tokens,
-            "output_tokens": message.usage.output_tokens,
-        },
+        "usage": super::stream::usage_json(&message.usage),
     });
     serde_json::to_vec(&document).expect("a JSON tree serializes")
 }
@@ -74,6 +71,8 @@ mod tests {
             usage: Usage {
                 input_tokens: 5,
                 output_tokens: 7,
+                cache_read_tokens: 300,
+                thinking_tokens: 0,
             },
         };
         let document: serde_json::Value = serde_json::from_slice(&encode(&message)).unwrap();
@@ -92,7 +91,7 @@ mod tests {
                 ],
                 "stop_reason": "tool_use",
                 "stop_sequence": null,
-                "usage": {"input_tokens": 5, "output_tokens": 7}
+                "usage": {"input_tokens": 5, "output_tokens": 7, "cache_read_input_tokens": 300}
             })
         );
     }

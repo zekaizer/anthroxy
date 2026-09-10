@@ -55,6 +55,15 @@ pub fn encode(request: &Request) -> Vec<u8> {
     if !request.stop.is_empty() {
         body.insert("stop".into(), json!(request.stop));
     }
+    if let Some(parallel) = request.parallel_tool_calls {
+        body.insert("parallel_tool_calls".into(), json!(parallel));
+    }
+    if let Some(effort) = &request.reasoning_effort {
+        body.insert("reasoning_effort".into(), json!(effort));
+    }
+    if let Some(user) = &request.user {
+        body.insert("user".into(), json!(user));
+    }
     body.insert("stream".into(), json!(request.stream));
     if request.stream {
         body.insert("stream_options".into(), json!({"include_usage": true}));

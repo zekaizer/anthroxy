@@ -124,6 +124,7 @@ fn request_round_trips_through_the_ir() {
             "model": "m",
             "messages": [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
             "max_tokens": 5,
+            "user": "u",
             "stream": true,
             "stream_options": {"include_usage": true}
         })
@@ -336,6 +337,8 @@ fn streaming_and_document_paths_produce_the_same_message() {
             Event::Usage(Usage {
                 input_tokens: 3,
                 output_tokens: 4,
+                cache_read_tokens: 0,
+                thinking_tokens: 0,
             }),
             Event::Done,
         ],

@@ -68,6 +68,12 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
             .collect::<Result<Vec<_>, _>>()?,
         Some(_) => return Err(DecodeError::Field("tools")),
     };
+    let parallel_tool_calls = root
+        .get("tool_choice")
+        .and_then(|c| c.get("disable_parallel_tool_use"))
+        .and_then(Value::as_bool)
+        .filter(|&disabled| disabled)
+        .map(|_| false);
     let tool_choice = match root.get("tool_choice") {
         None | Some(Value::Null) => None,
         Some(choice) => Some(match field_str(choice, "type")? {
@@ -101,6 +107,20 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
         top_p: optional(root, "top_p", Value::as_f64)?,
         stop,
         stream: optional(root, "stream", Value::as_bool)?.unwrap_or(false),
+        user: root
+            .get("metadata")
+            .and_then(|m| m.get("user_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        reasoning_effort: root
+            .get("output_config")
+            .and_then(|o| o.get("effort"))
+            .and_then(Value::as_str)
+            .map(|effort| match effort {
+                "max" => "high".to_owned(),
+                other => other.to_owned(),
+            }),
+        parallel_tool_calls,
     })
 }
 
@@ -319,6 +339,9 @@ mod tests {
                 top_p: None,
                 stop: vec![],
                 stream: false,
+                user: None,
+                reasoning_effort: None,
+                parallel_tool_calls: None,
             }
         );
     }
@@ -630,6 +653,26 @@ mod tests {
                 images: vec![],
             }
         );
+    }
+
+    #[test]
+    fn user_id_effort_and_parallel_flag_are_kept() {
+        let mut v = base();
+        v["metadata"] = json!({"user_id": "{\"device_id\":\"d\"}"});
+        v["output_config"] = json!({"effort": "max"});
+        v["tool_choice"] = json!({"type": "auto", "disable_parallel_tool_use": true});
+        let request = decode_json(v).unwrap();
+        assert_eq!(request.user.as_deref(), Some("{\"device_id\":\"d\"}"));
+        assert_eq!(request.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(request.parallel_tool_calls, Some(false));
+
+        let mut v = base();
+        v["output_config"] = json!({"effort": "low"});
+        v["tool_choice"] = json!({"type": "auto", "disable_parallel_tool_use": false});
+        let request = decode_json(v).unwrap();
+        assert_eq!(request.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(request.parallel_tool_calls, None);
+        assert_eq!(decode_json(base()).unwrap().user, None);
     }
 
     #[test]

@@ -15,6 +15,9 @@ fn request(messages: Vec<RequestMessage>) -> Request {
         top_p: None,
         stop: vec![],
         stream: false,
+        user: None,
+        reasoning_effort: None,
+        parallel_tool_calls: None,
     }
 }
 
@@ -382,7 +385,7 @@ fn finish_reasons_usage_done_and_errors() {
         ("stop", StopReason::EndTurn),
         ("length", StopReason::MaxTokens),
         ("tool_calls", StopReason::ToolUse),
-        ("content_filter", StopReason::EndTurn),
+        ("content_filter", StopReason::Refusal),
         ("function_call", StopReason::ToolUse),
     ] {
         assert_eq!(
@@ -397,7 +400,9 @@ fn finish_reasons_usage_done_and_errors() {
         d.decode(&usage_only.to_string()).unwrap(),
         vec![Event::Usage(Usage {
             input_tokens: 12,
-            output_tokens: 34
+            output_tokens: 34,
+            cache_read_tokens: 0,
+            thinking_tokens: 0,
         })]
     );
     assert_eq!(d.decode("[DONE]").unwrap(), vec![Event::Done]);
@@ -429,7 +434,9 @@ fn a_usage_chunk_may_also_carry_a_delta() {
             Event::Finish(StopReason::EndTurn),
             Event::Usage(Usage {
                 input_tokens: 1,
-                output_tokens: 2
+                output_tokens: 2,
+                cache_read_tokens: 0,
+                thinking_tokens: 0,
             }),
         ]
     );
@@ -493,7 +500,9 @@ fn completed_response_yields_the_stream_events() {
         events[8],
         Event::Usage(Usage {
             input_tokens: 5,
-            output_tokens: 7
+            output_tokens: 7,
+            cache_read_tokens: 0,
+            thinking_tokens: 0,
         })
     );
     assert_eq!(
@@ -707,4 +716,92 @@ fn images_in_a_tool_result_follow_it_in_a_user_message() {
             ]}
         ])
     );
+}
+
+#[test]
+fn cached_prompt_tokens_are_split_out_of_the_input_count() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let usage_only = json!({"id": "chatcmpl-1", "model": "qwen", "choices": [],
+        "usage": {"prompt_tokens": 25000, "completion_tokens": 40, "total_tokens": 25040,
+                  "prompt_tokens_details": {"cached_tokens": 24000}}});
+    assert_eq!(
+        d.decode(&usage_only.to_string()).unwrap(),
+        vec![Event::Usage(Usage {
+            input_tokens: 1000,
+            output_tokens: 40,
+            cache_read_tokens: 24000,
+            thinking_tokens: 0,
+        })]
+    );
+    let inconsistent = json!({"id": "x", "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 1,
+        "prompt_tokens_details": {"cached_tokens": 50}}});
+    assert_eq!(
+        d.decode(&inconsistent.to_string()).unwrap(),
+        vec![Event::Usage(Usage {
+            input_tokens: 0,
+            output_tokens: 1,
+            cache_read_tokens: 50,
+            thinking_tokens: 0,
+        })],
+        "a cache count above the prompt count cannot go negative"
+    );
+    let body = json!({"id": "chatcmpl-9", "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 60}}});
+    let events = decode_response(&serde_json::to_vec(&body).unwrap()).unwrap();
+    assert!(
+        events.contains(&Event::Usage(Usage {
+            input_tokens: 40,
+            output_tokens: 5,
+            cache_read_tokens: 60,
+            thinking_tokens: 0,
+        })),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn reasoning_tokens_and_refusals_are_carried() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let usage = json!({"id": "x", "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 30,
+        "completion_tokens_details": {"reasoning_tokens": 25}}});
+    assert_eq!(
+        d.decode(&usage.to_string()).unwrap(),
+        vec![Event::Usage(Usage {
+            input_tokens: 10,
+            output_tokens: 30,
+            cache_read_tokens: 0,
+            thinking_tokens: 25,
+        })]
+    );
+    assert_eq!(
+        d.decode(&chunk(
+            json!({"refusal": "I cannot help with that."}),
+            Some("content_filter")
+        ))
+        .unwrap(),
+        vec![
+            Event::TextDelta("I cannot help with that.".into()),
+            Event::Finish(StopReason::Refusal),
+        ]
+    );
+}
+
+#[test]
+fn user_effort_and_parallel_tool_calls_are_forwarded() {
+    let mut r = request(vec![user(vec![Part::Text("hi".into())])]);
+    r.user = Some("device-1".into());
+    r.reasoning_effort = Some("high".into());
+    r.parallel_tool_calls = Some(false);
+    let body = encoded(&r);
+    assert_eq!(body["user"], json!("device-1"));
+    assert_eq!(body["reasoning_effort"], json!("high"));
+    assert_eq!(body["parallel_tool_calls"], json!(false));
+    let plain = encoded(&request(vec![user(vec![Part::Text("hi".into())])]));
+    for key in ["user", "reasoning_effort", "parallel_tool_calls"] {
+        assert!(plain.get(key).is_none(), "{key} absent when unset");
+    }
 }
