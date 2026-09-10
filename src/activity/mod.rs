@@ -11,7 +11,7 @@ mod tests;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::anthropic::TokenUsage;
 use crate::config::BackendKind;
@@ -26,7 +26,7 @@ pub const RECENT: usize = 200;
 pub const ERROR_BODY_BYTES: usize = 16 * 1024;
 
 /// Who sent a request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Client,
@@ -35,7 +35,7 @@ pub enum Source {
 }
 
 /// How an exchange ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Complete,

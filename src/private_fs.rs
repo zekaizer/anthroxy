@@ -40,3 +40,28 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
+
+/// Appends to `path`, creating it owner-only when missing.
+#[cfg(unix)]
+pub fn append_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .open(path)?
+        .write_all(bytes)
+}
+
+#[cfg(not(unix))]
+pub fn append_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)?
+        .write_all(bytes)
+}
