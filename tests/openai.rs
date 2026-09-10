@@ -383,6 +383,87 @@ async fn error_chunk_mid_stream_yields_error_event() {
 }
 
 #[tokio::test]
+async fn upstream_content_type_variants_are_normalized() {
+    let upstream = MockUpstream::start(|_| {
+        let mut frames = vec![chunk(
+            json!({"role": "assistant", "content": "x"}),
+            Some("stop"),
+        )];
+        frames.extend(usage_and_done(1, 1));
+        let mut response = sse_response(frames, Duration::ZERO);
+        response.headers_mut().insert(
+            "content-type",
+            "text/event-stream; charset=utf-8".parse().unwrap(),
+        );
+        response
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(true))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    assert_eq!(res.headers()["cache-control"], "no-cache");
+    assert_eq!(res.headers().get_all("content-type").iter().count(), 1);
+}
+
+#[tokio::test]
+async fn upstream_is_drained_after_an_error_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = MockUpstream::start(|_| {
+        sse_response(
+            vec![
+                chunk(json!({"role": "assistant", "content": "hi"}), None),
+                frame(&json!({"error": {"message": "overloaded"}})),
+                chunk(json!({"content": "after-the-error"}), Some("stop")),
+                "data: [DONE]\n\n".to_owned(),
+            ],
+            Duration::from_millis(10),
+        )
+    })
+    .await;
+    let extra = format!("[logging]\nbody_dir = \"{}\"\n", dir.path().display());
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), &extra)).await;
+    let text = router
+        .post("/v1/messages", &claude_code_request(true))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!text.contains("after-the-error"), "{text}");
+
+    let mut entry = None;
+    for _ in 0..100 {
+        let found = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| {
+                std::fs::read(p.join("meta.json"))
+                    .map(|m| String::from_utf8_lossy(&m).contains("outcome"))
+                    .unwrap_or(false)
+            });
+        if found.is_some() {
+            entry = found;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let entry = entry.expect("a finished body log entry");
+    let meta: Value =
+        serde_json::from_slice(&std::fs::read(entry.join("meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["outcome"], "complete", "upstream was read to the end");
+    let recorded = std::fs::read_to_string(entry.join("response.sse")).unwrap();
+    assert!(
+        recorded.contains("after-the-error"),
+        "the backend's bytes are recorded in full"
+    );
+}
+
+#[tokio::test]
 async fn openai_error_becomes_anthropic_error() {
     let upstream = MockUpstream::start(|received| {
         if received.header("authorization") == Some("Bearer backend-secret-key") {
@@ -423,6 +504,11 @@ async fn openai_error_becomes_anthropic_error() {
         .await
         .unwrap();
     assert_eq!(res.status(), 503);
+    assert_eq!(
+        res.headers()["content-type"],
+        "application/json",
+        "the router's document replaces the backend's content-type"
+    );
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"]["type"], "api_error");
     assert_eq!(
