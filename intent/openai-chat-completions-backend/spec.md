@@ -29,10 +29,11 @@ Claude Code → `POST /v1/messages` → body buffered, `model` and `stream` peek
 
 - F1. Anthropic streaming events: `message_start` / `content_block_start` / `ping` / `content_block_delta` (text_delta, input_json_delta, thinking_delta, signature_delta) / `content_block_stop` / `message_delta` (stop_reason, usage) / `message_stop` / `error`. [platform.claude.com, "Streaming messages"]
 - F2. OpenCode: `@ai-sdk/openai-compatible` → `/v1/chat/completions`, `@ai-sdk/openai` → `/v1/responses`. [opencode.ai/docs/providers]
+- F3. Chat Completions streaming as consumed by `@ai-sdk/openai-compatible` (the code OpenCode runs): `choices[0].delta.{content (string or text parts), reasoning_content | reasoning, tool_calls[{index?, id?, function{name?, arguments?}}]}`, `choices[0].finish_reason`, top-level `usage` (nullable), `data: [DONE]`, error frames `{"error": …}`; some servers send the first tool-call delta without `function.name`, some omit `index` or `id`; the SDK does not send `stream_options` unless configured. [github.com/vercel/ai, packages/openai-compatible/src/chat/openai-compatible-chat-language-model.ts, 2026-09-10]
 
 ## 4. Assumptions
 
-- A1. OpenAI Chat Completions streaming format: `chat.completion.chunk` lines with `delta.content`, `delta.tool_calls[{index, id, function{name, arguments}}]`, `finish_reason ∈ {stop, length, tool_calls, content_filter}`, usage in the final chunk when `stream_options.include_usage` is set, terminated by `data: [DONE]`. (basis: OpenAI API reference, re-fetch failed today with 403 / verify: U2 / if wrong: R5–R7 revisited)
+- ~~A1~~ (promoted to F3)
 - A2. Extent of the in-house service's implementation unknown — tools streaming, `stream_options`, `system` role, `reasoning_content`. (verify: U2)
 - A3. The set of fields Claude Code sends: `model`, `max_tokens`, `messages` (text/tool_use/tool_result/image/thinking blocks), `system` (array with cache_control), `tools` (input_schema), `tool_choice`, `metadata.user_id`, `stream`, `temperature`, `thinking`, `context_management` (beta). (basis: general knowledge + ADR-0009 / verify: U1 / if wrong: IC3 and R10 targets change)
 - A4. Images are inline base64 png/jpeg. (verify: U1 / if wrong: translated types change)
@@ -53,11 +54,11 @@ Common premise: WHERE the backend is configured as the OpenAI kind.
 - R7. The system SHALL translate `finish_reason` and `usage` into `stop_reason` and `usage` per IC4. (Must) — Verify: `stop/length/tool_calls` yield `end_turn/max_tokens/tool_use` in `message_delta` — Basis: F1, A1
 - R8. WHEN `stream=false` THEN the system SHALL translate the completed response into an Anthropic message document. (Should — promoted to Must depending on U5) — Verify: a non-streaming tool_calls response becomes `content[]` with `text` and `tool_use` blocks — Basis: A3
 - R9. The system SHALL NOT forward `thinking` or `redacted_thinking` blocks from the history to the backend. (Must) — Verify: with a history produced by an Anthropic backend, the mock backend receives no such content — Basis: G1(d), E10
-- R10. The system SHALL NOT forward fields with no Chat Completions counterpart (`cache_control`, `metadata`, `context_management`, the `thinking` request parameter). (Must) — Verify: the mock backend's body contains none of these keys — Basis: A3, ADR-0009 context (fixed-schema servers answer 400)
+- R10. The system SHALL NOT forward fields with no Chat Completions counterpart (`cache_control`, `metadata`, `context_management`, `top_k`, the `thinking` request parameter). (Must) — Verify: the mock backend's body contains none of these keys — Basis: A3, ADR-0009 context (fixed-schema servers answer 400)
 - R11. The system SHALL translate `image` blocks (base64) into `image_url` parts with a `data:` URI. (Should) — Verify: one png block arrives as `data:image/png;base64,…` — Basis: user round 1, A4, U6
 - R12. IF the backend returns 4xx/5xx THEN the system SHALL translate it into an Anthropic error document per IC5, prefixing the message with backend name and status. (Must) — Verify: an OpenAI-shaped 401 body becomes `authentication_error` and `error.message` starts with `[backend X, HTTP 401]` — Basis: G1(c), E7, D3
 - R13. IF the backend connection drops or an error chunk arrives mid-stream THEN the system SHALL send an Anthropic `error` event and close the stream. (Must) — Verify: when the mock backend disconnects after two chunks the client receives `event: error` and the stream ends — Basis: G1(c), F1
-- R14. WHEN a backend chunk carries `reasoning_content` THEN the system SHALL forward it as `thinking_delta` of a `thinking` block. (Must) — Verify: three reasoning chunks followed by text chunks yield a `thinking` block at index 0 and a `text` block at index 1, in order — Basis: user round 3, F1
+- R14. WHEN a backend chunk carries `reasoning_content` (or `reasoning`) THEN the system SHALL forward it as `thinking_delta` of a `thinking` block, in arrival order relative to other content. (Must) — Verify: three reasoning chunks followed by text chunks yield a `thinking` block at index 0 and a `text` block at index 1, in order — Basis: user round 3, F1, F3
 
 ### Non-functional
 
@@ -70,8 +71,8 @@ Common premise: WHERE the backend is configured as the OpenAI kind.
 
 - IC1. Configuration: a kind field on `backends.<name>`; absent = Anthropic (current behaviour). — Verifies: R1, NFR2 — name and values: D4
 - IC2. Path: `/v1/messages` → `<url>/v1/chat/completions`. The query string is discarded. — Verifies: R1
-- IC3. Request mapping: `system` → system message / `messages[].content`: text → text part, image → image_url, tool_use → `tool_calls`, tool_result → `tool` message (content flattened to text) / `tools[]` → `{type: function, function: {name, description, parameters = input_schema}}` / `tool_choice`: auto → `auto`, any → `required`, tool → `{type: function, function: {name}}`, none → `none` / `max_tokens` → `max_tokens` / `temperature`, `top_p`, `stop_sequences` (→ `stop`), `stream` unchanged / when `stream=true`, `stream_options.include_usage=true` is always added. — Verifies: R1–R4, R10, R11
-- IC4. Response mapping: first chunk → `message_start` (id, model; `usage.input_tokens` is 0 until the usage chunk) / `delta.reasoning_content` → `thinking` block `thinking_delta`, always at a lower index than text and tool_use blocks / `delta.content` → `text` block `text_delta` / `delta.tool_calls[i]` → per-index `tool_use` block + `input_json_delta` / `finish_reason`: stop → `end_turn`, length → `max_tokens`, tool_calls → `tool_use`, content_filter → `end_turn` (D8) / usage: `prompt_tokens` → `input_tokens`, `completion_tokens` → `output_tokens` / `[DONE]` → `message_stop`. No `ping` is sent. — Verifies: R5–R8, R14
+- IC3. Request mapping: `system` → system message / `messages[].content`: text → text part, image → image_url, tool_use → `tool_calls`, tool_result → `tool` message (content flattened to text; images inside a tool result are lost) / `tools[]` → `{type: function, function: {name, description, parameters = input_schema}}` / `tool_choice`: auto → `auto`, any → `required`, tool → `{type: function, function: {name}}`, none → `none` / `max_tokens` → `max_tokens` / `temperature`, `top_p`, `stop_sequences` (→ `stop`), `stream` unchanged / when `stream=true`, `stream_options.include_usage=true` is always added. — Verifies: R1–R4, R10, R11
+- IC4. Response mapping: first chunk → `message_start` (id, model; usage zero) / `delta.reasoning_content` or `delta.reasoning` → `thinking` block `thinking_delta` / `delta.content` → `text` block `text_delta` / `delta.tool_calls[i]` → per-index `tool_use` block + `input_json_delta` / blocks are numbered in arrival order and close when a different kind of content arrives / `finish_reason`: stop → `end_turn`, length → `max_tokens`, tool_calls → `tool_use`, content_filter → `end_turn` (D8); when a `tool_use` block was emitted the stop reason is `tool_use` regardless / usage: `prompt_tokens` → `input_tokens`, `completion_tokens` → `output_tokens`, both reported in `message_delta` / `[DONE]` → `message_stop`; end of stream without it closes an opened message. No `ping`, no `signature_delta`. — Verifies: R5–R8, R14
 - IC5. Error mapping: HTTP status unchanged. `error.type`: 400 → `invalid_request_error`, 401 → `authentication_error`, 403 → `permission_error`, 404 → `not_found_error`, 413 → `request_too_large`, 429 → `rate_limit_error`, anything else → `api_error`. `error.message` = `[backend <name>, HTTP <status>] ` + the OpenAI `error.message` (or the first 200 characters of the body when absent). — Verifies: R12
 - IC6. Mid-stream error: `event: error` with `error.type` = `api_error` and the backend name in the message. No events follow. — Verifies: R13
 
@@ -95,7 +96,7 @@ Common premise: WHERE the backend is configured as the OpenAI kind.
 - D2. Decided: `reasoning_content` → `thinking` block (user round 3). Consequence: RISK1.
 - D3. Decided: backend errors are translated into Anthropic error documents (user round 3; implied by G1(c)).
 - D4. Kind field name and values — at implementation start; default `kind = "openai"`.
-- D5. `count_tokens` routed to an OpenAI backend — (conditional: when U3 says "called") (a) fixed value (b) character-based estimate (c) 404. Owner: user.
+- D5. Decided: `count_tokens` routed to an OpenAI backend is answered 404 `not_found_error` by the router; the Chat Completions API has no counterpart (user, plan stage). Revisit only if U3 shows Claude Code treats it as fatal.
 - D6. Whether `drop_fields` applies before or after translation — at implementation start; default "before" (on the Anthropic shape).
 - D7. Whether the body log also records the translated result sent to the client — at implementation start.
 - D8. `content_filter` mapping — at implementation start; default `end_turn`.
@@ -137,6 +138,7 @@ Risks (accepted in round 4):
 - RISK4 (U3 → D5). `count_tokens` behaviour on an OpenAI backend is undefined until U3 closes.
 - RISK5 (U5). R8 stays Should until U5 shows whether non-streaming requests occur.
 - RISK6 (U7 → U8). PDF parts may need adding to R11.
+- RISK7 (F3). A streaming request always carries `stream_options.include_usage`; OpenCode never sends it, so the in-house service has not been proven to accept it. If it answers 400, the error names the backend (R12) and a per-backend switch is the fix.
 
 Goal back-check: P1 → G1 → (a) R1, R2, R5, NFR1 / (b) R3, R4, R6, R7 / (c) R12, R13, IC5, IC6 / (d) R4, R9, R14 + RISK1. Multimodal (user round 1) → R11. No unresolved goal.
 
