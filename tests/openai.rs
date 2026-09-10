@@ -798,6 +798,50 @@ async fn a_document_answer_to_a_streaming_request_is_still_translated() {
 }
 
 #[tokio::test]
+async fn body_log_marks_a_client_that_left_before_a_buffered_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = MockUpstream::start(|_| {
+        // A backend that takes longer than the client is willing to wait.
+        let slow = futures_util::stream::once(async {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            Ok::<_, std::io::Error>(json!({"choices": [{"message": {"role": "assistant", "content": "late"}, "finish_reason": "stop"}]}).to_string())
+        });
+        Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(Body::from_stream(slow))
+            .unwrap()
+    })
+    .await;
+    let extra = format!("[logging]\nbody_dir = \"{}\"\n", dir.path().display());
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), &extra)).await;
+    let gone = router
+        .post("/v1/messages", &claude_code_request(false))
+        .timeout(Duration::from_millis(300))
+        .send()
+        .await;
+    assert!(gone.is_err(), "the client gave up first");
+
+    let mut outcome = None;
+    for _ in 0..150 {
+        if let Some(found) = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find_map(|p| {
+                let meta: Value =
+                    serde_json::from_slice(&std::fs::read(p.join("meta.json")).ok()?).ok()?;
+                meta.get("outcome").map(|o| o.as_str().unwrap().to_owned())
+            })
+        {
+            outcome = Some(found);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(outcome.as_deref(), Some("client_disconnected"));
+}
+
+#[tokio::test]
 async fn anthropic_kind_never_translates() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
