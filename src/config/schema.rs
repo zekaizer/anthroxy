@@ -118,7 +118,7 @@ impl Default for UpstreamConfig {
 
 /// Which API a backend speaks. `Anthropic` bodies are relayed as bytes
 /// (ADR-0003); `OpenAi` bodies are translated (ADR-0010).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendKind {
     #[default]
