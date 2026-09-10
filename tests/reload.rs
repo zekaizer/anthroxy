@@ -1,6 +1,9 @@
 mod support;
 
+use std::sync::{Arc, Mutex};
+
 use anthroxy::config::{Config, process_env};
+use anthroxy::server::{Loaded, ReloadOutcome, ReloadTrigger};
 use serde_json::json;
 use support::mock_upstream::echo;
 use support::router::{TOKEN, config_with_backend, model_ids};
@@ -129,4 +132,78 @@ async fn reload_reports_a_changed_listen_address() {
     assert!(report.listen_changed);
     // Still answering on the original socket.
     assert_eq!(list_models(&router, TOKEN).await.0, 200);
+}
+
+#[tokio::test]
+async fn reload_runs_the_loader_and_keeps_a_history() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let event = router.reload.reload(ReloadTrigger::Console);
+    match &event.outcome {
+        ReloadOutcome::Rejected { error } => {
+            assert!(error.contains("without a configuration file"), "{error}")
+        }
+        other => panic!("{other:?}"),
+    }
+
+    let text = Arc::new(Mutex::new(format!(
+        "{}\n[[models]]\nid = \"newcomer\"\nbackend = \"mock\"\n",
+        config_with_backend(&upstream.url(), "")
+    )));
+    let source = text.clone();
+    router.reload.set_loader(
+        "test.toml".into(),
+        Arc::new(move || {
+            let config = Config::parse(&source.lock().unwrap(), process_env)?;
+            Ok(Loaded {
+                config,
+                restart_needed: vec!["logging level or format".to_owned()],
+            })
+        }),
+    );
+    let event = router.reload.reload(ReloadTrigger::Signal);
+    assert_eq!(
+        event.outcome,
+        ReloadOutcome::Applied {
+            backends: 1,
+            models: 3,
+            restart_needed: vec!["logging level or format".to_owned()],
+        }
+    );
+    assert!(
+        list_models(&router, TOKEN)
+            .await
+            .1
+            .contains(&"newcomer".to_owned())
+    );
+
+    *text.lock().unwrap() = "[server]\ntoken = \"\"\n".to_owned();
+    let event = router.reload.reload(ReloadTrigger::Console);
+    match &event.outcome {
+        ReloadOutcome::Rejected { error } => assert!(error.contains("server.token"), "{error}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        list_models(&router, TOKEN)
+            .await
+            .1
+            .contains(&"newcomer".to_owned()),
+        "a rejected reload keeps the running configuration"
+    );
+
+    let triggers: Vec<ReloadTrigger> = router.reload.reloads().iter().map(|e| e.trigger).collect();
+    assert_eq!(
+        triggers,
+        [
+            ReloadTrigger::Startup,
+            ReloadTrigger::Console,
+            ReloadTrigger::Signal,
+            ReloadTrigger::Console
+        ]
+    );
+    assert!(matches!(
+        router.reload.reloads()[0].outcome,
+        ReloadOutcome::Applied { models: 2, .. }
+    ));
 }

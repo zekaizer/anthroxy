@@ -1,12 +1,13 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Args;
 
 use super::models::default_route_line;
 use super::{Cli, Style, display_path};
-use crate::config::{Config, LogFormat, Overrides};
-use crate::server::{AppState, Server, Snapshot};
+use crate::config::{Config, Overrides};
+use crate::server::{AppState, Loaded, Loader, ReloadTrigger, Server, Snapshot};
 
 #[derive(Debug, Clone, Args)]
 pub struct ServeArgs {
@@ -42,17 +43,13 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
 
     let server = Server::bind(&config).await?;
     let addr = server.local_addr();
+    let state = server.state();
+    state.set_loader(path.clone(), loader(cli.clone(), args.clone(), &config));
     // Before the banner: until this handler exists SIGHUP terminates the
     // process, and a reload signalled the moment the router looks ready would
     // do exactly that.
-    let reloader = tokio::spawn(reload_on_hangup(
-        hangup(),
-        server.state(),
-        cli.clone(),
-        args.clone(),
-        cli.logging(Some(&config), "info"),
-    ));
-    print_banner(&server.state().snapshot(), &path, addr, style);
+    let reloader = tokio::spawn(reload_on_hangup(hangup(), state.clone()));
+    print_banner(&state.snapshot(), &path, addr, style);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
     let result = server.serve(shutdown_signal()).await;
@@ -62,53 +59,41 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     Ok(())
 }
 
+/// Reads the file with this invocation's overrides. The log subscriber is
+/// global and installed once, so a changed filter or format is reported as
+/// needing a restart rather than silently ignored.
+fn loader(cli: Cli, args: ServeArgs, started_with: &Config) -> Loader {
+    let installed = cli.logging(Some(started_with), "info");
+    Arc::new(move || {
+        let config = load_effective(&cli, &args)?;
+        let restart_needed = if cli.logging(Some(&config), "info") != installed {
+            vec!["logging level or format".to_owned()]
+        } else {
+            Vec::new()
+        };
+        Ok(Loaded {
+            config,
+            restart_needed,
+        })
+    })
+}
+
 /// Re-reads the configuration on SIGHUP. A file that fails to load or build
-/// leaves the running configuration untouched. `installed` is the log filter
-/// and format this process started with; the subscriber is global and cannot
-/// be swapped, so a change to either is reported rather than silently ignored.
+/// leaves the running configuration untouched.
 #[cfg(unix)]
-async fn reload_on_hangup(
-    hangup: Option<tokio::signal::unix::Signal>,
-    state: AppState,
-    cli: Cli,
-    args: ServeArgs,
-    installed: (String, LogFormat),
-) {
+async fn reload_on_hangup(hangup: Option<tokio::signal::unix::Signal>, state: AppState) {
     let Some(mut hangup) = hangup else {
         return;
     };
-    let path = cli.config_path();
     while hangup.recv().await.is_some() {
-        tracing::info!(config = %path.display(), "SIGHUP received, reloading configuration");
-        let reloaded = load_effective(&cli, &args)
-            .and_then(|config| Ok((state.apply(&config)?, cli.logging(Some(&config), "info"))));
-        match reloaded {
-            Ok((report, logging)) => {
-                tracing::info!(
-                    backends = report.backends,
-                    models = report.models,
-                    "configuration reloaded"
-                );
-                if report.listen_changed {
-                    tracing::warn!(
-                        "server.listen changed in the file; restart the router to apply it"
-                    );
-                }
-                if logging != installed {
-                    tracing::warn!(
-                        "logging level or format changed in the file; restart the router to apply it"
-                    );
-                }
-            }
-            Err(error) => {
-                tracing::error!(%error, "reload failed; keeping the previous configuration");
-            }
-        }
+        tracing::info!("SIGHUP received, reloading configuration");
+        let state = state.clone();
+        let _ = tokio::task::spawn_blocking(move || state.reload(ReloadTrigger::Signal)).await;
     }
 }
 
 #[cfg(not(unix))]
-async fn reload_on_hangup(_: (), _: AppState, _: Cli, _: ServeArgs, _: (String, LogFormat)) {
+async fn reload_on_hangup(_: (), _: AppState) {
     std::future::pending::<()>().await
 }
 

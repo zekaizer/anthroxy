@@ -21,7 +21,9 @@ pub use annotate::backend_prefix;
 pub use auth::ClientToken;
 pub use error::RouterError;
 pub use request_id::RequestId;
-pub use state::{AppState, ReloadReport, Snapshot};
+pub use state::{
+    AppState, Loaded, Loader, ReloadEvent, ReloadOutcome, ReloadReport, ReloadTrigger, Snapshot,
+};
 
 /// How often expired body-log entries are swept.
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
