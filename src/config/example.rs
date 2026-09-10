@@ -32,6 +32,15 @@ format = "text"
 # "0s" keeps everything.
 body_retention = "7d"
 
+[stats]
+# One line per /v1/messages exchange (routing, status, timings, token usage;
+# never message content), summarised on the console at http://<router>/.
+# enabled = true
+# Default: $XDG_STATE_HOME/anthroxy/stats (~/.local/state/anthroxy/stats).
+# dir = "~/.local/state/anthroxy/stats"
+# Files for days older than this are deleted; "0s" keeps everything.
+retention = "90d"
+
 [upstream]
 # Connection establishment limit per attempt.
 connect_timeout = "10s"

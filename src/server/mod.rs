@@ -40,6 +40,12 @@ pub enum ServerBuildError {
         #[source]
         source: std::io::Error,
     },
+    #[error("cannot open statistics directory {dir}: {source}")]
+    Stats {
+        dir: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("cannot listen on {addr}: {source}")]
     Listen {
         addr: SocketAddr,
@@ -104,19 +110,29 @@ impl Server {
     }
 }
 
-/// The sweep walks the directory synchronously, so it runs on the blocking
+/// The sweeps walk directories synchronously, so they run on the blocking
 /// pool rather than a worker thread.
 async fn prune_loop(state: AppState) {
     loop {
-        if let Some(log) = state.snapshot().body_log.clone() {
-            let _ = tokio::task::spawn_blocking(move || {
-                let removed = log.prune(jiff::Timestamp::now());
+        let snapshot = state.snapshot();
+        let (body_log, stats) = (snapshot.body_log.clone(), snapshot.stats.clone());
+        drop(snapshot);
+        let _ = tokio::task::spawn_blocking(move || {
+            let now = jiff::Timestamp::now();
+            if let Some(log) = body_log {
+                let removed = log.prune(now);
                 if removed > 0 {
                     tracing::info!(removed, dir = %log.root().display(), "pruned body log entries");
                 }
-            })
-            .await;
-        }
+            }
+            if let Some(stats) = stats {
+                let removed = stats.prune(now);
+                if removed > 0 {
+                    tracing::info!(removed, dir = %stats.dir().display(), "pruned statistics files");
+                }
+            }
+        })
+        .await;
         tokio::time::sleep(PRUNE_INTERVAL).await;
     }
 }

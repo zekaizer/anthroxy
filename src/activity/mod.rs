@@ -178,14 +178,15 @@ impl Activity {
         lock(&self.in_flight).push(view.clone());
     }
 
-    fn complete(&self, view: &Arc<Mutex<ExchangeView>>) {
+    fn complete(&self, view: &Arc<Mutex<ExchangeView>>) -> Arc<ExchangeView> {
         let done = Arc::new(lock(view).clone());
         lock(&self.in_flight).retain(|v| !Arc::ptr_eq(v, view));
         let mut recent = lock(&self.recent);
         if recent.len() == RECENT {
             recent.pop_front();
         }
-        recent.push_back(done);
+        recent.push_back(done.clone());
+        done
     }
 }
 

@@ -10,9 +10,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use serde::Serialize;
 
 use super::{ClientToken, ServerBuildError};
+use crate::activity::Activity;
 use crate::config::Config;
 use crate::observability::BodyLog;
 use crate::routing::Registry;
+use crate::stats::StatsLog;
 use crate::upstream::UpstreamClient;
 
 /// Configuration-derived state, built once per (re)load.
@@ -23,6 +25,8 @@ pub struct Snapshot {
     pub max_body_bytes: usize,
     /// Set when `logging.body_dir` is configured.
     pub body_log: Option<BodyLog>,
+    /// Set unless `stats.enabled = false`.
+    pub stats: Option<StatsLog>,
 }
 
 impl Snapshot {
@@ -36,12 +40,24 @@ impl Snapshot {
             )?),
             None => None,
         };
+        let stats = match config.stats.enabled {
+            true => Some(
+                StatsLog::open(&config.stats.dir, config.stats.retention).map_err(|source| {
+                    ServerBuildError::Stats {
+                        dir: config.stats.dir.clone(),
+                        source,
+                    }
+                })?,
+            ),
+            false => None,
+        };
         Ok(Self {
             registry: Registry::from_config(config)?,
             upstream: UpstreamClient::from_config(&config.upstream)?,
             client_token: ClientToken::new(&config.server.token),
             max_body_bytes: config.server.max_body_bytes,
             body_log,
+            stats,
         })
     }
 }
@@ -110,6 +126,8 @@ pub struct AppState {
     source: Arc<RwLock<Option<(PathBuf, Loader)>>>,
     /// Oldest first, at most [`RELOAD_HISTORY`].
     reloads: Arc<Mutex<VecDeque<ReloadEvent>>>,
+    /// Exchanges in flight and recently finished; survives reloads.
+    pub activity: Arc<Activity>,
 }
 
 impl AppState {
@@ -129,6 +147,7 @@ impl AppState {
             started_at: jiff::Timestamp::now(),
             source: Arc::new(RwLock::new(None)),
             reloads: Arc::new(Mutex::new(VecDeque::from([startup]))),
+            activity: Activity::new(),
         }
     }
 

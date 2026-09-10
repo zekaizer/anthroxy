@@ -155,6 +155,10 @@ fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, s
             style.dim("off (logging.body_dir or --body-dir)")
         ),
     }
+    match &snapshot.stats {
+        Some(stats) => println!("  stats    {}", display_path(stats.dir())),
+        None => println!("  stats    {}", style.dim("off (stats.enabled)")),
+    }
     println!(
         "  client   {}",
         style.dim("run `anthroxy env` for Claude Code's variables")

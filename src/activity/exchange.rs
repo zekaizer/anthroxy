@@ -14,6 +14,9 @@ use crate::config::BackendKind;
 use crate::routing::Match;
 use crate::text::cut;
 
+/// Runs once with the finished view.
+type OnFinish = Box<dyn FnOnce(&ExchangeView) + Send>;
+
 /// Updates one [`ExchangeView`]. Finishing moves it from in flight to recent;
 /// dropping it unfinished records a client that went away.
 pub struct Exchange {
@@ -21,6 +24,7 @@ pub struct Exchange {
     view: Arc<Mutex<ExchangeView>>,
     started: Instant,
     finished: bool,
+    on_finish: Option<OnFinish>,
 }
 
 impl Exchange {
@@ -32,7 +36,13 @@ impl Exchange {
             view,
             started: Instant::now(),
             finished: false,
+            on_finish: None,
         }
+    }
+
+    /// Runs once with the finished view, after it joined the recent list.
+    pub fn on_finish(&mut self, then: impl FnOnce(&ExchangeView) + Send + 'static) {
+        self.on_finish = Some(Box::new(then));
     }
 
     fn update(&self, change: impl FnOnce(&mut ExchangeView)) {
@@ -158,7 +168,10 @@ impl Exchange {
             v.outcome = Some(outcome);
             v.duration_ms = Some(duration);
         });
-        self.activity.complete(&self.view);
+        let done = self.activity.complete(&self.view);
+        if let Some(then) = self.on_finish.take() {
+            then(&done);
+        }
     }
 }
 

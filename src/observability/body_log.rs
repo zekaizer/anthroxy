@@ -231,6 +231,14 @@ fn response_file(headers: &HeaderMap) -> &'static str {
 }
 
 impl Recorder {
+    /// The entry's directory name under the body log root.
+    pub fn entry(&self) -> String {
+        self.dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
     /// Called once response headers arrive.
     pub fn response_started(
         &mut self,

@@ -1,17 +1,20 @@
 //! `POST /v1/messages` (and siblings): route by `model`, forward, relay.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Extension;
 use axum::body::Body;
-use axum::extract::Request;
+use axum::extract::{ConnectInfo, Request, State};
 use axum::response::Response;
 use bytes::Bytes;
 use http::HeaderValue;
 use http::header::CONTENT_TYPE;
 use http_body_util::LengthLimitError;
 
+use crate::activity::hints::{self, UpstreamFailure};
+use crate::activity::{Exchange, Source};
 use crate::anthropic;
 use crate::config::BackendKind;
 use crate::observability::body_log::headers_for_record;
@@ -20,7 +23,8 @@ use crate::server::annotate::annotate_upstream_error;
 use crate::server::buffered::read_all;
 use crate::server::handlers::openai;
 use crate::server::relay::{Relay, RelayOutcome};
-use crate::server::{RequestId, RouterError, Snapshot};
+use crate::server::{AppState, RequestId, RouterError, Snapshot};
+use crate::stats::StatsRecord;
 use crate::text::short;
 use crate::translate;
 use crate::upstream::{
@@ -29,23 +33,62 @@ use crate::upstream::{
 };
 
 pub async fn proxy(
+    State(app): State<AppState>,
     Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
     request: Request,
 ) -> Response {
-    match handle(&snapshot, &request_id, request).await {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.to_string());
+    let exchange = app.activity.begin(
+        request_id.as_str(),
+        Source::Client,
+        peer,
+        request.method().as_str(),
+        request.uri().path(),
+    );
+    serve(&snapshot, &request_id, request, exchange).await
+}
+
+/// Routes, forwards and relays `request` on `snapshot`, reporting to
+/// `exchange`; a `/v1/messages` exchange also goes to the statistics.
+pub async fn serve(
+    snapshot: &Snapshot,
+    request_id: &RequestId,
+    request: Request,
+    mut exchange: Exchange,
+) -> Response {
+    if request.uri().path() == "/v1/messages"
+        && let Some(log) = snapshot.stats.clone()
+    {
+        exchange.on_finish(move |view| {
+            if let Some(record) = StatsRecord::from_view(view) {
+                log.append(record);
+            }
+        });
+    }
+    let mut exchange = Some(exchange);
+    match handle(snapshot, request_id, request, &mut exchange).await {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(error = %error, status = error.status().as_u16(), "request failed in router");
-            error.into_response(&request_id)
+            if let Some(exchange) = exchange {
+                exchange.fail(error.status().as_u16(), error.to_string());
+            }
+            error.into_response(request_id)
         }
     }
 }
 
+/// `exchange` stays in place until a response body takes it; an error return
+/// leaves it for the caller to fail.
 async fn handle(
     state: &Snapshot,
     request_id: &RequestId,
     request: Request,
+    exchange: &mut Option<Exchange>,
 ) -> Result<Response, RouterError> {
     let started = Instant::now();
     let (parts, body) = request.into_parts();
@@ -53,12 +96,23 @@ async fn handle(
 
     let peek = anthropic::peek(&body)?;
     let requested_model = peek.model.expect("peek guarantees a model");
-    let resolution = state
-        .registry
-        .resolve(&requested_model)
-        .ok_or_else(|| RouterError::unknown_model(&requested_model, &state.registry))?;
+    note(exchange, |e| e.requested(&requested_model, peek.stream));
+    let resolution = state.registry.resolve(&requested_model).ok_or_else(|| {
+        note(exchange, |e| e.unrouted(&requested_model));
+        RouterError::unknown_model(&requested_model, &state.registry)
+    })?;
     let route = resolution.route;
     let backend = &route.backend;
+    note(exchange, |e| {
+        e.routed(
+            &requested_model,
+            resolution.matched,
+            &route.id,
+            &backend.name,
+            backend.kind,
+            &route.upstream_model,
+        )
+    });
     let span = tracing::Span::current();
     span.record("model", route.id.as_str());
     span.record("backend", backend.name.as_str());
@@ -106,6 +160,9 @@ async fn handle(
         );
         log.begin(record, &body, started)
     });
+    if let Some(recorder) = &recorder {
+        note(exchange, |e| e.recording(recorder.entry()));
+    }
     let upstream = match state
         .upstream
         .send(UpstreamRequest {
@@ -130,6 +187,9 @@ async fn handle(
         latency_ms = upstream.latency.as_millis() as u64,
         "upstream responded"
     );
+    note(exchange, |e| {
+        e.responded(status.as_u16(), upstream.attempts, upstream.latency)
+    });
 
     let recorder = recorder.map(|mut recorder| {
         recorder.response_started(
@@ -158,6 +218,12 @@ async fn handle(
         X_ROUTER_UPSTREAM_MODEL.clone(),
         header_value(&route.upstream_model),
     );
+    let content_type = upstream
+        .response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
 
     let body = if status.is_client_error() || status.is_server_error() {
         // ADR-0005: error bodies are buffered so they can be annotated.
@@ -167,29 +233,55 @@ async fn handle(
             bytes = raw.len(),
             "upstream returned an error"
         );
-        match backend.kind {
+        let text = String::from_utf8_lossy(&raw);
+        note(exchange, |e| {
+            e.upstream_error(
+                &raw,
+                hints::hints(&UpstreamFailure {
+                    backend: &backend.name,
+                    kind: backend.kind,
+                    upstream_model: &route.upstream_model,
+                    drop_fields: &backend.drop_fields,
+                    status: status.as_u16(),
+                    body: &text,
+                }),
+            )
+        });
+        let (bytes, content_type) = match backend.kind {
             BackendKind::Anthropic => {
                 match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
-                    Some(annotated) => Body::from(annotated),
-                    None => Body::from(raw),
+                    Some(annotated) => (Bytes::from(annotated), content_type),
+                    None => (raw, content_type),
                 }
             }
             BackendKind::OpenAi => {
                 let document =
                     translate::upstream_error(status, &raw, &backend.name, request_id.as_str());
                 headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-                Body::from(serde_json::to_vec(&document).expect("an error document serializes"))
+                (
+                    Bytes::from(
+                        serde_json::to_vec(&document).expect("an error document serializes"),
+                    ),
+                    Some("application/json".to_owned()),
+                )
             }
+        };
+        if let Some(exchange) = exchange.take() {
+            exchange.finish_body(status.as_u16(), &bytes, content_type.as_deref());
         }
+        Body::from(bytes)
     } else {
         match backend.kind {
             // ADR-0003: relayed as it arrives.
-            BackendKind::Anthropic => Body::from_stream(Relay::new(
-                upstream.response.bytes_stream(),
-                span,
-                started,
-                recorder,
-            )),
+            BackendKind::Anthropic => {
+                let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
+                match exchange.take() {
+                    Some(exchange) => {
+                        Body::from_stream(exchange.track(relay, content_type.as_deref()))
+                    }
+                    None => Body::from_stream(relay),
+                }
+            }
             BackendKind::OpenAi => {
                 let (overrides, body) = openai::body(
                     upstream,
@@ -199,6 +291,7 @@ async fn handle(
                     span,
                     started,
                     recorder,
+                    exchange,
                 )
                 .await?;
                 headers.extend(overrides);
@@ -211,6 +304,13 @@ async fn handle(
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     Ok(response)
+}
+
+/// Reports to the exchange while it is still in place.
+fn note(exchange: &Option<Exchange>, report: impl FnOnce(&Exchange)) {
+    if let Some(exchange) = exchange {
+        report(exchange);
+    }
 }
 
 /// Where a redirecting response points. A 3xx without a `Location` is nothing

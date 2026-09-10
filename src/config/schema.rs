@@ -25,6 +25,8 @@ pub struct Config {
     pub models: Vec<ModelConfig>,
     #[serde(default)]
     pub routing: RoutingConfig,
+    #[serde(default)]
+    pub stats: StatsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -71,6 +73,40 @@ impl Default for LoggingConfig {
             format: LogFormat::default(),
             body_dir: None,
             body_retention: Duration::from_secs(7 * 24 * 3600),
+        }
+    }
+}
+
+/// Persistent request statistics (ADR-0011).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StatsConfig {
+    /// Append one line per `/v1/messages` exchange.
+    pub enabled: bool,
+    pub dir: PathBuf,
+    /// Files whose day ended longer ago than this are deleted; `0` keeps them.
+    #[serde(with = "humantime_serde")]
+    pub retention: Duration,
+}
+
+impl StatsConfig {
+    /// `$XDG_STATE_HOME/anthroxy/stats`, or the platform's local data
+    /// directory where there is no state directory.
+    pub fn default_dir() -> PathBuf {
+        dirs::state_dir()
+            .or_else(dirs::data_local_dir)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("anthroxy")
+            .join("stats")
+    }
+}
+
+impl Default for StatsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dir: Self::default_dir(),
+            retention: Duration::from_secs(90 * 24 * 3600),
         }
     }
 }

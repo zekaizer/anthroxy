@@ -19,6 +19,11 @@ fn spawnable() -> std::process::Command {
         .env_remove("RUST_LOG")
         .env_remove("SSL_CERT_FILE")
         .env_remove("SSL_CERT_DIR")
+        // Statistics default to the state directory; keep them out of $HOME.
+        .env(
+            "XDG_STATE_HOME",
+            std::env::temp_dir().join("anthroxy-cli-tests-state"),
+        )
         .env("NO_COLOR", "1");
     cmd
 }
@@ -527,6 +532,13 @@ fn serve_starts_answers_health_and_stops_on_sigterm() {
     assert!(
         banner.lines.iter().any(|l| l.contains("body log")),
         "{banner:?}"
+    );
+    assert!(
+        banner
+            .lines
+            .iter()
+            .any(|l| l.contains("stats") && l.contains("anthroxy-cli-tests-state")),
+        "statistics go to the state directory: {banner:?}"
     );
 
     let body = http_get(&format!("{}/healthz", banner.url), None);
