@@ -45,8 +45,11 @@ pub fn rewrite(
     strip_unsigned_thinking: bool,
 ) -> Option<Vec<u8>> {
     // Parsing is paid only when a rewrite can apply; for the thinking strip
-    // that needs the text `"thinking"` to be in the body at all.
-    let may_strip = strip_unsigned_thinking && body.windows(THINKING.len()).any(|w| w == THINKING);
+    // that needs the text `"thinking"` to be in the body at all. The body
+    // passed `peek`, so it is UTF-8 and `str::contains` (two-way search)
+    // does the scan.
+    let may_strip = strip_unsigned_thinking
+        && std::str::from_utf8(body).is_ok_and(|text| text.contains(THINKING));
     if model.is_none() && drop_fields.is_empty() && !may_strip {
         return None;
     }
@@ -69,7 +72,7 @@ pub fn rewrite(
     changed.then(|| serde_json::to_vec(&value).expect("a parsed document serializes"))
 }
 
-const THINKING: &[u8] = b"\"thinking\"";
+const THINKING: &str = "\"thinking\"";
 
 /// Whether `path` named an existing field, which is now gone.
 fn remove_path(object: &mut serde_json::Map<String, serde_json::Value>, path: &str) -> bool {
