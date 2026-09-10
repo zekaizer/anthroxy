@@ -51,3 +51,4 @@ This file stays short. Details live under `docs/` and are read only when a task 
 
 - `docs/adr/README.md` — read before writing or changing an ADR.
 - `docs/adr/NNNN-*.md` — read the ADR covering an area before changing that area.
+- `docs/translation.md` — read before changing `ir/`, `openai/`, `translate/` or the Anthropic codecs: how an `openai` backend is served and what the IR is for.
