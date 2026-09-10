@@ -22,6 +22,7 @@ use crate::anthropic::{ErrorType, UsageScanner};
 use crate::server::handlers::proxy;
 use crate::server::{AppState, RequestId, Snapshot};
 use crate::sse::Parser;
+use crate::stats::{Generation, generation};
 
 /// The whole answer must arrive within this.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -115,6 +116,15 @@ pub async fn smoke(
     let mut scanner = UsageScanner::for_content_type(content_type.as_deref());
     scanner.feed(&received);
     let scan = scanner.finish();
+    let complete = status < 400 && failure.is_none() && scan.error.is_none();
+    let speed = generation(
+        ask.stream,
+        complete,
+        ttfb_ms,
+        Some(duration_ms),
+        scan.usage.map(|usage| usage.output),
+    )
+    .map(Generation::tokens_per_second);
     let view = app.activity.find(id.as_str());
     live(&json!({
         "request_id": id.as_str(),
@@ -123,6 +133,7 @@ pub async fn smoke(
         "status": status,
         "ttfb_ms": ttfb_ms,
         "duration_ms": duration_ms,
+        "output_tokens_per_second": speed,
         "text": answer_text(&received, events),
         "usage": scan.usage,
         "error": failure.or(scan.error),

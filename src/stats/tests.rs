@@ -257,3 +257,31 @@ fn aggregation_by_model_and_day() {
         .collect();
     assert_eq!(days, [("2026-09-10", 20), ("2026-09-11", 4)]);
 }
+
+#[test]
+fn generation_needs_a_complete_stream_with_time_after_the_first_byte() {
+    let sample = generation(true, true, Some(100), Some(2100), Some(50));
+    assert_eq!(
+        sample,
+        Some(Generation {
+            tokens: 50,
+            millis: 2000
+        })
+    );
+    assert!((sample.unwrap().tokens_per_second() - 25.0).abs() < 1e-9);
+    for (stream, complete, ttfb, duration, output) in [
+        (false, true, Some(100), Some(2100), Some(50)),
+        (true, false, Some(100), Some(2100), Some(50)),
+        (true, true, None, Some(2100), Some(50)),
+        (true, true, Some(100), None, Some(50)),
+        (true, true, Some(100), Some(100), Some(50)),
+        (true, true, Some(100), Some(2100), Some(0)),
+        (true, true, Some(100), Some(2100), None),
+    ] {
+        assert_eq!(
+            generation(stream, complete, ttfb, duration, output),
+            None,
+            "{stream} {complete} {ttfb:?} {duration:?} {output:?}"
+        );
+    }
+}

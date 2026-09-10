@@ -539,7 +539,7 @@ function requests(view, selected) {
           h("td", { class: "num" }, fmt.bytes(v.bytes)))),
       { empty: "No request in flight." }));
     replace(recent, table(
-      ["Time", "Model", "Backend / upstream", "Status", "Attempts", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out", "num"], ["Cache read", "num"], "Outcome"],
+      ["Time", "Model", "Backend / upstream", "Status", "Attempts", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
       data.recent.filter(matches).map((v) =>
         h("tr", { class: `clickable ${v.id === selected ? "selected" : ""}`, onclick: () => go("requests", v.id) },
           h("td", { class: "nowrap" }, fmt.clock(v.received_at),
@@ -550,7 +550,8 @@ function requests(view, selected) {
           h("td", { class: "num" }, v.attempts > 1 ? badge(String(v.attempts), "warn") : fmt.int(v.attempts)),
           h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
           h("td", { class: "num" }, fmt.ms(v.duration_ms)),
-          h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–"),
+          h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
+            v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
           h("td", { class: "num" }, v.usage ? fmt.int(v.usage.cache_read) : "–"),
           h("td", null, outcomeBadge(v), v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null))),
       { empty: "No finished request since the router started." }));
@@ -605,6 +606,9 @@ async function showRequest(target, id) {
         fact("Tokens", v.usage
           ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}, cache read ${fmt.int(v.usage.cache_read)}, cache write ${fmt.int(v.usage.cache_creation)}`
           : "not reported"),
+        fact("Output speed", v.output_tokens_per_second
+          ? fmt.rate(v.output_tokens_per_second)
+          : h("span", { class: "muted" }, "measured on streamed answers that complete")),
         fact("Outcome", outcomeBadge(v))),
       v.error ? [h("h3", null, "Error"), h("pre", null, v.error)] : null,
       v.hints.length ? [h("h3", null, "Hints"), v.hints.map((hint) =>
@@ -746,7 +750,7 @@ function smokeContent(s) {
     h("dl", { class: "facts" },
       fact("Status", [statusBadge(s.status), " ", h("button", { type: "button", class: "link", onclick: () => go("requests", s.request_id) }, s.request_id)]),
       fact("Route", s.backend ? `${s.model} → ${s.backend} / ${s.upstream_model}${s.stream ? " (stream)" : ""}` : s.model),
-      fact("Timing", `first byte ${fmt.ms(s.ttfb_ms)}, total ${fmt.ms(s.duration_ms)}`),
+      fact("Timing", `first byte ${fmt.ms(s.ttfb_ms)}, total ${fmt.ms(s.duration_ms)}${s.output_tokens_per_second ? `, ${fmt.rate(s.output_tokens_per_second)}` : ""}`),
       fact("Tokens", s.usage ? `input ${fmt.int(s.usage.input)}, output ${fmt.int(s.usage.output)}, cache read ${fmt.int(s.usage.cache_read)}` : "not reported")),
     s.text ? h("div", { class: "answer" }, s.text)
       : s.status < 400 && !s.error

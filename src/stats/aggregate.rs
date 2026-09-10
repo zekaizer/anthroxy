@@ -89,6 +89,40 @@ pub struct Row {
     pub output_tokens_per_second: Option<f64>,
 }
 
+/// Output tokens and the milliseconds spent producing them after the first
+/// byte, for an exchange that streamed to completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Generation {
+    pub tokens: u64,
+    pub millis: u64,
+}
+
+impl Generation {
+    pub fn tokens_per_second(self) -> f64 {
+        self.tokens as f64 * 1000.0 / self.millis as f64
+    }
+}
+
+/// The sample output speed is measured from. `None` for an exchange that did
+/// not stream to completion, produced no output, or has no time between its
+/// first byte and its end: its timing says nothing about generation.
+pub fn generation(
+    stream: bool,
+    complete: bool,
+    ttfb_ms: Option<u64>,
+    duration_ms: Option<u64>,
+    output_tokens: Option<u64>,
+) -> Option<Generation> {
+    if !(stream && complete) {
+        return None;
+    }
+    let (ttfb, duration, tokens) = (ttfb_ms?, duration_ms?, output_tokens?);
+    (duration > ttfb && tokens > 0).then_some(Generation {
+        tokens,
+        millis: duration - ttfb,
+    })
+}
+
 pub fn aggregate(records: &[StatsRecord], range: Range, since: Option<jiff::Timestamp>) -> Report {
     let mut total = Group::new("total");
     let mut models: BTreeMap<String, Group> = BTreeMap::new();
@@ -165,16 +199,15 @@ impl Group {
         }
         self.ttfb.extend(record.ttfb_ms);
         self.duration.extend(record.duration_ms);
-        if let (true, Some(ttfb), Some(duration), Some(usage)) = (
+        if let Some(sample) = generation(
             record.stream,
+            true,
             record.ttfb_ms,
             record.duration_ms,
-            record.usage,
-        ) && duration > ttfb
-            && usage.output > 0
-        {
-            self.generating_ms += duration - ttfb;
-            self.generated += usage.output;
+            record.usage.map(|u| u.output),
+        ) {
+            self.generating_ms += sample.millis;
+            self.generated += sample.tokens;
         }
     }
 

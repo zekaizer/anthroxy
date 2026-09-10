@@ -9,7 +9,6 @@ use std::time::Duration;
 use anthroxy::activity::Source;
 use anthroxy::config::{Config, process_env};
 use anthroxy::server::Loaded;
-use axum::body::Body;
 use axum::response::Response;
 use serde_json::{Value, json};
 use support::mock_upstream::{echo, json_response};
@@ -26,14 +25,6 @@ const SSE: &str = concat!(
     "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
 );
 
-fn sse() -> Response {
-    Response::builder()
-        .status(200)
-        .header("content-type", "text/event-stream")
-        .body(Body::from(SSE))
-        .unwrap()
-}
-
 /// A backend answering `/v1/models` with context lengths and `/v1/messages`
 /// with [`SSE`], or with a document when the request is not streamed.
 fn backend(received: &support::mock_upstream::Received) -> Response {
@@ -46,7 +37,11 @@ fn backend(received: &support::mock_upstream::Received) -> Response {
                 {"id": "unconfigured-model"}
             ]}),
         ),
-        _ if received.json()["stream"] == json!(true) => sse(),
+        // Paced, so the answer takes time after its first byte.
+        _ if received.json()["stream"] == json!(true) => sse_response(
+            SSE.split_inclusive("\n\n").map(str::to_owned).collect(),
+            Duration::from_millis(20),
+        ),
         _ => json_response(
             200,
             json!({"id": "msg_2", "type": "message", "role": "assistant", "model": "mock-fast-v1",
@@ -258,6 +253,18 @@ async fn requests_show_what_is_in_flight_and_what_finished() {
     assert_eq!(recent[0]["id"], failed.as_str(), "newest first");
     assert_eq!(recent[1]["outcome"], "complete");
     assert_eq!(recent[1]["usage"]["output"], 2);
+    let speed = recent[1]["output_tokens_per_second"]
+        .as_f64()
+        .unwrap_or_default();
+    assert!(
+        speed > 0.0 && speed < 100.0,
+        "2 tokens over 5 paced frames: {requests}"
+    );
+    assert_eq!(
+        recent[0]["output_tokens_per_second"],
+        Value::Null,
+        "a failure has no speed"
+    );
     assert_eq!(
         recent[0]["error_body"],
         Value::Null,
@@ -265,6 +272,11 @@ async fn requests_show_what_is_in_flight_and_what_finished() {
     );
     assert_eq!(recent[0]["hint_count"], 1);
 
+    let streamed = api(&router, &format!("/api/requests/{id}")).await;
+    assert!(
+        streamed["output_tokens_per_second"].as_f64().is_some(),
+        "{streamed}"
+    );
     let detail = api(&router, &format!("/api/requests/{failed}")).await;
     assert!(
         detail["error_body"]
@@ -487,6 +499,12 @@ async fn a_test_request_goes_through_the_route_and_is_marked_as_the_consoles() {
     assert_eq!(smoke["backend"], "mock");
     assert_eq!(smoke["upstream_model"], "mock-fast-v1");
     assert!(smoke["ttfb_ms"].is_u64() && smoke["duration_ms"].is_u64());
+    assert!(
+        smoke["output_tokens_per_second"]
+            .as_f64()
+            .is_some_and(|s| s > 0.0),
+        "{smoke}"
+    );
     let sent = upstream.last();
     assert_eq!(sent.json()["model"], "mock-fast-v1");
     assert_eq!(sent.json()["stream"], true);
@@ -506,6 +524,11 @@ async fn a_test_request_goes_through_the_route_and_is_marked_as_the_consoles() {
     .await;
     assert_eq!(smoke["text"], "Hi from a document");
     assert_eq!(smoke["usage"]["input"], 3);
+    assert_eq!(
+        smoke["output_tokens_per_second"],
+        Value::Null,
+        "not streamed"
+    );
 
     let (_, smoke) = post_api(
         &router,
