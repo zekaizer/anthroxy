@@ -11,6 +11,7 @@ pub mod config;
 pub mod credential;
 pub mod ir;
 pub mod observability;
+pub mod openai;
 pub mod routing;
 pub mod server;
 pub mod service;
