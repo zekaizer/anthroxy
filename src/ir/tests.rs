@@ -128,3 +128,40 @@ fn an_error_event_fails_the_fold() {
     ]);
     assert_eq!(result, Err("overloaded".to_owned()));
 }
+
+#[test]
+fn content_after_finish_opens_a_new_block_like_the_stream_does() {
+    let message = Message::from_events([
+        Event::TextDelta("a".into()),
+        Event::Finish(StopReason::EndTurn),
+        Event::TextDelta("b".into()),
+        Event::Done,
+    ])
+    .unwrap();
+    assert_eq!(
+        message.blocks,
+        vec![Block::Text("a".into()), Block::Text("b".into())]
+    );
+}
+
+#[test]
+fn empty_deltas_and_repeated_starts_are_ignored() {
+    let message = Message::from_events([
+        Event::Start {
+            id: "first".into(),
+            model: "m1".into(),
+        },
+        Event::ThinkingDelta(String::new()),
+        Event::TextDelta(String::new()),
+        Event::Start {
+            id: "second".into(),
+            model: "m2".into(),
+        },
+        Event::TextDelta("x".into()),
+        Event::Done,
+    ])
+    .unwrap();
+    assert_eq!(message.id, "first");
+    assert_eq!(message.model, "m1");
+    assert_eq!(message.blocks, vec![Block::Text("x".into())]);
+}

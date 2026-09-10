@@ -25,10 +25,11 @@ pub enum Block {
 }
 
 impl Message {
-    /// Folds `events` with the same block rules a stream encoder applies:
-    /// consecutive deltas of one kind share a block, a different kind opens a
-    /// new one, tool calls are keyed by their index. `Err` carries the
-    /// message of an `Event::Error`.
+    /// Folds `events` with the block rules the stream encoder applies:
+    /// consecutive deltas of one kind share a block, a different kind or a
+    /// `Finish` closes it, empty deltas and a second `Start` are ignored,
+    /// tool calls are keyed by their index. `Err` carries the message of an
+    /// `Event::Error`.
     pub fn from_events(events: impl IntoIterator<Item = Event>) -> Result<Self, String> {
         let mut message = Self {
             id: String::new(),
@@ -39,20 +40,38 @@ impl Message {
         };
         let mut tools: BTreeMap<u32, usize> = BTreeMap::new();
         let mut finish = None;
+        let mut started = false;
+        // Whether the last block still accepts deltas of its own kind.
+        let mut open = false;
         for event in events {
             match event {
                 Event::Start { id, model } => {
-                    message.id = id;
-                    message.model = model;
+                    if !started {
+                        started = true;
+                        message.id = id;
+                        message.model = model;
+                    }
                 }
-                Event::ThinkingDelta(text) => match message.blocks.last_mut() {
-                    Some(Block::Thinking(existing)) => existing.push_str(&text),
-                    _ => message.blocks.push(Block::Thinking(text)),
-                },
-                Event::TextDelta(text) => match message.blocks.last_mut() {
-                    Some(Block::Text(existing)) => existing.push_str(&text),
-                    _ => message.blocks.push(Block::Text(text)),
-                },
+                Event::ThinkingDelta(text) => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    match message.blocks.last_mut() {
+                        Some(Block::Thinking(existing)) if open => existing.push_str(&text),
+                        _ => message.blocks.push(Block::Thinking(text)),
+                    }
+                    open = true;
+                }
+                Event::TextDelta(text) => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    match message.blocks.last_mut() {
+                        Some(Block::Text(existing)) if open => existing.push_str(&text),
+                        _ => message.blocks.push(Block::Text(text)),
+                    }
+                    open = true;
+                }
                 Event::ToolCallStart { index, id, name } => {
                     tools.insert(index, message.blocks.len());
                     message.blocks.push(Block::ToolUse {
@@ -60,6 +79,7 @@ impl Message {
                         name,
                         arguments: String::new(),
                     });
+                    open = true;
                 }
                 Event::ToolCallDelta { index, arguments } => {
                     if let Some(Block::ToolUse { arguments: all, .. }) =
@@ -68,7 +88,10 @@ impl Message {
                         all.push_str(&arguments);
                     }
                 }
-                Event::Finish(reason) => finish = Some(reason),
+                Event::Finish(reason) => {
+                    finish = Some(reason);
+                    open = false;
+                }
                 Event::Usage(usage) => message.usage = usage,
                 Event::Error(text) => return Err(text),
                 Event::Done => break,

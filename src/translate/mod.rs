@@ -11,7 +11,7 @@ mod tests;
 
 pub use error::upstream_error;
 pub use request::request;
-pub use response::response;
+pub use response::{document_events, response};
 pub use stream::Translator;
 
 /// Where an OpenAI backend takes a translated `/v1/messages` request.

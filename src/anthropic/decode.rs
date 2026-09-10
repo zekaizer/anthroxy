@@ -20,6 +20,12 @@ pub enum DecodeError {
         "tool `{name}` has no `{field}`; only tools with an input schema can be sent to this backend"
     )]
     Tool { name: String, field: &'static str },
+    #[error("messages[{index}] has a `{block}` block, which a `{role}` message cannot carry")]
+    WrongRole {
+        index: usize,
+        block: String,
+        role: String,
+    },
 }
 
 /// Parts of a message are joined with a blank line when flattened to text.
@@ -52,7 +58,8 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
                 .join(TEXT_SEPARATOR),
         ),
         Some(_) => return Err(DecodeError::Field("system")),
-    };
+    }
+    .filter(|text| !text.is_empty());
     let tools = match root.get("tools") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(tools)) => tools
@@ -89,12 +96,25 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
         messages,
         tools,
         tool_choice,
-        max_tokens: root.get("max_tokens").and_then(Value::as_u64),
-        temperature: root.get("temperature").and_then(Value::as_f64),
-        top_p: root.get("top_p").and_then(Value::as_f64),
+        max_tokens: optional(root, "max_tokens", Value::as_u64)?,
+        temperature: optional(root, "temperature", Value::as_f64)?,
+        top_p: optional(root, "top_p", Value::as_f64)?,
         stop,
-        stream: root.get("stream").and_then(Value::as_bool).unwrap_or(false),
+        stream: optional(root, "stream", Value::as_bool)?.unwrap_or(false),
     })
+}
+
+/// A field that may be absent, but not of another type: a value the
+/// backend would otherwise silently replace with its own default.
+fn optional<T>(
+    root: &serde_json::Map<String, Value>,
+    field: &'static str,
+    as_type: impl Fn(&Value) -> Option<T>,
+) -> Result<Option<T>, DecodeError> {
+    match root.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => as_type(value).map(Some).ok_or(DecodeError::Field(field)),
+    }
 }
 
 fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, DecodeError> {
@@ -116,6 +136,21 @@ fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, Decod
             .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(DecodeError::Field("content")),
     };
+    for part in &parts {
+        let misplaced = match (role, part) {
+            (Role::User, Part::ToolUse { .. }) => Some("tool_use"),
+            (Role::Assistant, Part::ToolResult { .. }) => Some("tool_result"),
+            (Role::Assistant, Part::Image { .. }) => Some("image"),
+            _ => None,
+        };
+        if let Some(block) = misplaced {
+            return Err(DecodeError::WrongRole {
+                index,
+                block: block.to_owned(),
+                role: field_str(message, "role")?.to_owned(),
+            });
+        }
+    }
     Ok(RequestMessage { role, parts })
 }
 
@@ -146,7 +181,7 @@ fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError
         },
         "tool_result" => Part::ToolResult {
             tool_use_id: field_str(block, "tool_use_id")?.to_owned(),
-            content: flatten_text(block.get("content"))?,
+            content: flatten_text(index, block.get("content"))?,
         },
         "thinking" | "redacted_thinking" => return Ok(None),
         other => {
@@ -159,18 +194,29 @@ fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError
     Ok(Some(part))
 }
 
-/// Text of a tool result: a string as is, blocks by their text with images
-/// left out.
-fn flatten_text(content: Option<&Value>) -> Result<String, DecodeError> {
+/// Text of a tool result: a string as is, blocks by their text. Images are
+/// left out (ADR-0010); any other block type is an error, as at message
+/// level.
+fn flatten_text(index: usize, content: Option<&Value>) -> Result<String, DecodeError> {
     match content {
         None | Some(Value::Null) => Ok(String::new()),
         Some(Value::String(text)) => Ok(text.clone()),
-        Some(Value::Array(blocks)) => Ok(blocks
-            .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-            .map(|block| field_str(block, "text"))
-            .collect::<Result<Vec<_>, _>>()?
-            .join(TEXT_SEPARATOR)),
+        Some(Value::Array(blocks)) => {
+            let mut texts = Vec::new();
+            for block in blocks {
+                match field_str(block, "type")? {
+                    "text" => texts.push(field_str(block, "text")?),
+                    "image" => {}
+                    other => {
+                        return Err(DecodeError::UnsupportedBlock {
+                            index,
+                            block: other.to_owned(),
+                        });
+                    }
+                }
+            }
+            Ok(texts.join(TEXT_SEPARATOR))
+        }
         Some(_) => Err(DecodeError::Field("content")),
     }
 }
@@ -407,6 +453,83 @@ mod tests {
             Err(DecodeError::Tool {
                 name: "web_search".into(),
                 field: "input_schema"
+            })
+        );
+    }
+
+    #[test]
+    fn wrongly_typed_sampling_fields_are_errors_not_defaults() {
+        for (field, value) in [
+            ("max_tokens", json!(100.5)),
+            ("max_tokens", json!("100")),
+            ("max_tokens", json!(-1)),
+            ("temperature", json!("0.5")),
+            ("top_p", json!(true)),
+            ("stream", json!("yes")),
+        ] {
+            let mut v = base();
+            v[field] = value.clone();
+            assert_eq!(
+                decode_json(v),
+                Err(DecodeError::Field(field)),
+                "{field} = {value}"
+            );
+        }
+        let mut v = base();
+        v["temperature"] = json!(1);
+        assert_eq!(decode_json(v).unwrap().temperature, Some(1.0));
+    }
+
+    #[test]
+    fn empty_system_is_no_system() {
+        for empty in [json!(""), json!([])] {
+            let mut v = base();
+            v["system"] = empty;
+            assert_eq!(decode_json(v).unwrap().system, None);
+        }
+    }
+
+    #[test]
+    fn unsupported_blocks_inside_tool_results_are_errors_too() {
+        let mut v = base();
+        v["messages"] = json!([{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "x"}}
+            ]}
+        ]}]);
+        assert_eq!(
+            decode_json(v),
+            Err(DecodeError::UnsupportedBlock {
+                index: 0,
+                block: "document".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parts_in_the_wrong_role_are_errors() {
+        let mut v = base();
+        v["messages"] = json!([{"role": "assistant", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": "r"}
+        ]}]);
+        assert_eq!(
+            decode_json(v),
+            Err(DecodeError::WrongRole {
+                index: 0,
+                block: "tool_result".into(),
+                role: "assistant".into()
+            })
+        );
+        let mut v = base();
+        v["messages"] = json!([{"role": "user", "content": [
+            {"type": "tool_use", "id": "t", "name": "n", "input": {}}
+        ]}]);
+        assert_eq!(
+            decode_json(v),
+            Err(DecodeError::WrongRole {
+                index: 0,
+                block: "tool_use".into(),
+                role: "user".into()
             })
         );
     }

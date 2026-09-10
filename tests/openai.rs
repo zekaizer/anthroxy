@@ -765,11 +765,32 @@ async fn a_document_answer_to_a_streaming_request_is_still_translated() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    assert_eq!(res.headers()["content-type"], "application/json");
-    let body: Value = res.json().await.unwrap();
     assert_eq!(
-        body["content"],
-        json!([{"type": "text", "text": "no stream here"}])
+        res.headers()["content-type"],
+        "text/event-stream",
+        "the client asked for events and can only read events"
+    );
+    let text = res.text().await.unwrap();
+    let all = events(&text);
+    assert_eq!(
+        all.first().map(|(e, _)| e.as_str()),
+        Some("message_start"),
+        "{text}"
+    );
+    assert_eq!(
+        all.last().map(|(e, _)| e.as_str()),
+        Some("message_stop"),
+        "{text}"
+    );
+    assert!(
+        all.iter()
+            .any(|(e, d)| e == "content_block_delta" && d["delta"]["text"] == "no stream here"),
+        "{text}"
+    );
+    let (_, delta) = all.iter().find(|(e, _)| e == "message_delta").unwrap();
+    assert_eq!(
+        delta["usage"],
+        json!({"input_tokens": 5, "output_tokens": 7})
     );
 }
 

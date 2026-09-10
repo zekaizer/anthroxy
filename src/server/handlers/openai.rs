@@ -74,9 +74,6 @@ pub async fn body(
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/event-stream"));
     if !stream || !event_stream {
-        if stream {
-            tracing::warn!("backend answered a streaming request with a document");
-        }
         let raw = read(upstream, backend).await?;
         tracing::info!(
             bytes = raw.len(),
@@ -86,12 +83,19 @@ pub async fn body(
         if let Some(recorder) = recorder {
             recorder.finish_with_body(&raw);
         }
-        let document = translate::response(&raw, upstream_model).map_err(|error| {
-            RouterError::BadUpstreamResponse {
-                backend: backend.name.clone(),
-                detail: error.to_string(),
-            }
-        })?;
+        let bad = |error: &dyn std::fmt::Display| RouterError::BadUpstreamResponse {
+            backend: backend.name.clone(),
+            detail: error.to_string(),
+        };
+        if stream {
+            // The client reads events and nothing else, so a document is
+            // replayed as the stream it stands for.
+            tracing::warn!("backend answered a streaming request with a document");
+            let events = translate::document_events(&raw, upstream_model).map_err(|e| bad(&e))?;
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            return Ok((headers, Body::from(events)));
+        }
+        let document = translate::response(&raw, upstream_model).map_err(|e| bad(&e))?;
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         return Ok((headers, Body::from(document)));
     }
