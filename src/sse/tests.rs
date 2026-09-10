@@ -66,3 +66,10 @@ fn caps_the_pending_buffer() {
     let big = vec![b'x'; 16 * 1024 * 1024 + 1];
     assert_eq!(p.feed(&big), Err(SseError::TooLarge(16 * 1024 * 1024)));
 }
+
+#[test]
+fn an_error_discards_the_pending_bytes() {
+    let mut p = Parser::new();
+    assert_eq!(p.feed(b"data: \xff\n\n"), Err(SseError::Utf8));
+    assert_eq!(p.feed(b"data: ok\n\n").unwrap(), vec![frame(None, "ok")]);
+}

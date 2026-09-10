@@ -22,6 +22,8 @@ pub struct ChunkDecoder {
     pending: BTreeMap<u32, Pending>,
     /// Next index for a call the backend did not number.
     unnumbered: u32,
+    /// The call an unnumbered delta without `id` or name continues.
+    last: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -35,6 +37,16 @@ impl ChunkDecoder {
         Self::default()
     }
 
+    /// End of stream: calls still waiting for a name are reported, since
+    /// the client would otherwise see a `tool_use` stop with no tool.
+    pub fn finish(&mut self) -> Vec<Event> {
+        let pending = std::mem::take(&mut self.pending);
+        pending
+            .into_keys()
+            .map(|index| Event::Error(format!("tool call {index} never received a function name")))
+            .collect()
+    }
+
     pub fn decode(&mut self, data: &str) -> Result<Vec<Event>, ChunkError> {
         let data = data.trim();
         if data == "[DONE]" {
@@ -45,8 +57,8 @@ impl ChunkDecoder {
         let root = root
             .as_object()
             .ok_or_else(|| ChunkError::NotJson("not an object".to_owned()))?;
-        if let Some(error) = root.get("error") {
-            return Ok(vec![Event::Error(error_text(error))]);
+        if let Some(message) = error_document(root) {
+            return Ok(vec![Event::Error(message)]);
         }
         let mut events = Vec::new();
         if !self.started {
@@ -73,14 +85,22 @@ impl ChunkDecoder {
     }
 
     fn tool_call(&mut self, call: &Value, events: &mut Vec<Event>) {
+        let function = call.get("function");
+        let names_a_call = call.get("id").is_some_and(Value::is_string)
+            || function
+                .and_then(|f| f.get("name"))
+                .is_some_and(Value::is_string);
         let index = match call.get("index").and_then(Value::as_u64) {
             Some(index) => index as u32,
-            None => {
-                self.unnumbered += 1;
-                self.unnumbered - 1
-            }
+            None => match self.last {
+                Some(last) if !names_a_call => last,
+                _ => {
+                    self.unnumbered += 1;
+                    self.unnumbered - 1
+                }
+            },
         };
-        let function = call.get("function");
+        self.last = Some(index);
         let arguments = function
             .and_then(|f| f.get("arguments"))
             .and_then(Value::as_str)
@@ -184,8 +204,26 @@ pub(super) fn generated_id() -> String {
     format!("call_{}", uuid::Uuid::new_v4().simple())
 }
 
+/// The message of an error document: OpenAI's `{"error": …}` (a null
+/// `error` is not one) or vLLM's `{"object": "error", "message": …}`.
+pub(super) fn error_document(root: &serde_json::Map<String, Value>) -> Option<String> {
+    match root.get("error") {
+        Some(error) if !error.is_null() => return Some(error_text(error)),
+        _ => {}
+    }
+    if root.get("object").and_then(Value::as_str) == Some("error") {
+        return Some(
+            root.get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| Value::Object(root.clone()).to_string()),
+        );
+    }
+    None
+}
+
 /// `error.message`, a bare error string, or the error value itself.
-pub(super) fn error_text(error: &Value) -> String {
+fn error_text(error: &Value) -> String {
     match error {
         Value::String(text) => text.clone(),
         Value::Object(fields) => match fields.get("message") {

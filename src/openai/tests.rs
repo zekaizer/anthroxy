@@ -528,3 +528,124 @@ fn error_message_prefers_the_documented_field() {
     assert_eq!(error_message(long.as_bytes()).len(), 200);
     assert_eq!(error_message(b"\xff\xfe"), "\u{FFFD}\u{FFFD}");
 }
+
+// ---- review hardening ----
+
+#[test]
+fn unnumbered_deltas_continue_the_latest_call() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    assert_eq!(
+        d.decode(&chunk(json!({"tool_calls": [{"id": "call_1", "function": {"name": "read", "arguments": ""}}]}), None))
+            .unwrap(),
+        vec![Event::ToolCallStart {
+            index: 0,
+            id: "call_1".into(),
+            name: "read".into()
+        }]
+    );
+    assert_eq!(
+        d.decode(&chunk(
+            json!({"tool_calls": [{"function": {"arguments": "{\"path\":"}}]}),
+            None
+        ))
+        .unwrap(),
+        vec![Event::ToolCallDelta {
+            index: 0,
+            arguments: "{\"path\":".into()
+        }]
+    );
+    assert_eq!(
+        d.decode(&chunk(
+            json!({"tool_calls": [{"function": {"arguments": "\"a\"}"}}]}),
+            None
+        ))
+        .unwrap(),
+        vec![Event::ToolCallDelta {
+            index: 0,
+            arguments: "\"a\"}".into()
+        }]
+    );
+    let next = d
+        .decode(&chunk(json!({"tool_calls": [{"id": "call_2", "function": {"name": "bash", "arguments": "{}"}}]}), None))
+        .unwrap();
+    assert!(
+        matches!(next[0], Event::ToolCallStart { index: 1, .. }),
+        "{next:?}"
+    );
+}
+
+#[test]
+fn a_call_that_never_gets_a_name_is_reported_at_the_end() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    d.decode(&chunk(
+        json!({"tool_calls": [{"index": 3, "id": "call_x", "function": {"arguments": "{}"}}]}),
+        None,
+    ))
+    .unwrap();
+    let tail = d.finish();
+    assert!(
+        matches!(&tail[..], [Event::Error(m)] if m.contains("3") && m.contains("name")),
+        "{tail:?}"
+    );
+    assert_eq!(ChunkDecoder::new().finish(), vec![]);
+}
+
+#[test]
+fn vllm_style_error_objects_are_errors() {
+    let mut d = ChunkDecoder::new();
+    let vllm =
+        r#"{"object":"error","message":"prompt too long","type":"BadRequestError","code":400}"#;
+    assert_eq!(
+        d.decode(vllm).unwrap(),
+        vec![Event::Error("prompt too long".into())]
+    );
+    assert_eq!(error_message(vllm.as_bytes()), "prompt too long");
+    assert!(matches!(
+        decode_response(vllm.as_bytes()),
+        Ok(events) if events == vec![Event::Error("prompt too long".into())]
+    ));
+}
+
+#[test]
+fn a_null_error_field_is_not_an_error() {
+    let mut d = ChunkDecoder::new();
+    let with_null = json!({"id": "chatcmpl-1", "model": "qwen", "error": null,
+        "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": null}]});
+    assert_eq!(
+        d.decode(&with_null.to_string()).unwrap(),
+        vec![start(), Event::TextDelta("ok".into())]
+    );
+    let body = json!({"id": "chatcmpl-9", "error": null,
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]});
+    let events = decode_response(&serde_json::to_vec(&body).unwrap()).unwrap();
+    assert!(
+        events.contains(&Event::TextDelta("ok".into())),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_turn_whose_parts_were_all_dropped_still_keeps_role_alternation() {
+    let r = request(vec![
+        user(vec![Part::Text("go".into())]),
+        assistant(vec![]),
+        user(vec![Part::Text("continue".into())]),
+        user(vec![Part::ToolResult {
+            tool_use_id: "t".into(),
+            content: "r".into(),
+        }]),
+    ]);
+    assert_eq!(
+        encoded(&r)["messages"],
+        json!([
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "continue"},
+            {"role": "tool", "tool_call_id": "t", "content": "r"}
+        ])
+    );
+}

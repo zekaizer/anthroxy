@@ -67,7 +67,16 @@ pub async fn body(
         let json = serde_json::to_vec(&document).expect("an error document serializes");
         return Ok((headers, Body::from(json)));
     }
-    if !stream {
+    let event_stream = upstream
+        .response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"));
+    if !stream || !event_stream {
+        if stream {
+            tracing::warn!("backend answered a streaming request with a document");
+        }
         let raw = read(upstream, backend).await?;
         if let Some(recorder) = recorder {
             recorder.finish_with_body(&raw);

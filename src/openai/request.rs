@@ -66,6 +66,7 @@ pub fn encode(request: &Request) -> Vec<u8> {
 /// `user` message for the rest; an assistant message yields one message with
 /// its text and tool calls.
 fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
+    let before = out.len();
     let mut texts: Vec<&str> = Vec::new();
     let mut parts: Vec<Value> = Vec::new();
     let mut has_image = false;
@@ -101,12 +102,17 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
             })),
         }
     }
+    // A turn that produced nothing (its blocks were all dropped) still
+    // occupies its place, so roles keep alternating for templates that
+    // insist on it.
     let content = if has_image {
         Some(Value::Array(parts))
-    } else if texts.is_empty() {
-        None
-    } else {
+    } else if !texts.is_empty() {
         Some(Value::String(texts.join(TEXT_SEPARATOR)))
+    } else if tool_calls.is_empty() && out.len() == before {
+        Some(Value::String(String::new()))
+    } else {
+        None
     };
     let mut object = Map::new();
     object.insert(

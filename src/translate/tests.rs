@@ -172,3 +172,62 @@ fn upstream_errors_take_their_type_from_the_status() {
         "[backend mock, HTTP 503] <html>gateway</html>"
     );
 }
+
+#[tokio::test]
+async fn a_transport_error_ends_the_stream_at_once() {
+    let first = Box::leak(chunk(json!({"content": "x"}), None).into_boxed_str());
+    let inner = futures_util::stream::iter(vec![
+        Ok(Bytes::from(first as &str)),
+        Err(std::io::Error::other("reset")),
+        Err(std::io::Error::other("still broken")),
+    ]);
+    let mut translator = Translator::new(inner, "m", "mock");
+    let mut items = 0;
+    let mut out = String::new();
+    while let Some(item) = translator.next().await {
+        items += 1;
+        out.push_str(std::str::from_utf8(&item.unwrap()).unwrap());
+        assert!(items <= 2, "kept polling a failed stream");
+    }
+    assert_eq!(
+        events(&out).last().map(String::as_str),
+        Some("error"),
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn event_only_frames_are_keep_alives() {
+    let first = Box::leak(chunk(json!({"content": "x"}), Some("stop")).into_boxed_str());
+    let out = translate(vec![
+        Ok(": comment\n\n"),
+        Ok("event: ping\n\n"),
+        Ok(first),
+        Ok("event: ping\ndata: \n\n"),
+        Ok("data: [DONE]\n\n"),
+    ])
+    .await;
+    assert_eq!(
+        events(&out).last().map(String::as_str),
+        Some("message_stop"),
+        "{out}"
+    );
+    assert!(!out.contains("error"), "{out}");
+}
+
+#[tokio::test]
+async fn a_tool_call_without_a_name_is_an_error_not_a_silent_loss() {
+    let first = Box::leak(
+        chunk(
+            json!({"tool_calls": [{"index": 0, "id": "c", "function": {"arguments": "{}"}}]}),
+            Some("tool_calls"),
+        )
+        .into_boxed_str(),
+    );
+    let out = translate(vec![Ok(first), Ok("data: [DONE]\n\n")]).await;
+    assert_eq!(
+        events(&out).last().map(String::as_str),
+        Some("error"),
+        "{out}"
+    );
+}

@@ -4,7 +4,8 @@
 use serde_json::Value;
 
 use super::chunk::{
-    content_events, error_text, first_choice, generated_id, start_event, stop_reason, usage_event,
+    content_events, error_document, first_choice, generated_id, start_event, stop_reason,
+    usage_event,
 };
 use crate::ir::Event;
 
@@ -25,8 +26,8 @@ pub fn decode(body: &[u8]) -> Result<Vec<Event>, ResponseError> {
     let root = root
         .as_object()
         .ok_or_else(|| ResponseError::NotJson("not an object".to_owned()))?;
-    if let Some(error) = root.get("error") {
-        return Ok(vec![Event::Error(error_text(error))]);
+    if let Some(message) = error_document(root) {
+        return Ok(vec![Event::Error(message)]);
     }
     let choice = first_choice(root).ok_or(ResponseError::NoChoices)?;
     let mut events = vec![start_event(root)];

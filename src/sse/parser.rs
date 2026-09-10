@@ -41,8 +41,13 @@ impl Parser {
         while let Some((end, next)) = frame_end(&self.buffer[consumed..]) {
             let raw = &self.buffer[consumed..consumed + end];
             consumed += next;
-            if let Some(frame) = parse_frame(raw)? {
-                frames.push(frame);
+            match parse_frame(raw) {
+                Ok(Some(frame)) => frames.push(frame),
+                Ok(None) => {}
+                Err(error) => {
+                    self.buffer.clear();
+                    return Err(error);
+                }
             }
         }
         self.buffer.drain(..consumed);

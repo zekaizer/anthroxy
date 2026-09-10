@@ -5,21 +5,23 @@ use bytes::Bytes;
 use futures_util::Stream;
 
 use crate::anthropic::StreamEncoder;
+use crate::ir::Event;
 use crate::openai::ChunkDecoder;
 use crate::sse::Parser;
 
 /// Chat Completions SSE bytes in, Messages SSE bytes out, one output chunk
-/// per input chunk at most. After the first failure (transport error,
-/// malformed event, an `error` frame) one `error` event is emitted and the
-/// rest of the input is consumed in silence, so the upstream body still ends
-/// normally for whoever records it.
+/// per input chunk at most. After a malformed event or an `error` frame one
+/// `error` event is emitted and the rest of the input is consumed in
+/// silence, so the upstream body still ends normally for whoever records
+/// it. A transport error ends the output at once; the inner stream is not
+/// polled again.
 pub struct Translator<S> {
     inner: S,
     parser: Parser,
     decoder: ChunkDecoder,
     encoder: StreamEncoder,
     backend: String,
-    /// `inner` returned `None`; it is not polled again.
+    /// `inner` ended or failed; it is not polled again.
     done: bool,
 }
 
@@ -54,12 +56,12 @@ impl<S> Translator<S> {
             }
         };
         for frame in frames {
+            // A frame without data is a keep-alive.
+            if frame.data.is_empty() {
+                continue;
+            }
             match self.decoder.decode(&frame.data) {
-                Ok(events) => {
-                    for event in events {
-                        self.encoder.encode(event, out);
-                    }
-                }
+                Ok(events) => self.encode_all(events, out),
                 Err(error) => {
                     self.fail(&format!("malformed event: {error}"), out);
                     return;
@@ -68,18 +70,30 @@ impl<S> Translator<S> {
         }
     }
 
+    /// `Done` closes the message, so what the decoder still holds is
+    /// reported before it.
+    fn encode_all(&mut self, events: Vec<Event>, out: &mut String) {
+        for event in events {
+            if event == Event::Done {
+                for held in self.decoder.finish() {
+                    self.encoder.encode(held, out);
+                }
+            }
+            self.encoder.encode(event, out);
+        }
+    }
+
     fn end(&mut self, out: &mut String) {
         match self.parser.finish() {
-            Ok(Some(frame)) => match self.decoder.decode(&frame.data) {
-                Ok(events) => {
-                    for event in events {
-                        self.encoder.encode(event, out);
-                    }
-                }
+            Ok(Some(frame)) if !frame.data.is_empty() => match self.decoder.decode(&frame.data) {
+                Ok(events) => self.encode_all(events, out),
                 Err(error) => self.fail(&format!("malformed event: {error}"), out),
             },
-            Ok(None) => {}
+            Ok(_) => {}
             Err(error) => self.fail(&format!("malformed event stream: {error}"), out),
+        }
+        for event in self.decoder.finish() {
+            self.encoder.encode(event, out);
         }
         self.encoder.finish(out);
     }
@@ -102,7 +116,13 @@ where
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(Ok(chunk))) => this.translate(&chunk, &mut out),
                 Poll::Ready(Some(Err(error))) => {
+                    this.done = true;
                     this.fail(&format!("connection lost mid-stream: {error}"), &mut out);
+                    return if out.is_empty() {
+                        Poll::Ready(None)
+                    } else {
+                        Poll::Ready(Some(Ok(Bytes::from(out))))
+                    };
                 }
                 Poll::Ready(None) => {
                     this.done = true;

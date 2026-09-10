@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use super::chunk::error_text;
+use super::chunk::error_document;
 
 /// Characters of a non-JSON body reported to the client.
 pub const MAX_RAW_MESSAGE: usize = 200;
@@ -11,9 +11,9 @@ pub const MAX_RAW_MESSAGE: usize = 200;
 /// [`MAX_RAW_MESSAGE`] characters of the body, trimmed.
 pub fn message(raw: &[u8]) -> String {
     if let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(raw)
-        && let Some(error) = fields.get("error")
+        && let Some(message) = error_document(&fields)
     {
-        return error_text(error);
+        return message;
     }
     String::from_utf8_lossy(raw)
         .trim()

@@ -750,6 +750,30 @@ async fn client_disconnect_mid_stream_leaves_the_router_healthy() {
 }
 
 #[tokio::test]
+async fn a_document_answer_to_a_streaming_request_is_still_translated() {
+    let upstream = MockUpstream::start(|_| {
+        completion(
+            json!({"role": "assistant", "content": "no stream here"}),
+            "stop",
+        )
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(true))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-type"], "application/json");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(
+        body["content"],
+        json!([{"type": "text", "text": "no stream here"}])
+    );
+}
+
+#[tokio::test]
 async fn anthropic_kind_never_translates() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

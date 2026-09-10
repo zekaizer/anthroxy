@@ -16,6 +16,10 @@ pub enum DecodeError {
     Role { index: usize, role: String },
     #[error("messages[{index}] has a `{block}` block, which cannot be sent to this backend")]
     UnsupportedBlock { index: usize, block: String },
+    #[error(
+        "tool `{name}` has no `{field}`; only tools with an input schema can be sent to this backend"
+    )]
+    Tool { name: String, field: &'static str },
 }
 
 /// Parts of a message are joined with a blank line when flattened to text.
@@ -172,16 +176,21 @@ fn flatten_text(content: Option<&Value>) -> Result<String, DecodeError> {
 }
 
 fn decode_tool(tool: &Value) -> Result<Tool, DecodeError> {
+    let name = field_str(tool, "name")?.to_owned();
+    let parameters = tool
+        .get("input_schema")
+        .cloned()
+        .ok_or_else(|| DecodeError::Tool {
+            name: name.clone(),
+            field: "input_schema",
+        })?;
     Ok(Tool {
-        name: field_str(tool, "name")?.to_owned(),
+        name,
         description: tool
             .get("description")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        parameters: tool
-            .get("input_schema")
-            .cloned()
-            .ok_or(DecodeError::Field("input_schema"))?,
+        parameters,
     })
 }
 
@@ -385,6 +394,19 @@ mod tests {
             Err(DecodeError::UnsupportedBlock {
                 index: 0,
                 block: "document".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_tool_without_a_schema_is_named_in_the_error() {
+        let mut v = base();
+        v["tools"] = json!([{"type": "web_search_20250305", "name": "web_search"}]);
+        assert_eq!(
+            decode_json(v),
+            Err(DecodeError::Tool {
+                name: "web_search".into(),
+                field: "input_schema"
             })
         );
     }
