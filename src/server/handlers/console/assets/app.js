@@ -383,7 +383,7 @@ const header = {
   nav: null,
 };
 
-function renderShell() {
+async function renderShell() {
   header.meta = h("div", { class: "top-meta" });
   header.nav = h("nav", { class: "tabs", role: "tablist", "aria-label": "Console sections" });
   const signOutButton = h("button", { class: "small", type: "button", onclick: () => signOut("Signed out.") }, "Sign out");
@@ -396,8 +396,8 @@ function renderShell() {
     header.nav);
   const main = h("main", { id: "view" });
   root.replaceChildren(top, main);
-  refreshHeader();
-  every(10000, refreshHeader);
+  // Tabs read the model list from the first status, so it comes first.
+  await refreshHeader();
   route();
 }
 
@@ -1146,10 +1146,11 @@ function smokePanel(result) {
   const prompt = h("input", { type: "text", placeholder: "Reply with one short sentence.", "aria-label": "Prompt" });
   const stream = h("input", { type: "checkbox" });
   stream.checked = true;
-  const send = h("button", { class: "primary", type: "submit" }, "Send");
+  const send = h("button", { class: "primary", type: "submit", disabled: !models.length }, "Send");
   const form = h("form", null,
     h("p", { class: "note" }, "Sends one short ", h("code", null, "/v1/messages"),
       " request through the model's route, as Claude Code would. It reaches the backend and costs tokens."),
+    models.length ? null : h("p", { class: "note error-text" }, "The model list did not load. Reload the page to try again."),
     h("div", { class: "form-row" }, model, h("label", null, stream, " Stream"), send),
     h("div", { class: "form-row" }, prompt),
     result);
