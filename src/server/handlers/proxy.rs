@@ -77,7 +77,13 @@ async fn handle(
         .map(|p| p.as_str())
         .unwrap_or("/");
     let (path_and_query, body) = match backend.kind {
-        BackendKind::Anthropic => (client_path, body),
+        BackendKind::Anthropic => (
+            client_path,
+            match anthropic::strip_unsigned_thinking(&body) {
+                Some(stripped) => Bytes::from(stripped),
+                None => body,
+            },
+        ),
         BackendKind::OpenAi => openai::prepare(&body, client_path, &backend.name)?,
     };
     let headers = upstream_headers(&parts.headers, backend);

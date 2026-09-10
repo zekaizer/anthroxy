@@ -611,3 +611,42 @@ async fn custom_credential_header_reaches_the_backend() {
     assert_eq!(seen.header("authorization"), None);
     assert_eq!(seen.header("x-api-key"), None);
 }
+
+#[tokio::test]
+async fn unsigned_thinking_blocks_are_removed_before_an_anthropic_backend() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("smart");
+    body["messages"] = json!([
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "from a local model"},
+            {"type": "text", "text": "hello"}
+        ]},
+        {"role": "user", "content": "go on"}
+    ]);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    assert_eq!(
+        sent["messages"][1]["content"],
+        json!([{"type": "text", "text": "hello"}])
+    );
+    assert_eq!(
+        sent["future_field"],
+        json!({"nested": [1, 2, 3]}),
+        "the rest is intact"
+    );
+
+    // A signed block is the backend's own and is relayed byte for byte.
+    body["messages"][1]["content"][0]["signature"] = json!("sig");
+    let raw = body.to_string();
+    let res = router
+        .post("/v1/messages", &body)
+        .body(raw.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(upstream.last().body, raw.as_bytes(), "untouched bytes");
+}

@@ -136,12 +136,13 @@ Policy conflict: ADR-0003's verbatim-passthrough rule cannot coexist with R1–R
 
 Risks (accepted in round 4):
 
-- RISK1 (D2). `thinking` blocks produced by the router carry no signature; a history holding them sent back to an Anthropic backend gets a 400 and Claude Code retries once without them (E10, observed in E15). G1(d) holds; the first request after switching back is sent twice. Accepted.
+- ~~RISK1~~ (resolved 2026-09-10: the router strips its own unsigned thinking blocks before an `anthropic` backend, mirroring what Claude Code's `retry:thinking-signature-strip` does after the 400; E16)
 - ~~RISK2~~ (U1 closed by E11; mapping extended with `role: "system"` messages, `output_config` dropped)
 - RISK3 (U2, U4, U6, U9). The in-house service's implementation extent is unverified; see U2 for the per-outcome consequences.
 - ~~RISK4~~ (U3 closed; the 404 is tolerated by Claude Code)
 - ~~RISK5~~ (U5 closed; R8 is Must)
 - ~~RISK6~~ (U7 closed; documents are noted, not dropped or fatal)
+- E16. Claude Code 2.1.267 stores router-made thinking blocks with `signature: ""` and, on Anthropic's `Invalid signature in thinking block` 400, strips every thinking block and retries (bundle string `[thinking] server rejected a thinking block; stripping all thinking blocks and retrying`, metric `retry:thinking-signature-strip`). With the router stripping unsigned blocks first, the switch back to Haiku answered on the first request. [this session]
 - E15. Backend switch on 2026-09-10 with two backends (LM Studio `kind = "openai"` and api.anthropic.com through the Claude Code OAuth token): a session started on the local model and resumed on `claude-haiku-4-5` got one 400 from Anthropic (`Invalid signature in thinking block`), Claude Code retried without the thinking blocks and Haiku answered with the full context; resumed again on the local model, the Anthropic turn's signed thinking blocks were dropped (R9) and the model answered. G1(d) holds in both directions; RISK1 is exactly one 400 per switch back. [this session]
 - E14. On 2026-09-10 Claude Code's Read of a PDF sent a `document` block inside the `tool_result`; the router's 400 ended the turn (`terminal_reason: api_error`). Documents are now replaced by an omission note so the turn continues. A prompt over the model's context window (40k tokens into 32k) came back as LM Studio's 400 relayed as `invalid_request_error` with its message. [this session]
 - E13. Images end to end on 2026-09-10 against LM Studio `gemma-4-e2b-it-qat`: an Anthropic `image` block sent directly, and an image read by Claude Code's Read tool (arrives inside `tool_result`), were both described correctly by the model once tool-result images were carried into the following user message. Usage is reported per turn and aggregated by Claude Code; cache tokens are always 0 and Claude Code assumes a 200k context window for an unknown model. [this session]
