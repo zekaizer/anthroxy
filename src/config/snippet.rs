@@ -21,9 +21,31 @@ pub fn string_array<S: AsRef<str>>(values: &[S]) -> String {
     format!("[{}]", items.join(", "))
 }
 
+/// A `[[models]]` entry serving `upstream_model` from `backend`, with the
+/// last path segment of the upstream name as its id.
+pub fn model_block(backend: &str, upstream_model: &str) -> String {
+    let id = upstream_model.rsplit('/').next().unwrap_or(upstream_model);
+    format!(
+        "[[models]]\nid = {}\nbackend = {}\nupstream_model = {}\n",
+        string(id),
+        string(backend),
+        string(upstream_model)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_block_parses_back() {
+        let block = model_block("vllm", "Qwen/Qwen3.5-32B");
+        let value: toml::Value = toml::from_str(&block).unwrap();
+        let model = &value["models"].as_array().unwrap()[0];
+        assert_eq!(model["id"].as_str(), Some("Qwen3.5-32B"));
+        assert_eq!(model["backend"].as_str(), Some("vllm"));
+        assert_eq!(model["upstream_model"].as_str(), Some("Qwen/Qwen3.5-32B"));
+    }
 
     #[test]
     fn keys_are_bare_only_when_toml_allows() {

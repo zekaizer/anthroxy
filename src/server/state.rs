@@ -2,7 +2,7 @@
 //! [`Snapshot`]; a reload builds a new snapshot and swaps the pointer, so
 //! in-flight requests keep the configuration they started with.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -16,9 +16,12 @@ use crate::observability::BodyLog;
 use crate::routing::Registry;
 use crate::stats::StatsLog;
 use crate::upstream::UpstreamClient;
+use crate::upstream::probe::ListedModel;
 
 /// Configuration-derived state, built once per (re)load.
 pub struct Snapshot {
+    /// The configuration this snapshot was built from.
+    pub config: Config,
     pub registry: Registry,
     pub upstream: UpstreamClient,
     pub client_token: ClientToken,
@@ -52,6 +55,7 @@ impl Snapshot {
             false => None,
         };
         Ok(Self {
+            config: config.clone(),
             registry: Registry::from_config(config)?,
             upstream: UpstreamClient::from_config(&config.upstream)?,
             client_token: ClientToken::new(&config.server.token),
@@ -128,6 +132,8 @@ pub struct AppState {
     reloads: Arc<Mutex<VecDeque<ReloadEvent>>>,
     /// Exchanges in flight and recently finished; survives reloads.
     pub activity: Arc<Activity>,
+    /// Model lists from the console's last probe, by backend name.
+    probed: Arc<Mutex<HashMap<String, Vec<ListedModel>>>>,
 }
 
 impl AppState {
@@ -148,6 +154,7 @@ impl AppState {
             source: Arc::new(RwLock::new(None)),
             reloads: Arc::new(Mutex::new(VecDeque::from([startup]))),
             activity: Activity::new(),
+            probed: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -242,6 +249,26 @@ impl AppState {
             .iter()
             .cloned()
             .collect()
+    }
+
+    /// The address this process listens on.
+    pub fn listen(&self) -> SocketAddr {
+        self.listen
+    }
+
+    /// Model lists from the console's last probe, by backend name.
+    pub fn probed(&self) -> HashMap<String, Vec<ListedModel>> {
+        self.probed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub fn set_probed(&self, listed: HashMap<String, Vec<ListedModel>>) {
+        *self
+            .probed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = listed;
     }
 
     /// The configuration in force right now. Cheap: one pointer clone.

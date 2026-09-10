@@ -13,6 +13,7 @@ pub mod example;
 mod schema;
 pub mod snippet;
 mod validate;
+pub mod view;
 
 #[cfg(test)]
 mod tests;

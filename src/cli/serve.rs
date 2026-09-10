@@ -159,6 +159,15 @@ fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, s
         Some(stats) => println!("  stats    {}", display_path(stats.dir())),
         None => println!("  stats    {}", style.dim("off (stats.enabled)")),
     }
+    let local = if addr.ip().is_unspecified() {
+        format!("http://localhost:{}/", addr.port())
+    } else {
+        format!("http://{addr}/")
+    };
+    println!(
+        "  console  {local}  {}",
+        style.dim("(sign in with server.token)")
+    );
     println!(
         "  client   {}",
         style.dim("run `anthroxy env` for Claude Code's variables")
