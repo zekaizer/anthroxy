@@ -20,6 +20,8 @@ What the router does:
 - **OpenAI backends.** A backend marked `kind = "openai"` gets each request translated to Chat Completions and its answer translated back, streaming, tool calls, images and reasoning included, so Claude Code uses it like any other model.
 - **Retries and clear errors.** Connection failures are retried with backoff; every failure names the backend and cause in the Anthropic error format, so Claude Code shows it.
 - **Tracing.** Every request has an id (`x-request-id`) that ties together the log lines, the error body and, when enabled, an on-disk record of the exact request and response.
+- **Web console.** `http://<router>/` shows the running router from any browser that reaches it, the Windows host included: credential freshness, reload results, requests in flight and recently finished with their errors and configuration hints, backend probes, a test request, Claude Code's variables and the body recordings.
+- **Statistics.** One line per `/v1/messages` exchange (routing, status, timings, token usage, never content) is kept on disk and summarised per model and per day: error rate, latency percentiles, tokens, prompt-cache hit rate, output speed.
 
 ## Install
 
@@ -84,6 +86,8 @@ claude
 
 `anthroxy env --format powershell` prints the same for the Windows host; `--format json` prints an `"env"` block for `~/.claude/settings.json`.
 
+Open `http://localhost:8787/` (or the address Claude Code uses) in a browser and sign in with `server.token` for the console; see [Web console](#web-console).
+
 ## Configuration
 
 `~/.config/anthroxy/config.toml` (override with `--config` or `ANTHROXY_CONFIG`). `anthroxy init --stdout` prints a fully commented example; the essentials:
@@ -98,6 +102,11 @@ level = "info"                   # error|warn|info|debug|trace or a tracing dire
 format = "text"                  # or "json"
 # body_dir = "/var/tmp/anthroxy"   # record every request/response (see Debugging)
 body_retention = "7d"            # delete recorded exchanges older than this; "0s" keeps all
+
+[stats]
+# enabled = false                # on by default: one line per /v1/messages exchange
+# dir = "~/.local/state/anthroxy/stats"   # default: $XDG_STATE_HOME/anthroxy/stats
+retention = "90d"                # delete daily files older than this; "0s" keeps all
 
 [upstream]
 connect_timeout = "10s"
@@ -151,9 +160,10 @@ Notes:
 - `drop_fields` removes request body fields before forwarding to that backend, for servers that reject parameters they do not know (vLLM and `context_management`, for example). Paths are dot-separated object keys (`metadata.user_id`); arrays cannot be reached and `model` cannot be dropped. The `anthropic-beta` header is left alone. Claude Code's own `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is the client-side alternative, but it applies to every backend in the session.
 - `kind = "openai"` marks a backend that speaks the OpenAI Chat Completions API. `POST /v1/messages` is translated and sent to `<url>/v1/chat/completions`: `system`, messages, tool definitions, tool calls and results, and base64 images are mapped (an image inside a tool result rides in the following user message, since tool messages are text-only); `metadata.user_id` and `output_config.effort` become `user` and `reasoning_effort`; `cache_control`, `context_management`, `top_k` and the `thinking` parameter are dropped, as are `thinking` blocks in the history; a PDF or other `document` block is replaced by a note saying it was omitted, so the model can say so instead of the turn failing. The answer is translated back, streaming included; `reasoning_content` appears as thinking blocks (removed again before any Anthropic backend sees them, so switching models back costs no failed request), and cached and reasoning token counts reach Claude Code when the server reports them. `count_tokens` is answered 404 by the router. `anthropic_beta` is not accepted on such a backend, and `anthropic-version`/`anthropic-beta` are not sent to it. `check` still probes `GET /v1/models`, so a server without that endpoint fails `check` while `serve` works. See ADR-0010 for the exact mapping.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
+- `[stats]` writes `requests-YYYY-MM-DD.jsonl` (UTC dates) owner-only under `stats.dir`: request id, time, requested and routed model, backend, upstream model, stream flag, status, attempts, latency, time to first byte, duration, bytes, outcome and token usage (input, output, cache read, cache write). Message content, error bodies and headers are never written. Daily files older than `stats.retention` are deleted with the body log sweep. `count_tokens` and `/v1/models` are not counted.
 - HTTPS backends are verified against the Mozilla roots built into the binary plus the OS certificate store (`update-ca-certificates` on Ubuntu, the keychain on macOS). `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the OS store when set; under systemd they go in the unit as `Environment=`. `upstream.ca_certificate` adds every certificate in a PEM file on top, for a private CA that should travel with the configuration file; a file that cannot be read or holds no certificate fails `check` and `serve`. There is no way to skip verification.
 - Backends are reached at the URL the file names: `http_proxy` / `https_proxy` / `all_proxy` in the environment are ignored, so an ambient proxy cannot take a backend request, and the credential on it, somewhere the configuration never named. A TLS-intercepting proxy on the path still works; it needs its CA, above.
-- Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, body capture and upstream settings swap atomically; in-flight requests finish on the old configuration. `server.listen` and the log level and format need a restart instead, and a reload that changes one of them says so. A file that fails to load leaves the running configuration untouched and logs the error.
+- Edits take effect on `SIGHUP` (`kill -HUP <pid>`, `anthroxy service reload`, or the console's Reload button): models, backends, credentials, token, body capture and upstream settings swap atomically; in-flight requests finish on the old configuration. `server.listen` and the log level and format need a restart instead, and a reload that changes one of them says so. A file that fails to load leaves the running configuration untouched and logs the error.
 - Claude Code assumes a 200k context window for a model it does not know, so it will not compact a session in time for a smaller local model and the backend answers with a context-size error. Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in Claude Code's environment to the real window (for example `32768`); it applies to every model in that session, so it trades early compaction on large models for correctness on small ones.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.
 
@@ -176,12 +186,30 @@ Global options: `--config PATH`, `--log-level FILTER`, `--log-format text|json`.
 | Route | Auth | Behaviour |
 | --- | --- | --- |
 | `GET /healthz` | no | `{"status":"ok"}` |
+| `GET /`, `GET /ui/` | no | The web console page (no data; the page asks for the token). |
+| `/api/*` | yes | The console's data and actions, see below. |
 | `GET /v1/models`, `GET /v1/models/{id}` | yes | The configured models, Anthropic list format. |
 | `POST /v1/messages`, `POST /v1/messages/count_tokens` | yes | Routed by the body's `model`; path and query forwarded unchanged. On an `openai` backend, `/v1/messages` is translated and sent to `/v1/chat/completions`; `count_tokens` is 404. |
 
 Auth is `x-api-key: <token>` or `Authorization: Bearer <token>`; failures are 401 in the Anthropic error format. Every response carries `x-request-id`; proxied ones also carry `x-anthroxy-backend`, `x-anthroxy-model` and `x-anthroxy-upstream-model`.
 
 Errors the router produces are `{"type":"error","error":{"type":…,"message":…},"request_id":…}`: 400 for a body that is not a JSON object, has no `model`, or nests deeper than the router can rewrite, 404 for an unknown model (listing the configured ones), 413 over `server.max_body_bytes`, 502 when a backend is unreachable, redirects (the router will not follow one, and neither should Claude Code), or its credential cannot be obtained. Backend errors are relayed with their status; if the body is an Anthropic error, its message is prefixed with `[backend <name>, HTTP <status>]`. An `openai` backend's error body is always converted to an Anthropic error document (type from the status, same prefix); a failure in the middle of its stream is one `error` event.
+
+## Web console
+
+`http://<router>/` redirects to `/ui/`, a page embedded in the binary. It signs in with `server.token` (kept in the tab, or in the browser when "Remember" is ticked) and sends it as a header on every call; there is no cookie. Anyone holding the token can use everything below, including reloading the router and deleting recordings.
+
+| Tab | What it shows and does |
+| --- | --- |
+| Overview | Version, uptime, configuration file; every reload with its trigger, result and settings that need a restart, plus a Reload button; each backend's credential source, masked value, fetch time, reported expiry, next re-run and recent runs with errors; the model table; model names Claude Code sent that nothing serves (404, or served by `routing.default_model`) with an `aliases` fragment; the configuration in force with secrets redacted. |
+| Requests | Requests in flight (elapsed time, first byte yet or not, bytes) and the last 200 finished (status, attempts, time to first byte, duration, tokens, outcome), filterable. A request's detail keeps the upstream error body with hints: a `drop_fields` fragment for a field the backend rejects, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for a context-window error, where to look for an unknown upstream model or a rejected credential. |
+| Statistics | Per model and per UTC day over 24 hours, 7 or 30 days, or everything kept: requests, errors, retries, client disconnects, first-byte and duration p50/p95, input, output, cache read and cache write tokens, cache hit rate, output tokens per second. |
+| Tools | A test request (model, prompt, stream) through the full route, answered with status, timings, tokens and text; a probe of every backend from inside the running process (credential and model list, with context lengths from `max_model_len`, `loaded_context_length` and similar fields, or LM Studio's `/api/v0/models`) and a `[[models]]` fragment per listed model; Claude Code's variables for the address the browser used, with `CLAUDE_CODE_MAX_CONTEXT_TOKENS` once a probe found the smallest context window among configured models. |
+| Recordings | The body log newest first with model, status, outcome and size; each file viewable as text; delete one or all. |
+
+The page is served with a Content-Security-Policy that allows only its own script, style and API calls. Requests the console sends are real: they reach the backend, cost tokens and appear in the activity and statistics marked as coming from the console. The in-memory lists (requests, reloads, credential runs, model names) start empty on each restart; statistics and recordings are on disk.
+
+API routes, all behind the token: `GET /api/status`, `GET /api/requests`, `GET /api/requests/{id}`, `GET /api/stats?range=1d|7d|30d|all`, `GET /api/env`, `POST /api/reload`, `POST /api/probe`, `POST /api/smoke` (`{"model", "stream", "prompt"}`), `GET /api/recordings`, `GET /api/recordings/{entry}/{file}`, `DELETE /api/recordings/{entry}`, `DELETE /api/recordings`.
 
 ## Running on WSL2 as a service
 
@@ -202,6 +230,7 @@ From Claude Code on the Windows host, use the distribution's address (`hostname 
 - **Logs.** Text by default, `--log-format json` for shippers. Each request runs in a span `request{id=… method=… path=… model=… backend=…}`; the lines you will look for are `routed`, `upstream responded` (status, attempts, latency), `response body complete` (bytes, chunks, time to first byte) and the `WARN`s: retries, credential refreshes, client disconnects, upstream errors.
 - **Credentials.** `anthroxy credential` runs every backend's credential command through the same code the router uses and reports what came back; `--reveal` prints values unmasked instead of `sk-a…9999 (108 chars)`. A command that works in your shell but not as a service is an environment difference: on Linux, `--as-service` runs it a second time in a transient unit under the systemd user manager — the environment `anthroxy.service` starts with — and prints the delta (`PATH` in full, other variables by name). Typical causes: the interpreter is `dash`, not your login shell; `PATH` has none of the directories your profile adds; a keychain or agent socket (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`) is absent.
 - **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`. Each request gets `<DIR>/<time>-<request id>/` with `request.json` (exactly what went upstream), `response.json|sse|bin` (exactly what came back) and `meta.json` (routing, headers with credentials redacted, status, timings, outcome). Entries older than `logging.body_retention` (default 7 days) are deleted at startup and every 10 minutes; set it to `0s` to keep everything. A recording holds the whole conversation, so on Unix the router creates the directory and everything under it owner-only; a `body_dir` that already exists keeps the mode it has.
+- **Console.** The Requests tab has each failure's upstream error body and hints without reading the journal; Tools → Probe runs credential commands and model lists inside the service process, which is where environment differences show; a request's detail opens its body recording.
 - **Levels.** `--log-level debug` (or `trace`) applies to the router only. To see the HTTP client internals, name them: `--log-level "anthroxy=debug,hyper=debug,h2=debug"`.
 
 ## Development
