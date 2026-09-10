@@ -21,7 +21,6 @@ Models from the in-house LLM service can be selected and used in Claude Code exa
 ## Out of scope
 - Responses API (`/v1/responses`) support
 - Ingress from clients other than Claude Code (OpenCode, etc.)
-- Translating multimodal input such as images and PDFs
 
 ## Open questions
 - How far Anthropic-specific features (extended thinking, prompt caching, beta headers) are mapped onto the OpenAI side — in scope for this work, but the extent is decided at the requirements stage (author)
