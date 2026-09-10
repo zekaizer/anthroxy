@@ -223,6 +223,11 @@ fn ran(label: &'static str, run: Result<Run, String>, reading: Reading) -> Attem
                 details.push(("expires", expiry(expires_at)));
             }
             details.push(("re-run in", duration(valid)));
+            // A command that warns on its way to a usable token is worth
+            // seeing; the router only reports stderr when the run fails.
+            if !run.stderr.trim().is_empty() {
+                details.push(("stderr", run.stderr.trim().to_owned()));
+            }
         }
         Err(error) => {
             // A non-zero exit is already in the headline; its error text only
@@ -415,6 +420,24 @@ mod tests {
                 ("credential", "tok-…efgh (12 chars)".to_owned()),
                 ("re-run in", "5m".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn a_warning_on_a_successful_run_is_shown_too() {
+        let attempt = ran(
+            "shell",
+            Ok(run(
+                "exit 0",
+                "tok-abcdefgh",
+                "keychain: using default store",
+            )),
+            text(),
+        );
+        assert!(attempt.ok);
+        assert_eq!(
+            attempt.details.last().unwrap(),
+            &("stderr", "keychain: using default store".to_owned())
         );
     }
 

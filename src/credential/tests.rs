@@ -206,6 +206,23 @@ async fn command_failure_reports_status_and_stderr() {
     assert!(text.contains('3') && text.contains("boom"), "{text}");
 }
 
+/// Whatever the command wrote — a token server's answer, a shell trace —
+/// reaches a log line and the 502 the client is given.
+#[test]
+fn command_stderr_cannot_forge_a_log_line_or_fill_the_message() {
+    let error = CredentialError::Failed {
+        status: "exit 3".to_owned(),
+        stderr: format!(
+            "boom\n2026-09-09T00:00:00Z  INFO forged\n{}",
+            "z".repeat(3_000)
+        ),
+    };
+    let text = error.to_string();
+    assert!(!text.contains('\n'), "{text}");
+    assert!(text.len() < 300, "{} chars", text.len());
+    assert!(text.contains("boom\\n"), "{text}");
+}
+
 #[tokio::test]
 async fn command_empty_output_is_an_error() {
     let source = command("true", Duration::ZERO, Duration::from_secs(5));
@@ -291,6 +308,36 @@ async fn json_output_that_already_expired_is_an_error() {
     let err = source.credential().await.err().unwrap();
     assert!(matches!(err, CredentialError::Expired(_)), "{err}");
     assert!(err.to_string().contains("expired at 20"), "{err}");
+}
+
+#[tokio::test]
+async fn json_expiry_accepts_the_epoch_shapes_a_token_store_writes() {
+    // Claude Code's own credential file carries fractional milliseconds.
+    let expires_at = SystemTime::now() + Duration::from_secs(3600);
+    let millis = expires_at.duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let source = json_command(
+        &format!(r#"echo '{{"token": "tok-abcdefgh", "expires_at": {millis}.98}}'"#),
+        Duration::from_secs(3600),
+    );
+    assert_eq!(
+        source.credential().await.unwrap(),
+        Some(bearer("tok-abcdefgh"))
+    );
+}
+
+#[tokio::test]
+async fn json_expiry_out_of_range_is_an_error_not_a_panic() {
+    for expires_at in ["18446744073709551615", "-1", "1e400"] {
+        let source = json_command(
+            &format!(r#"echo '{{"token": "tok", "expires_at": {expires_at}}}'"#),
+            Duration::ZERO,
+        );
+        let err = source.credential().await.err().unwrap();
+        assert!(
+            matches!(err, CredentialError::Json(_)),
+            "{expires_at}: {err}"
+        );
+    }
 }
 
 #[tokio::test]

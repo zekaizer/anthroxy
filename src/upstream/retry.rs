@@ -40,29 +40,29 @@ impl RetryPolicy {
         }
     }
 
-    /// `attempt` is 1-based: the attempt that just failed.
-    pub fn on_transport_error(&self, attempt: u32, error: &reqwest::Error) -> Decision {
+    /// `failure` is 1-based: the failure that just happened.
+    pub fn on_transport_error(&self, failure: u32, error: &reqwest::Error) -> Decision {
         if is_connection_failure(error) {
-            self.next(attempt)
+            self.next(failure)
         } else {
             Decision::GiveUp
         }
     }
 
-    /// `attempt` is 1-based: the attempt that produced `status`.
-    pub fn on_status(&self, attempt: u32, status: StatusCode) -> Decision {
+    /// `failure` is 1-based: the failure that produced `status`.
+    pub fn on_status(&self, failure: u32, status: StatusCode) -> Decision {
         if self.retry_on_status.contains(&status.as_u16()) {
-            self.next(attempt)
+            self.next(failure)
         } else {
             Decision::GiveUp
         }
     }
 
-    fn next(&self, attempt: u32) -> Decision {
-        if attempt > self.max_retries {
+    fn next(&self, failure: u32) -> Decision {
+        if failure > self.max_retries {
             return Decision::GiveUp;
         }
-        let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
+        let factor = 2u32.saturating_pow(failure.saturating_sub(1));
         Decision::Retry(self.backoff.saturating_mul(factor))
     }
 }

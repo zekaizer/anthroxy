@@ -200,6 +200,87 @@ async fn records_upstream_error_bodies_too() {
 }
 
 #[tokio::test]
+async fn records_a_stream_that_broke_off_mid_body() {
+    // Headers and one event go out, then the backend drops the connection.
+    let upstream = MockUpstream::start(|_| {
+        let chunks = futures_util::stream::iter(0..2).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(20 * i)).await;
+            if i == 0 {
+                Ok("event: ping\ndata: {}\n\n")
+            } else {
+                Err(std::io::Error::other("connection reset"))
+            }
+        });
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(chunks))
+            .unwrap()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!(
+        "[logging]\nbody_dir = \"{}\"\n",
+        dir.path().join("bodies").display()
+    );
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+
+    let res = router
+        .post("/v1/messages", &body("fast", true))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "the status was already on its way");
+    assert!(res.bytes().await.is_err(), "the body ends unfinished");
+
+    let entries = wait_for_entries(&dir.path().join("bodies"), 1).await;
+    let meta = read_json(&entries[0].join("meta.json"));
+    assert_eq!(meta["status"], 200);
+    assert!(
+        meta["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("upstream_error:"),
+        "{meta}"
+    );
+    let recorded = std::fs::read_to_string(entries[0].join("response.sse")).unwrap();
+    assert_eq!(
+        recorded, "event: ping\ndata: {}\n\n",
+        "what did arrive is kept"
+    );
+}
+
+#[tokio::test]
+async fn records_a_request_that_never_reached_the_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!(
+        "[logging]\nbody_dir = \"{}\"\n\n[upstream]\nretries = 0\n",
+        dir.path().join("bodies").display()
+    );
+    // Nothing listens there.
+    let router = TestRouter::start(&config_with_backend("http://127.0.0.1:1", &extra)).await;
+
+    let res = router
+        .post("/v1/messages", &body("fast", false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 502);
+
+    let entries = wait_for_entries(&dir.path().join("bodies"), 1).await;
+    let meta = read_json(&entries[0].join("meta.json"));
+    assert_eq!(meta["backend"], "mock");
+    assert!(
+        meta["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("upstream_error:"),
+        "{meta}"
+    );
+    assert!(meta.get("status").is_none(), "no response ever arrived");
+}
+
+#[tokio::test]
 async fn one_directory_per_request() {
     let upstream = MockUpstream::start(echo).await;
     let dir = tempfile::tempdir().unwrap();
@@ -217,4 +298,34 @@ async fn one_directory_per_request() {
     }
     let entries = wait_for_entries(dir.path(), 3).await;
     assert_eq!(entries.len(), 3);
+}
+
+/// The recording is the conversation itself, so it must not be readable by
+/// other users of the machine — `logging.body_dir` is often a shared path.
+#[cfg(unix)]
+#[tokio::test]
+async fn recordings_are_private_to_the_user_running_the_router() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("bodies");
+    let extra = format!("[logging]\nbody_dir = \"{}\"\n", root.display());
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+
+    let res = router
+        .post("/v1/messages", &body("fast", false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let _ = res.bytes().await.unwrap();
+
+    let entries = wait_for_entries(&root, 1).await;
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&root), 0o700, "body log root");
+    assert_eq!(mode(&entries[0]), 0o700, "entry directory");
+    for name in ["request.json", "response.json", "meta.json"] {
+        assert_eq!(mode(&entries[0].join(name)), 0o600, "{name}");
+    }
 }

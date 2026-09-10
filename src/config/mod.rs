@@ -32,6 +32,24 @@ pub fn process_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// The mode of `path` when it lets anyone but its owner near it. The file
+/// carries `server.token` and any `static` backend credential, so the mode a
+/// stock umask leaves on a hand-written file hands both to every local
+/// account. `None` when the file is the owner's alone, cannot be read, or the
+/// platform has no such modes.
+#[cfg(unix)]
+pub fn open_to_other_accounts(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
+    (mode & 0o077 != 0).then_some(mode)
+}
+
+#[cfg(not(unix))]
+pub fn open_to_other_accounts(_: &Path) -> Option<u32> {
+    None
+}
+
 /// Default configuration path: `$XDG_CONFIG_HOME/anthroxy/config.toml`.
 pub fn default_path() -> PathBuf {
     dirs::config_dir()

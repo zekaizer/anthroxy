@@ -22,6 +22,9 @@ pub fn build(state: AppState) -> Router {
         .route("/healthz", get(health::healthz))
         .merge(protected)
         .fallback(not_found)
+        // Without this a method no route takes answers 405 with an empty body,
+        // the one reply that would not be an Anthropic error document.
+        .method_not_allowed_fallback(not_found)
         // The proxy enforces `server.max_body_bytes` itself with a shaped 413.
         .layer(DefaultBodyLimit::disable())
         .layer(middleware::from_fn_with_state(

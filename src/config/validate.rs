@@ -17,6 +17,18 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     if config.models.is_empty() {
         problems.push("at least one [[models]] entry is required".to_owned());
     }
+    // `0s` turns a limit off elsewhere in the file (`logging.body_retention`),
+    // so it is worth saying that here it expires instead of lifting.
+    for (field, value) in [
+        ("upstream.connect_timeout", config.upstream.connect_timeout),
+        ("upstream.read_timeout", config.upstream.read_timeout),
+    ] {
+        if value.is_zero() {
+            problems.push(format!(
+                "{field}: 0 is not `no limit` here; it expires before the backend can answer"
+            ));
+        }
+    }
     for status in &config.upstream.retry_on_status {
         if !(100..=599).contains(status) {
             problems.push(format!(
@@ -26,6 +38,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     }
 
     for (name, backend) in &config.backends {
+        if name.trim().is_empty() {
+            problems.push("backends: the name of a backend must not be empty".to_owned());
+        }
         if !header_safe(name) {
             problems.push(format!(
                 "backends.{}: the name is sent in `x-anthroxy-backend` and must be header-safe",
@@ -49,10 +64,21 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             }
             _ => {}
         }
+        if let CredentialConfig::Command { timeout, .. } = &backend.credential
+            && timeout.is_zero()
+        {
+            problems.push(format!(
+                "backends.{name}.credential.timeout: 0 is not `no limit` here; it kills the command before it can print"
+            ));
+        }
         for (header, value) in &backend.headers {
             if http::HeaderName::from_bytes(header.as_bytes()).is_err() {
                 problems.push(format!(
                     "backends.{name}.headers: `{header}` is not a valid header name"
+                ));
+            } else if CONNECTION_HEADERS.contains(&header.to_ascii_lowercase().as_str()) {
+                problems.push(format!(
+                    "backends.{name}.headers: `{header}` describes the connection the router makes and cannot be set here"
                 ));
             } else if http::HeaderValue::from_str(value).is_err() {
                 problems.push(format!(
@@ -91,12 +117,21 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 model.id.escape_debug()
             ));
         }
-        if let Some(upstream_model) = &model.upstream_model
-            && !header_safe(upstream_model)
-        {
+        if let Some(upstream_model) = &model.upstream_model {
+            if upstream_model.trim().is_empty() {
+                problems.push(format!(
+                    "models[{index}].upstream_model must not be empty; leave it out to send the id"
+                ));
+            } else if !header_safe(upstream_model) {
+                problems.push(format!(
+                    "models[{index}].upstream_model: `{}` is sent in `x-anthroxy-upstream-model` and must be header-safe",
+                    upstream_model.escape_debug()
+                ));
+            }
+        }
+        if model.aliases.iter().any(|a| a.trim().is_empty()) {
             problems.push(format!(
-                "models[{index}].upstream_model: `{}` is sent in `x-anthroxy-upstream-model` and must be header-safe",
-                upstream_model.escape_debug()
+                "models[{index}].aliases: an alias must not be empty"
             ));
         }
         if !config.backends.contains_key(&model.backend) {
@@ -129,16 +164,39 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     }
 }
 
+/// Framing and hop-by-hop headers: the HTTP client owns them, so a value set
+/// here is either dropped or produces a request no backend can read. `host` is
+/// not one of them; overriding it is how some gateways are addressed.
+const CONNECTION_HEADERS: [&str; 8] = [
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "upgrade",
+];
+
 fn header_safe(text: &str) -> bool {
     http::HeaderValue::from_str(text).is_ok()
 }
 
+/// The request path is appended to this URL unchanged, so it may carry a path
+/// prefix but nothing that has to stay last.
 fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
     match url.parse::<http::Uri>() {
-        Ok(uri) if matches!(uri.scheme_str(), Some("http" | "https")) && uri.host().is_some() => {}
-        Ok(_) => problems.push(format!(
-            "{field}: `{url}` must be an http:// or https:// origin"
-        )),
+        Ok(uri) if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.host().is_none() => {
+            problems.push(format!(
+                "{field}: `{url}` must be an http:// or https:// origin"
+            ));
+        }
+        Ok(uri) if uri.query().is_some() || url.contains('#') => {
+            problems.push(format!(
+                "{field}: `{url}` must carry no query or fragment; the request path is appended to it"
+            ));
+        }
+        Ok(_) => {}
         Err(e) => problems.push(format!("{field}: `{url}` is not a valid URL ({e})")),
     }
 }

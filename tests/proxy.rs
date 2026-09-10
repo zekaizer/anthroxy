@@ -59,6 +59,20 @@ async fn rejects_missing_or_wrong_client_token() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200, "bearer form accepted");
+
+    // Claude Code sends `x-api-key` for ANTHROPIC_API_KEY and the bearer for
+    // ANTHROPIC_AUTH_TOKEN, so a shell with both variables set presents both
+    // headers; one of them carrying the router token is enough.
+    let res = router
+        .http
+        .get(router.url("/v1/models"))
+        .header("x-api-key", "sk-ant-a-key-for-somewhere-else")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "either header may carry the token");
+
     assert!(
         upstream.received().is_empty(),
         "auth failures never reach a backend"
@@ -251,6 +265,28 @@ async fn unknown_model_is_404_listing_known_models() {
 }
 
 #[tokio::test]
+async fn a_model_id_that_is_not_utf8_is_404_in_the_router_shape() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router.get("/v1/models/%FF").send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    assert_eq!(res.headers()["content-type"], "application/json");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "not_found_error");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("%FF"),
+        "{body}"
+    );
+    assert!(
+        body["request_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("rtr_")),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn unknown_model_uses_default_when_configured() {
     let upstream = MockUpstream::start(echo).await;
     let extra = "[routing]\ndefault_model = \"fast\"\n";
@@ -317,6 +353,59 @@ async fn malformed_body_is_400() {
     assert_eq!(res.status(), 400);
     let body: Value = res.json().await.unwrap();
     assert!(body["error"]["message"].as_str().unwrap().contains("model"));
+
+    // A JSON array also deserializes into the peek struct; the rewrite that
+    // follows only handles an object.
+    let res = router
+        .post("/v1/messages", &json!(["fast", true]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+
+    // Nesting the router can skip but not rewrite: "fast" is renamed, so the
+    // body has to be read in full.
+    let deep = format!(
+        "{{\"model\": \"fast\", \"x\": {}{}}}",
+        "[".repeat(200),
+        "]".repeat(200)
+    );
+    let res = router
+        .http
+        .post(router.url("/v1/messages"))
+        .header("x-api-key", TOKEN)
+        .header("content-type", "application/json")
+        .body(deep)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+}
+
+/// The reason a body did not parse quotes the value that broke it, and that
+/// value is as large as `server.max_body_bytes` allows.
+#[tokio::test]
+async fn a_body_that_will_not_parse_is_not_quoted_back_in_full() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router
+        .post(
+            "/v1/messages",
+            &json!({"model": "fast", "stream": "x".repeat(5000)}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.len() < 300, "{} chars", message.len());
+    assert!(message.contains("invalid type: string"), "{message}");
 }
 
 #[tokio::test]
@@ -341,6 +430,51 @@ async fn unknown_path_is_404_in_anthropic_shape() {
     assert_eq!(res.status(), 404);
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"]["type"], "not_found_error");
+
+    // A method no route takes is answered in the same shape, not with the
+    // empty body axum would send.
+    let res = router.get("/v1/messages").send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "not_found_error");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("GET /v1/messages"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_long_path_or_method_is_cut_before_it_is_echoed() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router
+        .get(&format!("/v1/{}", "a".repeat(4096)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.len() < 200 && message.contains('…'), "{message}");
+
+    let res = router
+        .http
+        .request(
+            reqwest::Method::from_bytes(&b"X".repeat(4096)).unwrap(),
+            router.url("/v1/messages"),
+        )
+        .header("x-api-key", TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.len() < 200 && message.contains('…'), "{message}");
 }
 
 #[tokio::test]
@@ -455,6 +589,49 @@ async fn refreshes_command_credential_on_401_and_retries_once() {
 }
 
 #[tokio::test]
+async fn a_credential_refresh_does_not_spend_the_retry_budget() {
+    // 401 once, then the retryable status for as many attempts as the budget
+    // allows; the refresh re-send must not be one of them.
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let upstream = MockUpstream::start(move |received| {
+        match seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            0 => json_response(
+                401,
+                json!({"type":"error","error":{"type":"authentication_error","message":"stale"}}),
+            ),
+            1 | 2 => json_response(
+                429,
+                json!({"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}),
+            ),
+            _ => echo(received),
+        }
+    })
+    .await;
+    let config = config_with_backend(
+        &upstream.url(),
+        "[upstream]\nretries = 2\nretry_backoff = \"1ms\"\nretry_on_status = [429]\n",
+    )
+    .replace(
+        r#"credential = { kind = "static", value = "backend-secret-key" }"#,
+        r#"credential = { kind = "command", command = "echo tok" }"#,
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        upstream.received().len(),
+        4,
+        "401 re-send, then both retries"
+    );
+}
+
+#[tokio::test]
 async fn static_credential_is_not_retried_on_401() {
     let upstream = MockUpstream::start(|_| {
         json_response(
@@ -556,6 +733,37 @@ async fn upstream_error_body_that_breaks_off_is_a_502() {
     let message = body["error"]["message"].as_str().unwrap();
     assert!(
         message.contains("mock") && message.contains("body"),
+        "{message}"
+    );
+}
+
+/// The router refuses to follow a redirect, so it must not hand one to the
+/// client either: Claude Code would follow it, with the conversation and the
+/// router token, to an address the configuration never named.
+#[tokio::test]
+async fn a_backend_redirect_is_not_passed_on_to_the_client() {
+    let upstream = MockUpstream::start(|_| {
+        Response::builder()
+            .status(302)
+            .header("location", "http://127.0.0.1:1/v1/messages")
+            .body(Body::empty())
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 502);
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "api_error");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("mock") && message.contains("302") && message.contains("127.0.0.1:1"),
         "{message}"
     );
 }

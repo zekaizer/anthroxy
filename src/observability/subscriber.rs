@@ -9,10 +9,17 @@ use tracing_subscriber::util::SubscriberInitExt;
 use crate::config::LogFormat;
 
 /// Picks the filter: explicit command-line value, then `RUST_LOG`, then the
-/// configuration file. A bare `debug` or `trace` applies to the router only;
-/// dependencies stay at `info` unless named explicitly (`h2=debug`).
+/// configuration file. A blank source is not a filter and is passed over —
+/// `RUST_LOG=` exported empty is a filter that logs nothing. A bare `debug` or
+/// `trace` applies to the router only; dependencies stay at `info` unless
+/// named explicitly (`h2=debug`).
 pub fn resolve_directives(cli: Option<&str>, env: Option<&str>, config: &str) -> String {
-    let chosen = cli.or(env).unwrap_or(config).trim();
+    let chosen = [cli, env, Some(config)]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .unwrap_or("info");
     match chosen.to_ascii_lowercase().as_str() {
         "debug" | "trace" => format!("anthroxy={chosen},info"),
         _ => chosen.to_owned(),
@@ -62,6 +69,24 @@ mod tests {
         );
         assert_eq!(resolve_directives(None, Some("info"), "error"), "info");
         assert_eq!(resolve_directives(None, None, "error"), "error");
+    }
+
+    #[test]
+    fn a_blank_source_is_not_a_filter() {
+        assert_eq!(
+            resolve_directives(None, Some(""), "info"),
+            "info",
+            "`RUST_LOG=` exported empty must not silence the router"
+        );
+        assert_eq!(
+            resolve_directives(Some("   "), Some("warn"), "info"),
+            "warn"
+        );
+        assert_eq!(
+            resolve_directives(None, None, ""),
+            "info",
+            "nor a blank level in the file"
+        );
     }
 
     #[test]

@@ -74,10 +74,10 @@ Models
 Then, in the shell that runs Claude Code:
 
 ```sh
-export ANTHROPIC_BASE_URL="http://localhost:8787"
-export ANTHROPIC_AUTH_TOKEN="<token from the config>"
-export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1"
-export ANTHROPIC_MODEL="gemma-local"      # the model Claude Code starts with
+export ANTHROPIC_BASE_URL='http://localhost:8787'
+export ANTHROPIC_AUTH_TOKEN='<token from the config>'
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1'
+export ANTHROPIC_MODEL='gemma-local'      # the model Claude Code starts with
 claude
 ```
 
@@ -139,12 +139,14 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
 Notes:
 
 - `${NAME}` in any string value is replaced with the environment variable `NAME` at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands.
+- A backend `url` is an origin, optionally with a path prefix (`http://host/openai`); the request path is appended to it, so it must carry no query string or fragment.
 - Credential kinds: `none` (default), `static`, `env` (`name = "VAR"`), `command`. `header` is `bearer` (default, `Authorization: Bearer <token>`), `x_api_key` (`x-api-key: <token>`), or any header as `{ name = "api-key" }` / `{ name = "authorization", scheme = "Token" }`; a `scheme` is written before the token with one space.
-- A `command` credential runs through `sh -c`. With `output = "text"` (default) trimmed stdout is the token; with `output = "json"` stdout is `{"token": "...", "expires_at": ...}`, where the optional `expires_at` is an RFC 3339 timestamp or unix seconds (milliseconds when ≥ 10^11). The command is re-run after `refresh`, two minutes before `expires_at`, and once more immediately if the backend answers 401/403. A token whose `expires_at` has passed is an error, not sent upstream.
+- A `command` credential runs through `sh -c`. With `output = "text"` (default) trimmed stdout is the token; with `output = "json"` stdout is `{"token": "...", "expires_at": ...}`, where the optional `expires_at` is an RFC 3339 timestamp or a number of unix seconds (milliseconds when ≥ 10^11, fractions allowed, up to year 9999). The command is re-run after `refresh`, two minutes before `expires_at`, and once more immediately if the backend answers 401/403. A token whose `expires_at` has passed is an error, not sent upstream.
 - `drop_fields` removes request body fields before forwarding to that backend, for servers that reject parameters they do not know (vLLM and `context_management`, for example). Paths are dot-separated object keys (`metadata.user_id`); arrays cannot be reached and `model` cannot be dropped. The `anthropic-beta` header is left alone. Claude Code's own `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is the client-side alternative, but it applies to every backend in the session.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
 - HTTPS backends are verified against the Mozilla roots built into the binary plus the OS certificate store (`update-ca-certificates` on Ubuntu, the keychain on macOS). `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the OS store when set; under systemd they go in the unit as `Environment=`. `upstream.ca_certificate` adds every certificate in a PEM file on top, for a private CA that should travel with the configuration file; a file that cannot be read or holds no certificate fails `check` and `serve`. There is no way to skip verification.
-- Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, logging and upstream settings swap atomically; in-flight requests finish on the old configuration. Changing `server.listen` still needs a restart. A file that fails to load leaves the running configuration untouched and logs the error.
+- Backends are reached at the URL the file names: `http_proxy` / `https_proxy` / `all_proxy` in the environment are ignored, so an ambient proxy cannot take a backend request, and the credential on it, somewhere the configuration never named. A TLS-intercepting proxy on the path still works; it needs its CA, above.
+- Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, body capture and upstream settings swap atomically; in-flight requests finish on the old configuration. `server.listen` and the log level and format need a restart instead, and a reload that changes one of them says so. A file that fails to load leaves the running configuration untouched and logs the error.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.
 
 ## Commands
@@ -171,7 +173,7 @@ Global options: `--config PATH`, `--log-level FILTER`, `--log-format text|json`.
 
 Auth is `x-api-key: <token>` or `Authorization: Bearer <token>`; failures are 401 in the Anthropic error format. Every response carries `x-request-id`; proxied ones also carry `x-anthroxy-backend`, `x-anthroxy-model` and `x-anthroxy-upstream-model`.
 
-Errors the router produces are `{"type":"error","error":{"type":…,"message":…},"request_id":…}`: 400 for a body without `model`, 404 for an unknown model (listing the configured ones), 413 over `server.max_body_bytes`, 502 when a backend is unreachable or its credential cannot be obtained. Backend errors are relayed with their status; if the body is an Anthropic error, its message is prefixed with `[backend <name>, HTTP <status>]`.
+Errors the router produces are `{"type":"error","error":{"type":…,"message":…},"request_id":…}`: 400 for a body that is not a JSON object, has no `model`, or nests deeper than the router can rewrite, 404 for an unknown model (listing the configured ones), 413 over `server.max_body_bytes`, 502 when a backend is unreachable, redirects (the router will not follow one, and neither should Claude Code), or its credential cannot be obtained. Backend errors are relayed with their status; if the body is an Anthropic error, its message is prefixed with `[backend <name>, HTTP <status>]`.
 
 ## Running on WSL2 as a service
 
@@ -191,7 +193,7 @@ From Claude Code on the Windows host, use the distribution's address (`hostname 
 
 - **Logs.** Text by default, `--log-format json` for shippers. Each request runs in a span `request{id=… method=… path=… model=… backend=…}`; the lines you will look for are `routed`, `upstream responded` (status, attempts, latency), `response body complete` (bytes, chunks, time to first byte) and the `WARN`s: retries, credential refreshes, client disconnects, upstream errors.
 - **Credentials.** `anthroxy credential` runs every backend's credential command through the same code the router uses and reports what came back; `--reveal` prints values unmasked instead of `sk-a…9999 (108 chars)`. A command that works in your shell but not as a service is an environment difference: on Linux, `--as-service` runs it a second time in a transient unit under the systemd user manager — the environment `anthroxy.service` starts with — and prints the delta (`PATH` in full, other variables by name). Typical causes: the interpreter is `dash`, not your login shell; `PATH` has none of the directories your profile adds; a keychain or agent socket (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`) is absent.
-- **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`. Each request gets `<DIR>/<time>-<request id>/` with `request.json` (exactly what went upstream), `response.json|sse|bin` (exactly what came back) and `meta.json` (routing, headers with credentials redacted, status, timings, outcome). Entries older than `logging.body_retention` (default 7 days) are deleted at startup and every 10 minutes; set it to `0s` to keep everything.
+- **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`. Each request gets `<DIR>/<time>-<request id>/` with `request.json` (exactly what went upstream), `response.json|sse|bin` (exactly what came back) and `meta.json` (routing, headers with credentials redacted, status, timings, outcome). Entries older than `logging.body_retention` (default 7 days) are deleted at startup and every 10 minutes; set it to `0s` to keep everything. A recording holds the whole conversation, so on Unix the router creates the directory and everything under it owner-only; a `body_dir` that already exists keeps the mode it has.
 - **Levels.** `--log-level debug` (or `trace`) applies to the router only. To see the HTTP client internals, name them: `--log-level "anthroxy=debug,hyper=debug,h2=debug"`.
 
 ## Development

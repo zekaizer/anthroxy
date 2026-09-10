@@ -51,6 +51,17 @@ pub enum UpstreamError {
         #[source]
         source: reqwest::Error,
     },
+    /// The backend redirected. Following it is refused for the router itself,
+    /// and relaying it would only move the decision to a client that follows
+    /// redirects with the router's own token.
+    #[error(
+        "backend `{backend}` answered HTTP {status} redirecting to `{location}`; point its `url` there instead"
+    )]
+    Redirected {
+        backend: String,
+        status: u16,
+        location: String,
+    },
     /// The backend answered but its error body broke off before the end.
     #[error("backend `{backend}` failed while sending its error body: {}", describe(.source))]
     Body {
@@ -93,12 +104,15 @@ pub enum ClientBuildError {
 }
 
 /// How every backend is reached: the configured timeouts, the extra trust
-/// anchors from `ca_certificate`, and no redirects, since a redirect would
-/// resend the body and the credential elsewhere.
+/// anchors from `ca_certificate`, no redirects, since a redirect would resend
+/// the body and the credential elsewhere, and no proxy, since `http_proxy` in
+/// the environment would do the same to every backend at once — a backend the
+/// operator named by URL is reached at that URL.
 pub fn http_client(config: &UpstreamConfig) -> Result<reqwest::ClientBuilder, ClientBuildError> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
         .read_timeout(config.read_timeout)
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none());
     if let Some(path) = &config.ca_certificate {
         for certificate in ca_certificates(path)? {
@@ -154,6 +168,8 @@ impl UpstreamClient {
         let url = format!("{}{}", backend.url, request.path_and_query);
         let started = Instant::now();
         let mut attempt: u32 = 0;
+        // Of the retry budget; the credential re-send below is not one of them.
+        let mut failures: u32 = 0;
         let mut credential_refreshed = false;
         loop {
             attempt += 1;
@@ -188,8 +204,9 @@ impl UpstreamClient {
                         credential_refreshed = true;
                         continue;
                     }
-                    match self.retry.on_status(attempt, status) {
+                    match self.retry.on_status(failures + 1, status) {
                         Decision::Retry(delay) => {
+                            failures += 1;
                             tracing::warn!(attempt, %status, delay_ms = delay.as_millis(), "retrying on upstream status");
                             tokio::time::sleep(delay).await;
                         }
@@ -202,8 +219,9 @@ impl UpstreamClient {
                         }
                     }
                 }
-                Err(error) => match self.retry.on_transport_error(attempt, &error) {
+                Err(error) => match self.retry.on_transport_error(failures + 1, &error) {
                     Decision::Retry(delay) => {
+                        failures += 1;
                         tracing::warn!(attempt, error = %describe(&error), delay_ms = delay.as_millis(), "retrying after connection failure");
                         tokio::time::sleep(delay).await;
                     }

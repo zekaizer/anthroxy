@@ -10,7 +10,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use support::MockUpstream;
 use support::mock_upstream::echo;
-use support::router::{TOKEN, config_with_backend};
+use support::router::{TOKEN, config_with_backend, messages_body};
 
 /// For tests that keep the process running and read its output live.
 fn spawnable() -> std::process::Command {
@@ -96,6 +96,13 @@ fn init_writes_a_loadable_config_and_refuses_to_overwrite() {
         .args(["--config", path.to_str().unwrap(), "init", "--force"])
         .assert()
         .success();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "the file holds the client token");
+    }
 }
 
 #[test]
@@ -127,6 +134,34 @@ fn check_reports_every_problem_and_fails() {
         .stdout(predicate::str::contains("server.token"))
         .stdout(predicate::str::contains("models[0].backend"))
         .stdout(predicate::str::contains("at least one [backends"));
+}
+
+/// The file carries the router token and any `static` backend credential.
+#[cfg(unix)]
+#[test]
+fn check_reports_a_configuration_other_users_can_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "");
+    let chmod = |mode| {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    chmod(0o644);
+    bin()
+        .args(["--config", path.to_str().unwrap(), "check", "--no-probe"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("644"))
+        .stdout(predicate::str::contains("chmod 600"));
+
+    chmod(0o600);
+    bin()
+        .args(["--config", path.to_str().unwrap(), "check", "--no-probe"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("chmod 600").not());
 }
 
 #[test]
@@ -194,12 +229,19 @@ fn check_trusts_the_ca_named_by_ssl_cert_file() {
 
 #[test]
 fn missing_config_is_a_clear_error() {
-    bin()
+    let out = bin()
         .args(["--config", "/nonexistent/anthroxy.toml", "models"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("cannot read"))
-        .stderr(predicate::str::contains("/nonexistent/anthroxy.toml"));
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot read"), "{stderr}");
+    assert!(stderr.contains("anthroxy init"), "{stderr}");
+    assert_eq!(
+        stderr.matches("/nonexistent/anthroxy.toml").count(),
+        1,
+        "the file is named twice: {stderr}"
+    );
 }
 
 /// Backends covering each credential kind, one of them broken.
@@ -327,15 +369,15 @@ fn env_prints_shell_exports_and_json() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "export ANTHROPIC_BASE_URL=\"http://router.example:0\"",
+            "export ANTHROPIC_BASE_URL='http://router.example:0'",
         ))
         .stdout(predicate::str::contains(format!(
-            "export ANTHROPIC_AUTH_TOKEN=\"{TOKEN}\""
+            "export ANTHROPIC_AUTH_TOKEN='{TOKEN}'"
         )))
         .stdout(predicate::str::contains(
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         ))
-        .stdout(predicate::str::contains("export ANTHROPIC_MODEL=\"fast\""));
+        .stdout(predicate::str::contains("export ANTHROPIC_MODEL='fast'"));
     bin()
         .args(["--config", path, "env", "--format", "json"])
         .assert()
@@ -362,6 +404,114 @@ fn service_install_print_renders_a_unit_anywhere() {
         .stdout(predicate::str::starts_with("[Unit]"))
         .stdout(predicate::str::contains("serve"))
         .stdout(predicate::str::contains(path.to_str().unwrap()));
+}
+
+#[test]
+fn a_failure_reports_its_cause_once() {
+    // Hold the port so `serve` cannot bind it.
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = taken.local_addr().unwrap().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "");
+    let out = bin()
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            &addr,
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot listen on"), "{stderr}");
+    assert_eq!(
+        stderr.matches("in use").count(),
+        1,
+        "the cause is repeated: {stderr}"
+    );
+}
+
+/// `RUST_LOG=` exported empty is not a filter; the file still decides.
+#[test]
+fn an_empty_rust_log_does_not_silence_the_router() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "");
+    let mut child = spawnable()
+        .env("RUST_LOG", "")
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut logged = false;
+    while !logged && Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => logged = line.contains("anthroxy listening"),
+            Err(_) => continue,
+        }
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(logged, "the router logged nothing at the file's `info`");
+}
+
+/// `http_proxy` in the environment would send a backend the configuration
+/// named by URL — and the credential for it — to a host it never named.
+#[test]
+fn an_ambient_proxy_does_not_redirect_a_backend_request() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let upstream = runtime.block_on(MockUpstream::start(echo));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, config_with_backend(&upstream.url(), "")).unwrap();
+
+    let mut child = spawnable()
+        // Nothing listens there, so a proxied request cannot be answered.
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let url = wait_for_banner(&mut child).url;
+    let status = runtime.block_on(async {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(format!("{url}/v1/messages"))
+            .header("x-api-key", TOKEN)
+            .json(&messages_body("fast"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+    });
+    child.kill().unwrap();
+    assert_eq!(status, 200, "the backend is reached directly");
+    assert_eq!(upstream.received().len(), 1);
 }
 
 #[test]
@@ -443,6 +593,51 @@ fn sighup_reloads_the_configuration_file() {
         "model table not reloaded: {after}"
     );
     child.kill().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_logging_change_on_reload_says_it_needs_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "[logging]\nlevel = \"info\"\n");
+    let mut child = serve(&path);
+    let _ = wait_for_banner(&mut child);
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+
+    std::fs::write(
+        &path,
+        config_with_backend("http://127.0.0.1:1", "[logging]\nlevel = \"debug\"\n"),
+    )
+    .unwrap();
+    // SAFETY: plain libc call on a pid this test owns.
+    unsafe { libc_signal(child.id() as i32, 1) };
+
+    // A margin for a loaded machine, not a timing assertion: the loop ends as
+    // soon as the line arrives.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut lines = Vec::new();
+    while Instant::now() < deadline {
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(200)) {
+            let done = line.contains("restart");
+            lines.push(line);
+            if done {
+                break;
+            }
+        }
+    }
+    child.kill().unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("logging") && l.contains("restart")),
+        "{lines:?}"
+    );
 }
 
 /// `anthroxy serve` on an ephemeral port with its output captured.

@@ -31,6 +31,7 @@ cargo fmt
   - `observability/` — tracing subscriber, per-request body capture (fed by the relay stream).
   - `service/` — systemd user unit.
   - `cli/` — clap grammar and one file per subcommand.
+  - `text.rs` — escaping and cutting for anything the router did not choose that reaches a message or a log line.
 - `tests/` — black-box tests: `proxy.rs`/`body_log.rs` against a mock backend in `tests/support/`, `cli.rs` against the binary.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed docs.

@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::Ipv6Addr;
 
 use clap::{Args, ValueEnum};
 
@@ -34,7 +34,7 @@ pub fn run(cli: &Cli, args: &EnvArgs) -> anyhow::Result<()> {
 
 pub fn render(config: &Config, host: Option<&str>, format: EnvFormat) -> String {
     let host = host
-        .map(str::to_owned)
+        .map(bracket_ipv6)
         .unwrap_or_else(|| default_host(config));
     let base_url = format!("http://{host}:{}", config.server.listen.port());
     let default_model = config
@@ -54,7 +54,7 @@ pub fn render(config: &Config, host: Option<&str>, format: EnvFormat) -> String 
         EnvFormat::Sh => {
             out.push_str("# Point Claude Code at anthroxy (paste into your shell or profile)\n");
             for (name, value) in &vars {
-                out.push_str(&format!("export {name}=\"{value}\"\n"));
+                out.push_str(&format!("export {name}={}\n", sh_quote(value)));
             }
             out.push_str(
                 "# ANTHROPIC_MODEL is the model Claude Code starts with; /model switches later.\n",
@@ -67,7 +67,7 @@ pub fn render(config: &Config, host: Option<&str>, format: EnvFormat) -> String 
         EnvFormat::Powershell => {
             out.push_str("# Point Claude Code at anthroxy (PowerShell)\n");
             for (name, value) in &vars {
-                out.push_str(&format!("$env:{name} = \"{value}\"\n"));
+                out.push_str(&format!("$env:{name} = {}\n", powershell_quote(value)));
             }
         }
         EnvFormat::Json => {
@@ -85,11 +85,30 @@ pub fn render(config: &Config, host: Option<&str>, format: EnvFormat) -> String 
     out
 }
 
+/// Single quotes make every byte literal in a POSIX shell; only the quote
+/// itself has to leave and re-enter them.
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// PowerShell single quotes are literal too, with a doubled quote for one.
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 fn default_host(config: &Config) -> String {
     match config.server.listen.ip() {
         ip if ip.is_unspecified() => "localhost".to_owned(),
-        IpAddr::V6(v6) => format!("[{v6}]"),
-        ip => ip.to_string(),
+        ip => bracket_ipv6(&ip.to_string()),
+    }
+}
+
+/// A bare IPv6 literal only reads as a host once it is bracketed; anything
+/// else, brackets included, is already what the user meant.
+fn bracket_ipv6(host: &str) -> String {
+    match host.parse::<Ipv6Addr>() {
+        Ok(v6) => format!("[{v6}]"),
+        Err(_) => host.to_owned(),
     }
 }
 
@@ -108,14 +127,61 @@ mod tests {
     fn sh_output_uses_localhost_for_unspecified_bind() {
         let out = render(&config("0.0.0.0:8787"), None, EnvFormat::Sh);
         assert!(
-            out.contains("export ANTHROPIC_BASE_URL=\"http://localhost:8787\"\n"),
+            out.contains("export ANTHROPIC_BASE_URL='http://localhost:8787'\n"),
             "{out}"
         );
-        assert!(out.contains("export ANTHROPIC_AUTH_TOKEN=\"tok\"\n"));
-        assert!(out.contains("export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=\"1\"\n"));
+        assert!(out.contains("export ANTHROPIC_AUTH_TOKEN='tok'\n"));
+        assert!(out.contains("export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1'\n"));
         assert!(
-            out.contains("export ANTHROPIC_MODEL=\"m2\"\n"),
+            out.contains("export ANTHROPIC_MODEL='m2'\n"),
             "default model wins"
+        );
+    }
+
+    #[test]
+    fn values_survive_the_shell_and_powershell_syntax() {
+        let text = "[server]\nlisten = \"127.0.0.1:1\"\ntoken = \"a\\\"b$c'd\"\n[backends.a]\nurl = \"http://a\"\n[[models]]\nid = \"m1\"\nbackend = \"a\"\n";
+        let config = Config::parse(text, |_| None).unwrap();
+
+        let out = render(&config, None, EnvFormat::Sh);
+        let line = out
+            .lines()
+            .find(|l| l.starts_with("export ANTHROPIC_AUTH_TOKEN="))
+            .unwrap();
+        let echoed = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{line}; printf %s \"$ANTHROPIC_AUTH_TOKEN\""))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&echoed.stdout),
+            config.server.token,
+            "{line}"
+        );
+
+        let out = render(&config, None, EnvFormat::Powershell);
+        assert!(
+            out.contains("$env:ANTHROPIC_AUTH_TOKEN = 'a\"b$c''d'"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_ipv6_host_is_bracketed_wherever_it_came_from() {
+        let out = render(&config("[::1]:8787"), None, EnvFormat::Sh);
+        assert!(
+            out.contains("export ANTHROPIC_BASE_URL='http://[::1]:8787'"),
+            "{out}"
+        );
+        let out = render(&config("0.0.0.0:8787"), Some("::1"), EnvFormat::Sh);
+        assert!(
+            out.contains("export ANTHROPIC_BASE_URL='http://[::1]:8787'"),
+            "{out}"
+        );
+        let out = render(&config("0.0.0.0:8787"), Some("[::1]"), EnvFormat::Sh);
+        assert!(
+            out.contains("export ANTHROPIC_BASE_URL='http://[::1]:8787'"),
+            "{out}"
         );
     }
 
@@ -123,7 +189,7 @@ mod tests {
     fn explicit_host_and_bound_ip_are_used() {
         let out = render(&config("192.168.1.5:9000"), None, EnvFormat::Powershell);
         assert!(
-            out.contains("$env:ANTHROPIC_BASE_URL = \"http://192.168.1.5:9000\"\n"),
+            out.contains("$env:ANTHROPIC_BASE_URL = 'http://192.168.1.5:9000'\n"),
             "{out}"
         );
         let out = render(&config("0.0.0.0:8787"), Some("wsl.local"), EnvFormat::Json);
