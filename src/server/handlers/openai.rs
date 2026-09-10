@@ -78,6 +78,11 @@ pub async fn body(
             tracing::warn!("backend answered a streaming request with a document");
         }
         let raw = read(upstream, backend).await?;
+        tracing::info!(
+            bytes = raw.len(),
+            duration_ms = started.elapsed().as_millis() as u64,
+            "response body complete"
+        );
         if let Some(recorder) = recorder {
             recorder.finish_with_body(&raw);
         }
