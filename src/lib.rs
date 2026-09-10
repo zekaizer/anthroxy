@@ -16,5 +16,6 @@ pub mod routing;
 pub mod server;
 pub mod service;
 pub mod sse;
+pub(crate) mod text;
 pub mod translate;
 pub mod upstream;

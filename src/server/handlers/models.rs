@@ -3,7 +3,9 @@
 
 use std::sync::Arc;
 
+use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, State};
+use axum::http::Uri;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 
@@ -32,8 +34,16 @@ pub async fn get_one(
     State(state): State<AppState>,
     Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
-    Path(id): Path<String>,
+    uri: Uri,
+    id: Result<Path<String>, PathRejection>,
 ) -> Response {
+    let id = match id {
+        Ok(Path(id)) => id,
+        // A segment that does not percent-decode to UTF-8 names no model, and
+        // axum's own rejection is the one reply that would not be an Anthropic
+        // error document; the raw segment goes into the router's 404 instead.
+        Err(_) => uri.path().rsplit('/').next().unwrap_or_default().to_owned(),
+    };
     match snapshot.registry.lookup(&id) {
         Some(resolution) => Json(object(&state, resolution.route)).into_response(),
         None => RouterError::unknown_model(id, &snapshot.registry).into_response(&request_id),

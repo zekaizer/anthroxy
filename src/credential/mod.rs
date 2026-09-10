@@ -2,6 +2,7 @@
 //! (ADR-0004).
 
 mod command;
+pub mod exec;
 mod fixed;
 mod output;
 
@@ -15,8 +16,9 @@ use http::header::{HeaderName, HeaderValue};
 
 use crate::config::{CredentialConfig, CredentialHeader};
 
-pub use command::{CommandCredential, EXPIRY_MARGIN};
+pub use command::CommandCredential;
 pub use fixed::FixedCredential;
+pub use output::Output;
 
 /// A secret plus the header it is sent in. `Debug` never prints the secret.
 #[derive(Clone, PartialEq, Eq)]
@@ -81,7 +83,7 @@ pub enum CredentialError {
     Spawn(#[source] std::io::Error),
     #[error("credential command exceeded {}", humantime::format_duration(*.0))]
     Timeout(Duration),
-    #[error("credential command exited with {status}{}", stderr_suffix(.stderr))]
+    #[error("credential command failed with {status}{}", stderr_suffix(.stderr))]
     Failed { status: String, stderr: String },
     #[error("credential command printed nothing on stdout")]
     Empty,
@@ -91,12 +93,16 @@ pub enum CredentialError {
     Expired(std::time::SystemTime),
 }
 
+/// The command's stderr as an error message may carry it. It is whatever the
+/// command wrote — a token server's answer, a shell trace — and this message
+/// reaches both a log line and the client, so it travels escaped and cut.
+/// `anthroxy credential` prints the run's own stderr in full instead.
 fn stderr_suffix(stderr: &str) -> String {
     let trimmed = stderr.trim();
     if trimmed.is_empty() {
         String::new()
     } else {
-        format!(": {trimmed}")
+        format!(": {}", crate::text::cut(trimmed, 200))
     }
 }
 

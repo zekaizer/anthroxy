@@ -10,7 +10,7 @@ use clap::Args;
 use super::models::{default_route_line, table_rows};
 use super::style::table;
 use super::{Cli, Style, display_path};
-use crate::config::{BackendKind, Config};
+use crate::config::{self, BackendKind, Config};
 use crate::routing::{Registry, Route};
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
 use crate::upstream::{Backend, RetryPolicy, UpstreamClient, http_client};
@@ -47,6 +47,17 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
             config.server.listen
         ))
     );
+
+    if let Some(mode) = config::open_to_other_accounts(&path) {
+        println!(
+            "{} {}",
+            style.warn_mark(),
+            style.warn(&format!(
+                "mode {mode:o}: the router token and any static credential in this file are readable by other users; `chmod 600 {}`",
+                display_path(&path)
+            ))
+        );
+    }
 
     let registry = match Registry::from_config(&config) {
         Ok(registry) => registry,
@@ -189,6 +200,15 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
         kind_label(backend, style)
     );
     println!("       {credential_line}");
+    if probe.credential.is_err() {
+        println!(
+            "       {}",
+            style.dim(&format!(
+                "`anthroxy credential {}` runs the command and shows its output",
+                backend.name
+            ))
+        );
+    }
     println!("       {models_line}");
     (ok, ids)
 }

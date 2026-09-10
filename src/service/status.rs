@@ -218,6 +218,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 async fn health(url: &str) -> Result<u16, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     client

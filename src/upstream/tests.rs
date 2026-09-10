@@ -136,6 +136,25 @@ fn upstream_headers_for_openai_backends_carry_no_anthropic_headers() {
 }
 
 #[test]
+fn upstream_headers_merge_every_beta_header_the_client_sent() {
+    let mut client = client_headers();
+    client.append(
+        "anthropic-beta",
+        HeaderValue::from_static("context-1m-2025-08-07,claude-code-20250219"),
+    );
+    let out = upstream_headers(&client, &backend(&["oauth-2025-04-20"], &[]));
+    assert_eq!(
+        out.get_all("anthropic-beta").iter().count(),
+        1,
+        "the flags of every header end up in one"
+    );
+    assert_eq!(
+        out["anthropic-beta"],
+        "claude-code-20250219,fine-grained-tool-streaming-2025-05-14,context-1m-2025-08-07,oauth-2025-04-20"
+    );
+}
+
+#[test]
 fn response_headers_drop_framing_only() {
     let mut up = HeaderMap::new();
     up.insert(

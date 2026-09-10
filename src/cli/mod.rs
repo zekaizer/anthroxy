@@ -2,6 +2,7 @@
 //! declares the grammar and dispatches.
 
 mod check;
+mod credential;
 mod env;
 mod init;
 mod models;
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
-use crate::config::{self, Config, LogFormat};
+use crate::config::{self, Config, ConfigError, LogFormat};
 
 pub use style::Style;
 
@@ -71,6 +72,8 @@ pub enum Command {
     Serve(serve::ServeArgs),
     /// Validate the configuration and probe every backend
     Check(check::CheckArgs),
+    /// Run each backend's credential command and report what it produced
+    Credential(credential::CredentialArgs),
     /// Show the models Claude Code will see and where each one goes
     Models,
     /// Write a commented example configuration with a fresh token
@@ -87,14 +90,19 @@ impl Cli {
         self.config.clone().unwrap_or_else(config::default_path)
     }
 
+    /// The file is named once: a problem with its contents does not say which
+    /// file it was, a problem reading it already does.
     fn load_config(&self) -> anyhow::Result<Config> {
         let path = self.config_path();
-        Config::load(&path).map_err(|e| anyhow::anyhow!("{e}\n  (file: {})", path.display()))
+        Config::load(&path).map_err(|error| match &error {
+            ConfigError::Read { .. } => anyhow::anyhow!("{error}"),
+            _ => anyhow::anyhow!("{error}\n  (file: {})", path.display()),
+        })
     }
 
-    /// Installs the tracing subscriber. `fallback` applies when neither the
-    /// command line, `RUST_LOG` nor the file says otherwise.
-    fn init_tracing(&self, config: Option<&Config>, fallback: &str) -> anyhow::Result<()> {
+    /// The filter and format this run installs. `fallback` applies when
+    /// neither the command line, `RUST_LOG` nor the file says otherwise.
+    fn logging(&self, config: Option<&Config>, fallback: &str) -> (String, LogFormat) {
         let from_file = config.map(|c| c.logging.level.as_str()).unwrap_or(fallback);
         let directives = crate::observability::resolve_directives(
             self.log_level.as_deref(),
@@ -105,6 +113,12 @@ impl Cli {
             .log_format
             .or(config.map(|c| c.logging.format))
             .unwrap_or_default();
+        (directives, format)
+    }
+
+    /// Installs the tracing subscriber, once per process.
+    fn init_tracing(&self, config: Option<&Config>, fallback: &str) -> anyhow::Result<()> {
+        let (directives, format) = self.logging(config, fallback);
         crate::observability::init(&directives, format)
             .map_err(|e| anyhow::anyhow!("invalid log filter `{directives}`: {e}"))
     }
@@ -116,6 +130,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Serve(args) => block_on(serve::run(&cli, args, &style)),
         Command::Check(args) => block_on(check::run(&cli, args, &style)),
+        Command::Credential(args) => block_on(credential::run(&cli, args, &style)),
         Command::Models => models::run(&cli, &style),
         Command::Init(args) => init::run(&cli, args, &style),
         Command::Env(args) => env::run(&cli, args),

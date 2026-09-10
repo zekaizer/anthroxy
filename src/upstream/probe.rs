@@ -126,7 +126,10 @@ fn model_ids(body: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::sync::Barrier;
 
     use crate::config::{BackendConfig, BackendKind, CredentialConfig, CredentialHeader};
     use crate::upstream::RetryPolicy;
@@ -135,12 +138,19 @@ mod tests {
         UpstreamClient::new(reqwest::Client::new(), RetryPolicy::never())
     }
 
-    async fn slow_backend(name: &str, delay: Duration) -> Backend {
+    /// A backend listing one model. With a `gate`, it answers only once every
+    /// party has reached it, which no sequence of requests can satisfy.
+    async fn backend(name: &str, gate: Option<Arc<Barrier>>) -> Backend {
         let app = axum::Router::new().route(
             "/v1/models",
-            axum::routing::get(move || async move {
-                tokio::time::sleep(delay).await;
-                axum::Json(serde_json::json!({"data": [{"id": "m"}]}))
+            axum::routing::get(move || {
+                let gate = gate.clone();
+                async move {
+                    if let Some(gate) = gate {
+                        gate.wait().await;
+                    }
+                    axum::Json(serde_json::json!({"data": [{"id": "m"}]}))
+                }
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -162,16 +172,13 @@ mod tests {
 
     #[tokio::test]
     async fn probe_all_runs_backends_concurrently_in_order() {
-        let a = slow_backend("a", Duration::from_millis(300)).await;
-        let b = slow_backend("b", Duration::from_millis(300)).await;
-        let started = Instant::now();
-        let probes = probe_all(&client(), [&a, &b]).await;
-        let elapsed = started.elapsed();
+        let gate = Arc::new(Barrier::new(2));
+        let a = backend("a", Some(gate.clone())).await;
+        let b = backend("b", Some(gate)).await;
+        let probes = tokio::time::timeout(Duration::from_secs(10), probe_all(&client(), [&a, &b]))
+            .await
+            .expect("the two probes never overlapped");
         assert_eq!(probes.len(), 2);
-        assert!(
-            elapsed < Duration::from_millis(550),
-            "probes ran sequentially: {elapsed:?}"
-        );
         for p in &probes {
             match &p.models {
                 Some(ModelsProbe::Answered { status, ids, .. }) => {
@@ -185,20 +192,20 @@ mod tests {
 
     #[tokio::test]
     async fn credential_line_is_the_source_plus_the_masked_value() {
-        let mut backend = slow_backend("a", Duration::ZERO).await;
-        backend.credential = crate::credential::build(&CredentialConfig::Static {
+        let mut with_key = backend("a", None).await;
+        with_key.credential = crate::credential::build(&CredentialConfig::Static {
             value: "key-1234567890".into(),
             header: CredentialHeader::x_api_key(),
         })
         .unwrap();
-        let probe = probe(&client(), &backend).await;
+        let probe = probe(&client(), &with_key).await;
         assert_eq!(probe.credential.unwrap(), "static (key-…7890)");
         assert!(matches!(
             probe.models,
             Some(ModelsProbe::Answered { status: 200, .. })
         ));
 
-        let none = slow_backend("b", Duration::ZERO).await;
+        let none = backend("b", None).await;
         assert_eq!(
             super::probe(&client(), &none).await.credential.unwrap(),
             "none"

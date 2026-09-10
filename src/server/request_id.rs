@@ -11,6 +11,7 @@ use http::request::Parts;
 use tracing::Instrument;
 
 use super::AppState;
+use crate::text::short;
 
 pub static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
@@ -59,8 +60,8 @@ pub async fn assign(State(state): State<AppState>, mut request: Request, next: N
     let span = tracing::info_span!(
         "request",
         id = %id.as_str(),
-        method = %request.method(),
-        path = %request.uri().path(),
+        method = %short(request.method().as_str()),
+        path = %short(request.uri().path()),
         %peer,
         model = tracing::field::Empty,
         backend = tracing::field::Empty,

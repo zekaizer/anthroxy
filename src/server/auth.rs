@@ -7,6 +7,7 @@ use axum::Extension;
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
+use http::HeaderValue;
 use http::header::AUTHORIZATION;
 use subtle::ConstantTimeEq;
 
@@ -33,32 +34,39 @@ impl std::fmt::Debug for ClientToken {
 }
 
 /// Rejects requests whose token is missing or wrong with an Anthropic-shaped
-/// 401.
+/// 401. Both headers are read: Claude Code sends `x-api-key` for
+/// ANTHROPIC_API_KEY and the bearer for ANTHROPIC_AUTH_TOKEN, so a shell with
+/// both variables set presents both, and either one carrying the token is a
+/// request the router asked for.
 pub async fn require_client_token(
     Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
     request: Request,
     next: Next,
 ) -> Response {
-    let presented = request
-        .headers()
-        .get(&X_API_KEY)
-        .map(|v| v.as_bytes())
-        .or_else(|| {
-            request
-                .headers()
+    let (authorized, presented) = {
+        let headers = request.headers();
+        let candidates = [
+            headers.get(&X_API_KEY).map(HeaderValue::as_bytes),
+            headers
                 .get(AUTHORIZATION)
-                .and_then(|v| v.as_bytes().strip_prefix(b"Bearer "))
-        });
-    match presented {
-        Some(token) if snapshot.client_token.matches(token) => next.run(request).await,
-        Some(_) => {
-            tracing::warn!("rejected request: client token mismatch");
-            RouterError::Unauthorized.into_response(&request_id)
-        }
-        None => {
-            tracing::warn!("rejected request: no client token");
-            RouterError::Unauthorized.into_response(&request_id)
-        }
+                .and_then(|v| v.as_bytes().strip_prefix(b"Bearer ")),
+        ];
+        (
+            candidates
+                .iter()
+                .flatten()
+                .any(|token| snapshot.client_token.matches(token)),
+            candidates.iter().any(Option::is_some),
+        )
+    };
+    if authorized {
+        return next.run(request).await;
     }
+    if presented {
+        tracing::warn!("rejected request: client token mismatch");
+    } else {
+        tracing::warn!("rejected request: no client token");
+    }
+    RouterError::Unauthorized.into_response(&request_id)
 }

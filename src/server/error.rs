@@ -6,21 +6,22 @@ use http::StatusCode;
 use super::RequestId;
 use crate::anthropic::{DecodeError, ErrorResponse, ErrorType, PeekError};
 use crate::routing::Registry;
+use crate::text::{cut, short};
 use crate::upstream::UpstreamError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RouterError {
     #[error("missing or invalid router token; send it as `x-api-key` or `Authorization: Bearer`")]
     Unauthorized,
-    #[error("{0}")]
+    #[error("{}", cut(&.0.to_string(), 200))]
     BadRequest(#[from] PeekError),
     #[error("request body exceeds the router limit of {limit} bytes")]
     BodyTooLarge { limit: usize },
     #[error("cannot read request body: {0}")]
     BodyRead(String),
-    #[error("model `{model}` is not served by this router; configured models: {}", known.join(", "))]
+    #[error("model `{}` is not served by this router; configured models: {}", short(model), known.join(", "))]
     UnknownModel { model: String, known: Vec<String> },
-    #[error("no route for {method} {path}")]
+    #[error("no route for {} {}", short(method), short(path))]
     NoRoute { method: String, path: String },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
@@ -84,6 +85,7 @@ impl RouterError {
             RouterError::Upstream(
                 UpstreamError::Credential { backend, .. }
                 | UpstreamError::Transport { backend, .. }
+                | UpstreamError::Redirected { backend, .. }
                 | UpstreamError::Body { backend, .. },
             )
             | RouterError::Translate { backend, .. }
@@ -105,5 +107,51 @@ impl RouterError {
             );
         }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_model_name_does_not_reach_the_message_in_full() {
+        let error = RouterError::UnknownModel {
+            model: "m".repeat(10_000),
+            known: vec!["m".to_owned()],
+        };
+        assert!(error.to_string().len() < 200, "{}", error.to_string().len());
+    }
+
+    #[test]
+    fn a_body_that_will_not_parse_does_not_reach_the_message_in_full() {
+        let quoted = format!("\"{}\"", "x".repeat(5_000));
+        let error = RouterError::BadRequest(PeekError::NotJson(
+            serde_json::from_str::<bool>(&quoted).unwrap_err(),
+        ));
+        let text = error.to_string();
+        assert!(text.len() < 300, "{} chars", text.len());
+        assert!(text.contains("invalid type: string"), "{text}");
+    }
+
+    #[test]
+    fn a_long_path_and_method_do_not_reach_the_message_in_full() {
+        let error = RouterError::NoRoute {
+            method: "X".repeat(4096),
+            path: format!("/v1/{}", "a".repeat(4096)),
+        };
+        assert!(error.to_string().len() < 200, "{}", error.to_string().len());
+    }
+
+    #[test]
+    fn an_unknown_model_name_cannot_forge_a_log_line() {
+        let error = RouterError::UnknownModel {
+            model: "ghost\n2026-09-09T00:00:00Z  INFO forged".to_owned(),
+            known: vec!["m".to_owned()],
+        };
+        let text = error.to_string();
+        assert!(!text.contains('\n'), "{text}");
+        assert!(text.contains("ghost\\n2026"), "{text}");
+        assert_eq!(error.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -1,3 +1,5 @@
+use std::net::{IpAddr, SocketAddr};
+
 use clap::{Args, Subcommand};
 
 use super::style::table;
@@ -100,7 +102,7 @@ pub async fn run(cli: &Cli, args: &ServiceArgs, style: &Style) -> anyhow::Result
             let user = std::env::var("USER").unwrap_or_else(|_| "-".to_owned());
             let health_url = cli
                 .load_config()
-                .map(|c| format!("http://127.0.0.1:{}/healthz", c.server.listen.port()))
+                .map(|c| health_url(c.server.listen))
                 .map_err(|e| e.to_string());
             let expected = Expected {
                 exe: &exe,
@@ -157,6 +159,18 @@ pub fn render(checks: &[Check], style: &Style) -> String {
     out
 }
 
+/// Where the router answers from this machine. A bind to every interface is
+/// reached on loopback of the same family, and an IPv6 literal needs brackets.
+fn health_url(listen: SocketAddr) -> String {
+    let host = match listen.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => "127.0.0.1".to_owned(),
+        IpAddr::V6(ip) if ip.is_unspecified() => "[::1]".to_owned(),
+        IpAddr::V4(ip) => ip.to_string(),
+        IpAddr::V6(ip) => format!("[{ip}]"),
+    };
+    format!("http://{host}:{}/healthz", listen.port())
+}
+
 fn require_linux() -> Result<(), ServiceError> {
     if cfg!(target_os = "linux") {
         Ok(())
@@ -168,6 +182,19 @@ fn require_linux() -> Result<(), ServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_url_follows_the_configured_bind() {
+        for (listen, want) in [
+            ("0.0.0.0:8787", "http://127.0.0.1:8787/healthz"),
+            ("127.0.0.1:9000", "http://127.0.0.1:9000/healthz"),
+            ("[::]:8787", "http://[::1]:8787/healthz"),
+            ("[::1]:8787", "http://[::1]:8787/healthz"),
+            ("192.168.1.5:80", "http://192.168.1.5:80/healthz"),
+        ] {
+            assert_eq!(health_url(listen.parse().unwrap()), want, "{listen}");
+        }
+    }
 
     #[test]
     fn render_marks_each_verdict_and_counts_failures() {

@@ -5,7 +5,7 @@ use clap::Args;
 
 use super::models::default_route_line;
 use super::{Cli, Style, display_path};
-use crate::config::{Config, Overrides};
+use crate::config::{Config, LogFormat, Overrides};
 use crate::server::{AppState, Server, Snapshot};
 
 #[derive(Debug, Clone, Args)]
@@ -32,13 +32,29 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     let path = cli.config_path();
     let config = load_effective(cli, args)?;
     cli.init_tracing(Some(&config), "info")?;
+    if let Some(mode) = crate::config::open_to_other_accounts(&path) {
+        tracing::warn!(
+            config = %path.display(),
+            mode = %format!("{mode:o}"),
+            "the configuration holds the router token; `chmod 600` it to keep it to this account"
+        );
+    }
 
     let server = Server::bind(&config).await?;
     let addr = server.local_addr();
+    // Before the banner: until this handler exists SIGHUP terminates the
+    // process, and a reload signalled the moment the router looks ready would
+    // do exactly that.
+    let reloader = tokio::spawn(reload_on_hangup(
+        hangup(),
+        server.state(),
+        cli.clone(),
+        args.clone(),
+        cli.logging(Some(&config), "info"),
+    ));
     print_banner(&server.state().snapshot(), &path, addr, style);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
-    let reloader = tokio::spawn(reload_on_hangup(server.state(), cli.clone(), args.clone()));
     let result = server.serve(shutdown_signal()).await;
     reloader.abort();
     result?;
@@ -47,18 +63,27 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
 }
 
 /// Re-reads the configuration on SIGHUP. A file that fails to load or build
-/// leaves the running configuration untouched.
+/// leaves the running configuration untouched. `installed` is the log filter
+/// and format this process started with; the subscriber is global and cannot
+/// be swapped, so a change to either is reported rather than silently ignored.
 #[cfg(unix)]
-async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
-    let Ok(mut hangup) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-    else {
+async fn reload_on_hangup(
+    hangup: Option<tokio::signal::unix::Signal>,
+    state: AppState,
+    cli: Cli,
+    args: ServeArgs,
+    installed: (String, LogFormat),
+) {
+    let Some(mut hangup) = hangup else {
         return;
     };
     let path = cli.config_path();
     while hangup.recv().await.is_some() {
         tracing::info!(config = %path.display(), "SIGHUP received, reloading configuration");
-        match load_effective(&cli, &args).and_then(|c| Ok(state.apply(&c)?)) {
-            Ok(report) => {
+        let reloaded = load_effective(&cli, &args)
+            .and_then(|config| Ok((state.apply(&config)?, cli.logging(Some(&config), "info"))));
+        match reloaded {
+            Ok((report, logging)) => {
                 tracing::info!(
                     backends = report.backends,
                     models = report.models,
@@ -67,6 +92,11 @@ async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
                 if report.listen_changed {
                     tracing::warn!(
                         "server.listen changed in the file; restart the router to apply it"
+                    );
+                }
+                if logging != installed {
+                    tracing::warn!(
+                        "logging level or format changed in the file; restart the router to apply it"
                     );
                 }
             }
@@ -78,9 +108,19 @@ async fn reload_on_hangup(state: AppState, cli: Cli, args: ServeArgs) {
 }
 
 #[cfg(not(unix))]
-async fn reload_on_hangup(_: AppState, _: Cli, _: ServeArgs) {
+async fn reload_on_hangup(_: (), _: AppState, _: Cli, _: ServeArgs, _: (String, LogFormat)) {
     std::future::pending::<()>().await
 }
+
+/// Claims SIGHUP for the reload loop, before anything announces the router is
+/// up. `None` when the handler could not be installed.
+#[cfg(unix)]
+fn hangup() -> Option<tokio::signal::unix::Signal> {
+    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok()
+}
+
+#[cfg(not(unix))]
+fn hangup() {}
 
 fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, style: &Style) {
     println!(

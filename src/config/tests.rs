@@ -265,6 +265,66 @@ fn env_expansion_leaves_bare_dollar_alone() {
 }
 
 #[test]
+fn backend_url_carries_no_query_or_fragment() {
+    // The request path is appended verbatim, so anything after it silently
+    // lands in the wrong place.
+    for url in ["http://h/v1?beta=1", "http://h/v1#frag", "http://h?x=1"] {
+        let text = MINIMAL.replace("http://127.0.0.1:1234", url);
+        let p = problems(&text);
+        assert!(
+            p.iter().any(|m| m.contains("backends.local.url")),
+            "{url} accepted: {p:?}"
+        );
+    }
+
+    let text = MINIMAL.replace("http://127.0.0.1:1234", "http://h/openai/v1");
+    let c = parse(&text).expect("a path prefix is what the request path extends");
+    assert_eq!(c.backends["local"].url, "http://h/openai/v1");
+}
+
+#[test]
+fn backend_headers_cannot_take_over_the_connection() {
+    for header in [
+        "content-length",
+        "Transfer-Encoding",
+        "connection",
+        "upgrade",
+    ] {
+        let text = format!("{MINIMAL}\n[backends.local.headers]\n\"{header}\" = \"x\"\n");
+        let p = problems(&text);
+        assert!(
+            p.iter().any(|m| m.contains("backends.local.headers")),
+            "{header} accepted: {p:?}"
+        );
+    }
+    // A backend that wants a different Host still may have one.
+    let text = format!("{MINIMAL}\n[backends.local.headers]\nhost = \"api.internal\"\n");
+    assert!(parse(&text).is_ok());
+}
+
+#[test]
+fn names_that_are_empty_are_rejected_wherever_they_appear() {
+    let cases = [
+        ("\n[backends.\"\"]\nurl = \"http://a\"\n", "backends:"),
+        (
+            "\n[[models]]\nid = \"m2\"\nbackend = \"local\"\nupstream_model = \"\"\n",
+            "upstream_model",
+        ),
+        (
+            "\n[[models]]\nid = \"m3\"\nbackend = \"local\"\naliases = [\"\"]\n",
+            "aliases",
+        ),
+    ];
+    for (extra, needle) in cases {
+        let p = problems(&(MINIMAL.to_owned() + extra));
+        assert!(
+            p.iter().any(|m| m.contains(needle)),
+            "{extra} accepted: {p:?}"
+        );
+    }
+}
+
+#[test]
 fn validation_collects_every_problem() {
     let text = r#"
 [server]
@@ -453,6 +513,68 @@ fn body_dir_tilde_expands_to_home() {
         parse(&text).unwrap().logging.body_dir.unwrap(),
         std::path::PathBuf::from("/abs/path")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_configuration_open_to_other_accounts_is_reported_with_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "").unwrap();
+    let chmod = |mode| {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    chmod(0o600);
+    assert_eq!(open_to_other_accounts(&path), None);
+    chmod(0o640);
+    assert_eq!(open_to_other_accounts(&path), Some(0o640));
+    chmod(0o644);
+    assert_eq!(open_to_other_accounts(&path), Some(0o644));
+    assert_eq!(
+        open_to_other_accounts(&dir.path().join("absent.toml")),
+        None,
+        "a file that is not there is a problem the loader reports"
+    );
+}
+
+#[test]
+fn a_zero_timeout_is_rejected_where_zero_is_not_no_limit() {
+    let text = r#"
+[server]
+token = "secret"
+
+[upstream]
+connect_timeout = "0s"
+read_timeout = "0s"
+
+[backends.local]
+url = "http://127.0.0.1:1234"
+credential = { kind = "command", command = "cat token", timeout = "0s" }
+
+[[models]]
+id = "gemma"
+backend = "local"
+"#;
+    let problems = problems(text);
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    for field in [
+        "upstream.connect_timeout",
+        "upstream.read_timeout",
+        "backends.local.credential.timeout",
+    ] {
+        assert!(problems.iter().any(|p| p.contains(field)), "{problems:?}");
+    }
+
+    // `refresh` of zero has a meaning: run the command for every request.
+    let text = MINIMAL.to_owned()
+        + "\n[backends.local.credential]\nkind = \"command\"\ncommand = \"cat token\"\nrefresh = \"0s\"\n";
+    assert!(matches!(
+        parse(&text).unwrap().backends["local"].credential,
+        CredentialConfig::Command { refresh, .. } if refresh.is_zero()
+    ));
 }
 
 #[test]
