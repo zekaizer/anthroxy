@@ -11,6 +11,7 @@ use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 
+use crate::private_fs::{create_dir_private, write_private};
 use crate::server::relay::RelayOutcome;
 
 #[derive(Debug, Clone)]
@@ -153,6 +154,119 @@ impl BodyLog {
     }
 }
 
+/// The files an entry may hold.
+pub const ENTRY_FILES: [&str; 5] = [
+    "meta.json",
+    "request.json",
+    "response.json",
+    "response.sse",
+    "response.bin",
+];
+
+/// One recorded exchange as the console lists it, read from its directory
+/// and `meta.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EntrySummary {
+    pub name: String,
+    pub at: jiff::Timestamp,
+    pub request_id: String,
+    pub bytes: u64,
+    pub files: Vec<String>,
+    pub path: Option<String>,
+    pub model: Option<String>,
+    pub backend: Option<String>,
+    pub status: Option<u16>,
+    pub outcome: Option<String>,
+}
+
+impl BodyLog {
+    /// Entries, newest first, at most `limit`.
+    pub fn list(&self, limit: usize) -> Vec<EntrySummary> {
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut names: Vec<(String, jiff::Timestamp)> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|entry| {
+                let name = entry.file_name().to_str()?.to_owned();
+                let at = entry_stamp(&name)?;
+                Some((name, at))
+            })
+            .collect();
+        names.sort_by(|a, b| b.0.cmp(&a.0));
+        names
+            .into_iter()
+            .take(limit)
+            .map(|(name, at)| self.summary(name, at))
+            .collect()
+    }
+
+    fn summary(&self, name: String, at: jiff::Timestamp) -> EntrySummary {
+        let dir = self.root.join(&name);
+        let mut files = Vec::new();
+        let mut bytes = 0;
+        for file in ENTRY_FILES {
+            if let Ok(metadata) = std::fs::metadata(dir.join(file)) {
+                files.push(file.to_owned());
+                bytes += metadata.len();
+            }
+        }
+        let meta: serde_json::Value = std::fs::read(dir.join("meta.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default();
+        let text = |key: &str| meta.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+        EntrySummary {
+            request_id: name.get(21..).unwrap_or_default().to_owned(),
+            at,
+            bytes,
+            files,
+            path: text("path"),
+            model: text("model"),
+            backend: text("backend"),
+            status: meta
+                .get("status")
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u16::try_from(v).ok()),
+            outcome: text("outcome"),
+            name,
+        }
+    }
+
+    /// `file` of entry `name`, when both name something the log wrote.
+    pub fn file(&self, name: &str, file: &str) -> Option<PathBuf> {
+        if !is_entry_name(name) || !ENTRY_FILES.contains(&file) {
+            return None;
+        }
+        let path = self.root.join(name).join(file);
+        path.is_file().then_some(path)
+    }
+
+    /// Deletes entry `name`; `false` when there is no such entry.
+    pub fn remove(&self, name: &str) -> std::io::Result<bool> {
+        let dir = self.root.join(name);
+        if !is_entry_name(name) || !dir.is_dir() {
+            return Ok(false);
+        }
+        std::fs::remove_dir_all(dir).map(|()| true)
+    }
+
+    /// Deletes every entry; returns how many went. Other names are left alone.
+    pub fn remove_all(&self) -> usize {
+        self.list(usize::MAX)
+            .iter()
+            .filter(|entry| self.remove(&entry.name).unwrap_or(false))
+            .count()
+    }
+}
+
+/// A directory name the log wrote: a stamp and a request id, nothing that
+/// leaves the root.
+fn is_entry_name(name: &str) -> bool {
+    entry_stamp(name).is_some() && !name.contains(['/', '\\']) && !name.contains("..")
+}
+
 /// `YYYYMMDDTHHMMSS.mmmZ`, sortable and file-name safe.
 fn dir_stamp(now: jiff::Timestamp) -> String {
     format!(
@@ -214,46 +328,6 @@ fn write_files(
     })
 }
 
-/// A recorded exchange is the conversation itself, so what the router creates
-/// belongs to the user running it whatever the umask says. A `body_dir` that
-/// already exists keeps the mode it has — the operator owns that one — and the
-/// entries inside it are private either way.
-#[cfg(unix)]
-fn create_dir_private(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-}
-
-#[cfg(not(unix))]
-fn create_dir_private(dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)
-}
-
-/// Writes owner-only. The mode is in place before the body is, so the file is
-/// never briefly world-readable.
-#[cfg(unix)]
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?
-        .write_all(bytes)
-}
-
-#[cfg(not(unix))]
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, bytes)
-}
-
 /// File name for the response body, by content type.
 fn response_file(headers: &HeaderMap) -> &'static str {
     let content_type = headers
@@ -270,6 +344,14 @@ fn response_file(headers: &HeaderMap) -> &'static str {
 }
 
 impl Recorder {
+    /// The entry's directory name under the body log root.
+    pub fn entry(&self) -> String {
+        self.dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
     /// Called once response headers arrive.
     pub fn response_started(
         &mut self,
@@ -407,6 +489,67 @@ mod tests {
             ]
         );
         assert_eq!(log.prune(now), 0, "idempotent");
+    }
+
+    #[test]
+    fn entries_list_newest_first_and_only_their_own_files_are_reachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = BodyLog::open(dir.path(), Duration::ZERO).unwrap();
+        for (name, status) in [
+            ("20260911T100000.000Z-rtr_old", 200),
+            ("20260911T110000.000Z-rtr_new", 400),
+        ] {
+            let entry = dir.path().join(name);
+            std::fs::create_dir(&entry).unwrap();
+            std::fs::write(
+                entry.join("meta.json"),
+                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete"}}"#),
+            )
+            .unwrap();
+            std::fs::write(entry.join("request.json"), "{}").unwrap();
+            std::fs::write(entry.join("stray.txt"), "not listed").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("unrelated")).unwrap();
+
+        let entries = log.list(10);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "20260911T110000.000Z-rtr_new",
+                "20260911T100000.000Z-rtr_old"
+            ]
+        );
+        let newest = &entries[0];
+        assert_eq!(newest.request_id, "rtr_new");
+        assert_eq!(newest.at, ts("2026-09-11T11:00:00Z"));
+        assert_eq!(newest.files, ["meta.json", "request.json"]);
+        assert_eq!(newest.status, Some(400));
+        assert_eq!(newest.model.as_deref(), Some("fast"));
+        assert!(newest.bytes > 2);
+        assert_eq!(log.list(1).len(), 1);
+
+        assert!(
+            log.file("20260911T100000.000Z-rtr_old", "meta.json")
+                .is_some()
+        );
+        for (name, file) in [
+            ("20260911T100000.000Z-rtr_old", "stray.txt"),
+            ("20260911T100000.000Z-rtr_old", "../meta.json"),
+            ("unrelated", "meta.json"),
+            ("20260911T100000.000Z-rtr_old/..", "meta.json"),
+            ("20260911T100000.000Z-../../etc", "meta.json"),
+        ] {
+            assert!(log.file(name, file).is_none(), "{name}/{file}");
+        }
+
+        assert!(!log.remove("unrelated").unwrap());
+        assert!(dir.path().join("unrelated").exists());
+        assert!(log.remove("20260911T100000.000Z-rtr_old").unwrap());
+        assert!(!log.remove("20260911T100000.000Z-rtr_old").unwrap());
+        assert_eq!(log.remove_all(), 1);
+        assert!(log.list(10).is_empty());
+        assert!(dir.path().join("unrelated").exists());
     }
 
     #[test]

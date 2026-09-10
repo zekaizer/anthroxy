@@ -410,3 +410,103 @@ fn valid_for_is_the_refresh_interval_cut_short_by_the_expiry() {
         Err(CredentialError::Expired(_))
     ));
 }
+
+#[tokio::test]
+async fn fixed_status_is_the_masked_value_without_history() {
+    let fixed = build(&CredentialConfig::Static {
+        value: "key-1234567890".into(),
+        header: CredentialHeader::x_api_key(),
+    })
+    .unwrap();
+    let status = fixed.status();
+    assert_eq!(status.source, "static");
+    assert_eq!(status.masked.as_deref(), Some("key-…7890"));
+    assert!(status.refreshes.is_empty());
+    assert_eq!(status.refresh_at, None);
+
+    let none = build(&CredentialConfig::None).unwrap().status();
+    assert_eq!(none.source, "none");
+    assert_eq!(none.masked, None);
+}
+
+#[tokio::test]
+async fn command_status_reports_the_cached_value_and_each_run() {
+    let source = CommandCredential::new(
+        r#"printf '{"token": "tok-1234567890", "expires_at": 4102444800}'"#.into(),
+        CommandOutput::Json,
+        CredentialHeader::bearer(),
+        Duration::from_secs(300),
+        Duration::from_secs(10),
+    );
+    let before = source.status();
+    assert!(before.source.starts_with("command"), "{}", before.source);
+    assert_eq!(before.masked, None);
+    assert!(before.refreshes.is_empty());
+
+    source.credential().await.unwrap();
+    source.credential().await.unwrap();
+    let status = source.status();
+    assert_eq!(status.masked.as_deref(), Some("tok-…7890"));
+    assert_eq!(
+        status.expires_at,
+        Some("2100-01-01T00:00:00Z".parse().unwrap())
+    );
+    let now = jiff::Timestamp::now();
+    let refresh_at = status
+        .refresh_at
+        .expect("a cached value has a refresh time");
+    assert!(refresh_at > now, "{refresh_at}");
+    assert!(
+        refresh_at <= now + jiff::SignedDuration::from_secs(300),
+        "{refresh_at}"
+    );
+    assert!(status.fetched_at.is_some_and(|t| t <= now));
+    assert_eq!(status.refreshes.len(), 1, "a cache hit is not a run");
+    assert_eq!(status.refreshes[0].masked.as_deref(), Some("tok-…7890"));
+    assert_eq!(status.refreshes[0].error, None);
+
+    source.invalidate().await;
+    let status = source.status();
+    assert_eq!(status.masked, None, "nothing is cached after invalidate");
+    assert_eq!(status.refresh_at, None);
+    assert_eq!(status.refreshes.len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_run_is_in_the_history_with_its_error() {
+    let source = CommandCredential::new(
+        "echo nope >&2; exit 3".into(),
+        CommandOutput::Text,
+        CredentialHeader::bearer(),
+        Duration::from_secs(300),
+        Duration::from_secs(10),
+    );
+    assert!(source.credential().await.is_err());
+    let status = source.status();
+    assert_eq!(status.masked, None);
+    assert_eq!(status.refreshes.len(), 1);
+    let error = status.refreshes[0].error.as_deref().unwrap();
+    assert!(
+        error.contains("exit 3") && error.contains("nope"),
+        "{error}"
+    );
+    assert_eq!(status.refreshes[0].masked, None);
+}
+
+#[tokio::test]
+async fn the_run_history_is_bounded() {
+    let source = CommandCredential::new(
+        "exit 1".into(),
+        CommandOutput::Text,
+        CredentialHeader::bearer(),
+        Duration::from_secs(300),
+        Duration::from_secs(10),
+    );
+    for _ in 0..30 {
+        let _ = source.credential().await;
+    }
+    assert_eq!(
+        source.status().refreshes.len(),
+        super::command::REFRESH_HISTORY
+    );
+}

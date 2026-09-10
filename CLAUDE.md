@@ -22,7 +22,7 @@ cargo fmt
 - `src/lib.rs` — the library. All behaviour lives here; integration tests target this crate.
 - `src/main.rs` — the `anthroxy` binary. Thin entry point: parse the command line, call the library. No logic.
 - One module per responsibility, one file per concern; add a file rather than growing one:
-  - `config/` — TOML schema, `${ENV}` expansion, validation, the `init` example.
+  - `config/` — TOML schema, `${ENV}` expansion, validation, the `init` example, client environment rendering, redacted view, TOML fragments.
   - `anthropic/` — wire types the router emits or inspects (errors, model list, `model` peek/rewrite) and the Messages API ↔ IR codecs.
   - `ir/` — the intermediate representation between chat APIs: request document, response events, folded message. Names no wire format.
   - `openai/` — IR ↔ OpenAI Chat Completions codecs (request, chunk, completion, error body).
@@ -31,12 +31,15 @@ cargo fmt
   - `routing/` — model id/alias → backend + upstream model.
   - `credential/` — `CredentialSource` trait; fixed and command-backed sources.
   - `upstream/` — backend registry, header translation, retry policy, HTTP client, probe.
-  - `server/` — axum app: request id span, client auth, handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"` backends), relay stream, error mapping.
-  - `observability/` — tracing subscriber, per-request body capture (fed by the relay stream).
+  - `server/` — axum app: request id span, client auth, handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"` backends, `console/` for the web console's `/api/` routes with its page under `console/assets/`), relay stream, error mapping.
+  - `activity/` — in-memory record of exchanges in flight and recently finished, the unmatched model-name tally, hints read from upstream error bodies.
+  - `stats/` — persistent per-exchange JSONL statistics: line format, daily files, aggregation.
+  - `observability/` — tracing subscriber, per-request body capture (fed by the relay stream), recording listing and deletion.
   - `service/` — systemd user unit.
   - `cli/` — clap grammar and one file per subcommand.
   - `text.rs` — escaping and cutting for anything the router did not choose that reaches a message or a log line.
-- `tests/` — black-box tests: `proxy.rs`/`body_log.rs`/`openai.rs` against a mock backend in `tests/support/`, `cli.rs` against the binary.
+  - `private_fs.rs` — owner-only directory creation, writes and appends for files that hold what a user sent or did.
+- `tests/` — black-box tests: `proxy.rs`/`body_log.rs`/`openai.rs`/`activity.rs`/`console.rs`/`reload.rs` against a mock backend in `tests/support/`, `cli.rs` against the binary.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed docs.
 

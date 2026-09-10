@@ -45,6 +45,28 @@ fn minimal_config_applies_defaults() {
     assert_eq!(c.models[0].upstream_model, None);
     assert_eq!(c.routing.default_model, None);
     assert_eq!(c.logging.body_retention, Duration::from_secs(7 * 24 * 3600));
+    assert!(c.stats.enabled);
+    assert_eq!(c.stats.dir, StatsConfig::default_dir());
+    assert!(c.stats.dir.ends_with("anthroxy/stats"));
+    assert_eq!(c.stats.retention, Duration::from_secs(90 * 24 * 3600));
+}
+
+#[test]
+fn stats_can_be_moved_turned_off_and_kept_forever() {
+    let text = MINIMAL.to_owned()
+        + "\n[stats]\nenabled = false\ndir = \"~/stats-here\"\nretention = \"0s\"\n";
+    let c = parse(&text).unwrap();
+    assert!(!c.stats.enabled);
+    assert_eq!(c.stats.retention, Duration::ZERO);
+    if let Some(home) = dirs::home_dir() {
+        assert_eq!(
+            c.stats.dir,
+            home.join("stats-here"),
+            "`~` is the home directory"
+        );
+    }
+    let unknown = MINIMAL.to_owned() + "\n[stats]\nkeep = true\n";
+    assert!(matches!(parse(&unknown), Err(ConfigError::Parse(_))));
 }
 
 #[test]

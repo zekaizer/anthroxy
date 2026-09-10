@@ -5,21 +5,51 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{Method, Uri};
 use axum::middleware;
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 
-use super::handlers::{health, models, proxy};
+use super::handlers::{console, health, models, proxy};
 use super::{AppState, RequestId, RouterError, auth, request_id};
 
+/// The console sends small JSON documents only.
+const CONSOLE_BODY_LIMIT: usize = 64 * 1024;
+
 pub fn build(state: AppState) -> Router {
+    // ADR-0011: the console's data and actions sit behind the router token.
+    let console_api = Router::new()
+        .route("/api/status", get(console::status))
+        .route("/api/requests", get(console::requests))
+        .route("/api/requests/{id}", get(console::request))
+        .route("/api/stats", get(console::stats))
+        .route("/api/env", get(console::env))
+        .route("/api/reload", post(console::reload))
+        .route("/api/probe", post(console::probe))
+        .route("/api/smoke", post(console::smoke))
+        .route(
+            "/api/recordings",
+            get(console::recordings).delete(console::remove_recordings),
+        )
+        .route("/api/recordings/{name}", delete(console::remove_recording))
+        .route(
+            "/api/recordings/{name}/{file}",
+            get(console::recording_file),
+        )
+        .layer(DefaultBodyLimit::max(CONSOLE_BODY_LIMIT));
+
     let protected = Router::new()
         .route("/v1/models", get(models::list))
         .route("/v1/models/{id}", get(models::get_one))
         .route("/v1/messages", post(proxy::proxy))
         .route("/v1/messages/count_tokens", post(proxy::proxy))
+        .merge(console_api)
         .route_layer(middleware::from_fn(auth::require_client_token));
 
     Router::new()
         .route("/healthz", get(health::healthz))
+        .route("/", get(console::root))
+        .route("/ui", get(console::root))
+        .route("/ui/", get(console::index))
+        .route("/ui/app.js", get(console::script))
+        .route("/ui/app.css", get(console::style))
         .merge(protected)
         .fallback(not_found)
         // Without this a method no route takes answers 405 with an empty body,

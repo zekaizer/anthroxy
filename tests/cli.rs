@@ -19,6 +19,11 @@ fn spawnable() -> std::process::Command {
         .env_remove("RUST_LOG")
         .env_remove("SSL_CERT_FILE")
         .env_remove("SSL_CERT_DIR")
+        // Statistics default to the state directory; keep them out of $HOME.
+        .env(
+            "XDG_STATE_HOME",
+            std::env::temp_dir().join("anthroxy-cli-tests-state"),
+        )
         .env("NO_COLOR", "1");
     cmd
 }
@@ -528,6 +533,13 @@ fn serve_starts_answers_health_and_stops_on_sigterm() {
         banner.lines.iter().any(|l| l.contains("body log")),
         "{banner:?}"
     );
+    assert!(
+        banner
+            .lines
+            .iter()
+            .any(|l| l.contains("stats") && l.contains("anthroxy-cli-tests-state")),
+        "statistics go to the state directory: {banner:?}"
+    );
 
     let body = http_get(&format!("{}/healthz", banner.url), None);
     assert!(body.contains("\"status\":\"ok\""), "{body}");
@@ -739,11 +751,18 @@ async fn check_probes_an_openai_backend_without_anthropic_headers() {
     })
     .await
     .unwrap();
-    let probe = upstream.last();
-    assert_eq!(probe.path_and_query, "/v1/models");
-    assert_eq!(probe.header("anthropic-version"), None);
+    let received = upstream.received();
+    let paths: Vec<&str> = received.iter().map(|r| r.path_and_query.as_str()).collect();
     assert_eq!(
-        probe.header("authorization"),
-        Some("Bearer backend-secret-key")
+        paths,
+        ["/v1/models", "/api/v0/models"],
+        "a list without context lengths is followed by LM Studio's native list"
     );
+    for probe in &received {
+        assert_eq!(probe.header("anthropic-version"), None);
+        assert_eq!(
+            probe.header("authorization"),
+            Some("Bearer backend-secret-key")
+        );
+    }
 }

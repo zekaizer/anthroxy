@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted
+accepted; `SIGHUP` as the only reload trigger superseded by ADR-0011
 
 ## Context
 

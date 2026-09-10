@@ -21,7 +21,9 @@ pub use annotate::backend_prefix;
 pub use auth::ClientToken;
 pub use error::RouterError;
 pub use request_id::RequestId;
-pub use state::{AppState, ReloadReport, Snapshot};
+pub use state::{
+    AppState, Loaded, Loader, ReloadEvent, ReloadOutcome, ReloadReport, ReloadTrigger, Snapshot,
+};
 
 /// How often expired body-log entries are swept.
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
@@ -34,6 +36,12 @@ pub enum ServerBuildError {
     Client(#[from] crate::upstream::ClientBuildError),
     #[error("cannot open body log directory {dir}: {source}")]
     BodyLog {
+        dir: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot open statistics directory {dir}: {source}")]
+    Stats {
         dir: std::path::PathBuf,
         #[source]
         source: std::io::Error,
@@ -102,19 +110,29 @@ impl Server {
     }
 }
 
-/// The sweep walks the directory synchronously, so it runs on the blocking
+/// The sweeps walk directories synchronously, so they run on the blocking
 /// pool rather than a worker thread.
 async fn prune_loop(state: AppState) {
     loop {
-        if let Some(log) = state.snapshot().body_log.clone() {
-            let _ = tokio::task::spawn_blocking(move || {
-                let removed = log.prune(jiff::Timestamp::now());
+        let snapshot = state.snapshot();
+        let (body_log, stats) = (snapshot.body_log.clone(), snapshot.stats.clone());
+        drop(snapshot);
+        let _ = tokio::task::spawn_blocking(move || {
+            let now = jiff::Timestamp::now();
+            if let Some(log) = body_log {
+                let removed = log.prune(now);
                 if removed > 0 {
                     tracing::info!(removed, dir = %log.root().display(), "pruned body log entries");
                 }
-            })
-            .await;
-        }
+            }
+            if let Some(stats) = stats {
+                let removed = stats.prune(now);
+                if removed > 0 {
+                    tracing::info!(removed, dir = %stats.dir().display(), "pruned statistics files");
+                }
+            }
+        })
+        .await;
         tokio::time::sleep(PRUNE_INTERVAL).await;
     }
 }

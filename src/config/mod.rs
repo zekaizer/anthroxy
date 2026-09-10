@@ -5,12 +5,15 @@
 //! yields a literal `${NAME}`. Keys and comments are never expanded.
 
 mod byte_size;
+pub mod client_env;
 mod credential_header;
 mod env;
 mod error;
 pub mod example;
 mod schema;
+pub mod snippet;
 mod validate;
+pub mod view;
 
 #[cfg(test)]
 mod tests;
@@ -21,7 +24,7 @@ pub use credential_header::{CredentialHeader, X_API_KEY};
 pub use error::ConfigError;
 pub use schema::{
     BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, LogFormat, LoggingConfig,
-    ModelConfig, RoutingConfig, ServerConfig, UpstreamConfig,
+    ModelConfig, RoutingConfig, ServerConfig, StatsConfig, UpstreamConfig,
 };
 
 /// Environment variable naming the configuration file.
@@ -118,15 +121,19 @@ fn normalize(config: &mut Config) {
             backend.url.pop();
         }
     }
-    expand_home(&mut config.logging.body_dir);
-    expand_home(&mut config.upstream.ca_certificate);
+    if let Some(dir) = &mut config.logging.body_dir {
+        expand_home(dir);
+    }
+    if let Some(file) = &mut config.upstream.ca_certificate {
+        expand_home(file);
+    }
+    expand_home(&mut config.stats.dir);
 }
 
-fn expand_home(path: &mut Option<PathBuf>) {
-    if let Some(p) = path
-        && let Ok(rest) = p.strip_prefix("~")
+fn expand_home(path: &mut PathBuf) {
+    if let Ok(rest) = path.strip_prefix("~")
         && let Some(home) = dirs::home_dir()
     {
-        *p = home.join(rest);
+        *path = home.join(rest);
     }
 }

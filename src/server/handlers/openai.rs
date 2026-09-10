@@ -9,6 +9,7 @@ use http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
 use tracing::Span;
 
+use crate::activity::Exchange;
 use crate::observability::Recorder;
 use crate::openai::ResponseError;
 use crate::server::RouterError;
@@ -43,7 +44,9 @@ pub fn prepare(
 /// Headers the router sets on the client response and the body, for a
 /// successful upstream response: a translated event stream, or a message
 /// document from a body the backend answered whole. The recorder sees the
-/// backend's bytes in every case.
+/// backend's bytes in every case; the exchange sees what the client gets and
+/// is taken only once a body exists.
+#[allow(clippy::too_many_arguments)]
 pub async fn body(
     upstream: UpstreamResponse,
     backend: &str,
@@ -52,14 +55,22 @@ pub async fn body(
     span: Span,
     started: Instant,
     recorder: Option<Recorder>,
+    exchange: &mut Option<Exchange>,
 ) -> Result<(HeaderMap, Body), RouterError> {
     let mut headers = HeaderMap::new();
+    let status = upstream.response.status().as_u16();
     if stream && is_event_stream(upstream.response.headers()) {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
         headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
         let translator = translate::Translator::new(relay, upstream_model, backend);
-        return Ok((headers, Body::from_stream(translator)));
+        let body = match exchange.take() {
+            Some(exchange) => {
+                Body::from_stream(exchange.track(translator, Some("text/event-stream")))
+            }
+            None => Body::from_stream(translator),
+        };
+        return Ok((headers, body));
     }
     let raw = read_all(upstream, backend, recorder).await?;
     tracing::info!(
@@ -76,11 +87,14 @@ pub async fn body(
         // replayed as the stream it stands for.
         tracing::warn!("backend answered a streaming request with a document");
         let events = translate::document_events(&raw, upstream_model).map_err(bad)?;
-        ("text/event-stream", Body::from(events))
+        ("text/event-stream", Bytes::from(events))
     } else {
         let document = translate::response(&raw, upstream_model).map_err(bad)?;
-        ("application/json", Body::from(document))
+        ("application/json", Bytes::from(document))
     };
+    if let Some(exchange) = exchange.take() {
+        exchange.finish_body(status, &body, Some(content_type));
+    }
     headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
-    Ok((headers, body))
+    Ok((headers, Body::from(body)))
 }

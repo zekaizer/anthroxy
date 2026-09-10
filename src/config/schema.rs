@@ -25,6 +25,8 @@ pub struct Config {
     pub models: Vec<ModelConfig>,
     #[serde(default)]
     pub routing: RoutingConfig,
+    #[serde(default)]
+    pub stats: StatsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -75,6 +77,40 @@ impl Default for LoggingConfig {
     }
 }
 
+/// Persistent request statistics (ADR-0011).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StatsConfig {
+    /// Append one line per `/v1/messages` exchange.
+    pub enabled: bool,
+    pub dir: PathBuf,
+    /// Files whose day ended longer ago than this are deleted; `0` keeps them.
+    #[serde(with = "humantime_serde")]
+    pub retention: Duration,
+}
+
+impl StatsConfig {
+    /// `$XDG_STATE_HOME/anthroxy/stats`, or the platform's local data
+    /// directory where there is no state directory.
+    pub fn default_dir() -> PathBuf {
+        dirs::state_dir()
+            .or_else(dirs::data_local_dir)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("anthroxy")
+            .join("stats")
+    }
+}
+
+impl Default for StatsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dir: Self::default_dir(),
+            retention: Duration::from_secs(90 * 24 * 3600),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum LogFormat {
@@ -118,7 +154,7 @@ impl Default for UpstreamConfig {
 
 /// Which API a backend speaks. `Anthropic` bodies are relayed as bytes
 /// (ADR-0003); `OpenAi` bodies are translated (ADR-0010).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendKind {
     #[default]

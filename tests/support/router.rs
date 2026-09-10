@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use anthroxy::config::{Config, process_env};
 use anthroxy::server::{AppState, Server};
@@ -11,12 +12,21 @@ pub struct TestRouter {
     pub addr: SocketAddr,
     pub http: reqwest::Client,
     pub reload: AppState,
+    /// Where statistics go: a temporary directory unless the configuration
+    /// has a `[stats]` table of its own.
+    pub stats_dir: PathBuf,
+    _state: tempfile::TempDir,
     _task: tokio::task::JoinHandle<()>,
 }
 
 impl TestRouter {
     pub async fn start(config_toml: &str) -> Self {
-        let config = Config::parse(config_toml, process_env).expect("valid test config");
+        let mut config = Config::parse(config_toml, process_env).expect("valid test config");
+        let state = tempfile::tempdir().unwrap();
+        if !config_toml.contains("[stats]") {
+            config.stats.dir = state.path().join("stats");
+        }
+        let stats_dir = config.stats.dir.clone();
         let server = Server::bind(&config).await.expect("server binds");
         let addr = server.local_addr();
         let reload = server.state();
@@ -27,6 +37,8 @@ impl TestRouter {
             addr,
             http: reqwest::Client::new(),
             reload,
+            stats_dir,
+            _state: state,
             _task: task,
         }
     }

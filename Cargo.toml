@@ -1,6 +1,6 @@
 [package]
 name = "anthroxy"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["Luke Lee"]
 description = "One endpoint for Claude Code in front of several Anthropic-compatible backends"
@@ -25,7 +25,7 @@ http = "1.5.0"
 http-body-util = "0.1.5"
 humantime = "2.4.0"
 humantime-serde = "1.1.1"
-jiff = "0.2.35"
+jiff = { version = "0.2.35", features = ["serde"] }
 owo-colors = "4.4.0"
 rand = "0.10.2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "rustls-tls-native-roots", "stream", "http2"] }
