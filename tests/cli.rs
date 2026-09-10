@@ -417,3 +417,38 @@ fn http_get(url: &str, token: Option<&str>) -> String {
     stream.read_to_string(&mut response).unwrap();
     response
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn check_probes_an_openai_backend_without_anthropic_headers() {
+    use support::mock_upstream::json_response;
+    use support::openai::config_with_openai_backend;
+    let upstream = support::MockUpstream::start(|_| {
+        json_response(
+            200,
+            serde_json::json!({"object": "list", "data": [{"id": "qwen-32b", "object": "model"}]}),
+        )
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, config_with_openai_backend(&upstream.url(), "")).unwrap();
+    let path = path.to_str().unwrap().to_owned();
+    tokio::task::spawn_blocking(move || {
+        bin()
+            .args(["--config", &path, "check", "--timeout", "2s"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("(openai)"))
+            .stdout(predicate::str::contains("1 model(s)"))
+            .stdout(predicate::str::contains("qwen-32b"));
+    })
+    .await
+    .unwrap();
+    let probe = upstream.last();
+    assert_eq!(probe.path_and_query, "/v1/models");
+    assert_eq!(probe.header("anthropic-version"), None);
+    assert_eq!(
+        probe.header("authorization"),
+        Some("Bearer backend-secret-key")
+    );
+}
