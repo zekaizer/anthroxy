@@ -1,8 +1,8 @@
 //! Which headers cross the router, and how.
 
 use http::header::{
-    ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_LENGTH, HOST, HeaderMap, HeaderName,
-    HeaderValue, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
+    ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HOST, HeaderMap,
+    HeaderName, HeaderValue, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
 };
 
 use super::Backend;
@@ -91,6 +91,14 @@ fn merge_beta(existing: Option<&HeaderValue>, extra: &[String]) -> String {
         }
     }
     flags.join(",")
+}
+
+/// Whether a response body is server-sent events, by its content type.
+pub fn is_event_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"))
 }
 
 /// Headers relayed from the upstream response to the client. Framing headers

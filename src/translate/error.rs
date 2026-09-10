@@ -11,8 +11,8 @@ pub fn upstream_error(
     request_id: &str,
 ) -> ErrorResponse {
     let message = format!(
-        "[backend {backend}, HTTP {}] {}",
-        status.as_u16(),
+        "{}{}",
+        crate::server::backend_prefix(backend, status),
         crate::openai::error_message(raw)
     );
     ErrorResponse::new(ErrorType::from_status(status), message).with_request_id(request_id)

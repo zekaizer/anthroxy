@@ -8,19 +8,23 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::response::Response;
 use bytes::Bytes;
+use http::HeaderValue;
+use http::header::CONTENT_TYPE;
 use http_body_util::LengthLimitError;
 
 use crate::anthropic;
 use crate::config::BackendKind;
+use crate::observability::RequestRecord;
 use crate::observability::body_log::headers_for_record;
-use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
+use crate::server::buffered::read_all;
 use crate::server::handlers::openai;
 use crate::server::relay::Relay;
 use crate::server::{RequestId, RouterError, Snapshot};
+use crate::translate;
 use crate::upstream::{
-    Backend, UpstreamError, UpstreamRequest, UpstreamResponse, X_ROUTER_BACKEND, X_ROUTER_MODEL,
-    X_ROUTER_UPSTREAM_MODEL, header_value, response_headers, upstream_headers,
+    UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, header_value,
+    response_headers, upstream_headers,
 };
 
 pub async fn proxy(
@@ -135,24 +139,51 @@ async fn handle(
         header_value(&route.upstream_model),
     );
 
-    let body = match backend.kind {
-        BackendKind::Anthropic => {
-            relay_body(upstream, backend, request_id, span, started, recorder).await?
+    let body = if status.is_client_error() || status.is_server_error() {
+        // ADR-0005: error bodies are buffered so they can be annotated.
+        let raw = read_all(upstream, &backend.name, recorder).await?;
+        tracing::warn!(
+            status = status.as_u16(),
+            bytes = raw.len(),
+            "upstream returned an error"
+        );
+        match backend.kind {
+            BackendKind::Anthropic => {
+                match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
+                    Some(annotated) => Body::from(annotated),
+                    None => Body::from(raw),
+                }
+            }
+            BackendKind::OpenAi => {
+                let document =
+                    translate::upstream_error(status, &raw, &backend.name, request_id.as_str());
+                headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                Body::from(serde_json::to_vec(&document).expect("an error document serializes"))
+            }
         }
-        BackendKind::OpenAi => {
-            let (overrides, body) = openai::body(
-                upstream,
-                backend,
-                &route.upstream_model,
-                peek.stream,
-                request_id,
+    } else {
+        match backend.kind {
+            // ADR-0003: relayed as it arrives.
+            BackendKind::Anthropic => Body::from_stream(Relay::new(
+                upstream.response.bytes_stream(),
                 span,
                 started,
                 recorder,
-            )
-            .await?;
-            headers.extend(overrides);
-            body
+            )),
+            BackendKind::OpenAi => {
+                let (overrides, body) = openai::body(
+                    upstream,
+                    &backend.name,
+                    &route.upstream_model,
+                    peek.stream,
+                    span,
+                    started,
+                    recorder,
+                )
+                .await?;
+                headers.extend(overrides);
+                body
+            }
         }
     };
 
@@ -160,49 +191,6 @@ async fn handle(
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     Ok(response)
-}
-
-/// ADR-0003: error bodies are buffered and annotated, everything else is
-/// relayed as it arrives.
-async fn relay_body(
-    upstream: UpstreamResponse,
-    backend: &Backend,
-    request_id: &RequestId,
-    span: tracing::Span,
-    started: Instant,
-    recorder: Option<Recorder>,
-) -> Result<Body, RouterError> {
-    let status = upstream.response.status();
-    if status.is_client_error() || status.is_server_error() {
-        let raw = upstream
-            .response
-            .bytes()
-            .await
-            .map_err(|source| UpstreamError::Body {
-                backend: backend.name.clone(),
-                source,
-            })?;
-        tracing::warn!(
-            status = status.as_u16(),
-            bytes = raw.len(),
-            "upstream returned an error"
-        );
-        if let Some(recorder) = recorder {
-            recorder.finish_with_body(&raw);
-        }
-        return Ok(
-            match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
-                Some(annotated) => Body::from(annotated),
-                None => Body::from(raw),
-            },
-        );
-    }
-    Ok(Body::from_stream(Relay::new(
-        upstream.response.bytes_stream(),
-        span,
-        started,
-        recorder,
-    )))
 }
 
 /// Snapshot for the body log. `headers` are the ones going upstream; the

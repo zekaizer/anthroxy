@@ -17,15 +17,17 @@ pub fn annotate_upstream_error(
     if error.kind != "error" {
         return None;
     }
-    error.error.message = format!(
-        "[backend {backend}, HTTP {}] {}",
-        status.as_u16(),
-        error.error.message
-    );
+    error.error.message = format!("{}{}", backend_prefix(backend, status), error.error.message);
     error
         .request_id
         .get_or_insert_with(|| request_id.to_owned());
     serde_json::to_vec(&error).ok()
+}
+
+/// `[backend <name>, HTTP <status>] `, the prefix every relayed error
+/// message starts with (ADR-0005).
+pub fn backend_prefix(backend: &str, status: StatusCode) -> String {
+    format!("[backend {backend}, HTTP {}] ", status.as_u16())
 }
 
 #[cfg(test)]

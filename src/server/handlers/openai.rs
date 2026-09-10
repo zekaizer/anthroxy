@@ -10,10 +10,12 @@ use http::{HeaderMap, HeaderValue};
 use tracing::Span;
 
 use crate::observability::Recorder;
+use crate::openai::ResponseError;
+use crate::server::RouterError;
+use crate::server::buffered::read_all;
 use crate::server::relay::Relay;
-use crate::server::{RequestId, RouterError};
 use crate::translate;
-use crate::upstream::{Backend, UpstreamError, UpstreamResponse};
+use crate::upstream::{UpstreamResponse, is_event_stream};
 
 /// The upstream path and body for a client request to `client_path`.
 /// `count_tokens` has no counterpart and is refused here.
@@ -38,84 +40,47 @@ pub fn prepare(
     Ok((translate::CHAT_COMPLETIONS_PATH, Bytes::from(translated)))
 }
 
-/// Headers the router sets on the client response, and the body: an error
-/// document, a message document, or a translated event stream. The recorder
-/// sees the backend's bytes in every case.
-#[allow(clippy::too_many_arguments)]
+/// Headers the router sets on the client response and the body, for a
+/// successful upstream response: a translated event stream, or a message
+/// document from a body the backend answered whole. The recorder sees the
+/// backend's bytes in every case.
 pub async fn body(
     upstream: UpstreamResponse,
-    backend: &Backend,
+    backend: &str,
     upstream_model: &str,
     stream: bool,
-    request_id: &RequestId,
     span: Span,
     started: Instant,
     recorder: Option<Recorder>,
 ) -> Result<(HeaderMap, Body), RouterError> {
-    let status = upstream.response.status();
     let mut headers = HeaderMap::new();
-    if status.is_client_error() || status.is_server_error() {
-        let raw = read(upstream, backend).await?;
-        tracing::warn!(
-            status = status.as_u16(),
-            bytes = raw.len(),
-            "upstream returned an error"
-        );
-        if let Some(recorder) = recorder {
-            recorder.finish_with_body(&raw);
-        }
-        let document = translate::upstream_error(status, &raw, &backend.name, request_id.as_str());
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        let json = serde_json::to_vec(&document).expect("an error document serializes");
-        return Ok((headers, Body::from(json)));
+    if stream && is_event_stream(upstream.response.headers()) {
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
+        let translator = translate::Translator::new(relay, upstream_model, backend);
+        return Ok((headers, Body::from_stream(translator)));
     }
-    let event_stream = upstream
-        .response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("text/event-stream"));
-    if !stream || !event_stream {
-        let raw = read(upstream, backend).await?;
-        tracing::info!(
-            bytes = raw.len(),
-            duration_ms = started.elapsed().as_millis() as u64,
-            "response body complete"
-        );
-        if let Some(recorder) = recorder {
-            recorder.finish_with_body(&raw);
-        }
-        let bad = |error: &dyn std::fmt::Display| RouterError::BadUpstreamResponse {
-            backend: backend.name.clone(),
-            detail: error.to_string(),
-        };
-        if stream {
-            // The client reads events and nothing else, so a document is
-            // replayed as the stream it stands for.
-            tracing::warn!("backend answered a streaming request with a document");
-            let events = translate::document_events(&raw, upstream_model).map_err(|e| bad(&e))?;
-            headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
-            return Ok((headers, Body::from(events)));
-        }
-        let document = translate::response(&raw, upstream_model).map_err(|e| bad(&e))?;
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        return Ok((headers, Body::from(document)));
-    }
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
-    let translator = translate::Translator::new(relay, upstream_model, &backend.name);
-    Ok((headers, Body::from_stream(translator)))
-}
-
-async fn read(upstream: UpstreamResponse, backend: &Backend) -> Result<Bytes, RouterError> {
-    upstream
-        .response
-        .bytes()
-        .await
-        .map_err(|source| UpstreamError::Body {
-            backend: backend.name.clone(),
-            source,
-        })
-        .map_err(RouterError::from)
+    let raw = read_all(upstream, backend, recorder).await?;
+    tracing::info!(
+        bytes = raw.len(),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "response body complete"
+    );
+    let bad = |error: ResponseError| RouterError::BadUpstreamResponse {
+        backend: backend.to_owned(),
+        detail: error.to_string(),
+    };
+    let (content_type, body) = if stream {
+        // The client reads events and nothing else, so a document is
+        // replayed as the stream it stands for.
+        tracing::warn!("backend answered a streaming request with a document");
+        let events = translate::document_events(&raw, upstream_model).map_err(bad)?;
+        ("text/event-stream", Body::from(events))
+    } else {
+        let document = translate::response(&raw, upstream_model).map_err(bad)?;
+        ("application/json", Body::from(document))
+    };
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    Ok((headers, body))
 }

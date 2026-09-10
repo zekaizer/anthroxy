@@ -220,7 +220,7 @@ fn response_file(headers: &HeaderMap) -> &'static str {
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if content_type.starts_with("text/event-stream") {
+    if crate::upstream::is_event_stream(headers) {
         "response.sse"
     } else if content_type.starts_with("application/json") {
         "response.json"
