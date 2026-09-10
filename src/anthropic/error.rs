@@ -16,6 +16,21 @@ pub enum ErrorType {
 }
 
 impl ErrorType {
+    /// The type a backend's status maps to when its body is not an Anthropic
+    /// error document (ADR-0010): the six statuses the API defines, `ApiError`
+    /// for everything else.
+    pub fn from_status(status: StatusCode) -> Self {
+        match status {
+            StatusCode::BAD_REQUEST => ErrorType::InvalidRequestError,
+            StatusCode::UNAUTHORIZED => ErrorType::AuthenticationError,
+            StatusCode::FORBIDDEN => ErrorType::PermissionError,
+            StatusCode::NOT_FOUND => ErrorType::NotFoundError,
+            StatusCode::PAYLOAD_TOO_LARGE => ErrorType::RequestTooLarge,
+            StatusCode::TOO_MANY_REQUESTS => ErrorType::RateLimitError,
+            _ => ErrorType::ApiError,
+        }
+    }
+
     pub fn status(self) -> StatusCode {
         match self {
             ErrorType::InvalidRequestError => StatusCode::BAD_REQUEST,

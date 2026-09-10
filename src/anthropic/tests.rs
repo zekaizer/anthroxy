@@ -115,3 +115,26 @@ fn rewrite_is_a_no_op_when_nothing_matches() {
         r#"{"model":"up","messages":[{"a":1}],"metadata":{"k":1}}"#
     );
 }
+
+#[test]
+fn error_type_from_status_follows_the_api_table() {
+    use http::StatusCode;
+    for (status, expected) in [
+        (400, ErrorType::InvalidRequestError),
+        (401, ErrorType::AuthenticationError),
+        (403, ErrorType::PermissionError),
+        (404, ErrorType::NotFoundError),
+        (413, ErrorType::RequestTooLarge),
+        (429, ErrorType::RateLimitError),
+        (422, ErrorType::ApiError),
+        (500, ErrorType::ApiError),
+        (503, ErrorType::ApiError),
+        (529, ErrorType::ApiError),
+    ] {
+        assert_eq!(
+            ErrorType::from_status(StatusCode::from_u16(status).unwrap()),
+            expected,
+            "{status}"
+        );
+    }
+}
