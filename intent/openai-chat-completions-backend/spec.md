@@ -24,6 +24,8 @@ Claude Code → `POST /v1/messages` → body buffered, `model` and `stream` peek
 - E8. The existing vLLM backend is attached through its Anthropic-compatible endpoint (README, ADR-0009).
 - E9. OpenCode uses the in-house service via `@ai-sdk/openai-compatible`. [user, 2026-09-10]
 - E10. Claude Code ≥ 2.1.152 recovers by itself from the 400 caused by leftover `thinking` blocks after a switch (README, ADR-0003).
+- E11. What Claude Code 2.1.267 (`claude -p`, sdk-cli) sends, captured through the router on 2026-09-10: top-level `model, messages, system (array with cache_control), tools (29, all with input_schema), metadata.user_id, max_tokens (32000), thinking {type: adaptive, display: omitted}, context_management, output_config {effort}, stream`; `messages[]` contains `role: "system"` entries (beta `mid-conversation-system-2026-04-07`); headers include `anthropic-beta` with ten flags and `anthropic-version`. Both `stream: false` and `stream: true` requests were observed; no `count_tokens` call in a two-turn tool session.
+- E12. End-to-end on 2026-09-10: Claude Code 2.1.267 → anthroxy (`kind = "openai"`) → LM Studio (`gemma-4-e4b-it-heretic-qat`, via ssh tunnel to the Mac) completed a Read-tool loop in two turns with `is_error: false`; the first attempt failed with 400 on the `role: "system"` message until it was mapped. [this session]
 
 ### External [fetched 2026-09-10]
 
@@ -34,6 +36,8 @@ Claude Code → `POST /v1/messages` → body buffered, `model` and `stream` peek
 ## 4. Assumptions
 
 - ~~A1~~ (promoted to F3)
+- ~~A3~~ (superseded by E11)
+- ~~A4~~ (E11: no image was sent in the captured session; the base64 shape is still the documented one)
 - A2. Extent of the in-house service's implementation unknown — tools streaming, `stream_options`, `system` role, `reasoning_content`. (verify: U2)
 - A3. The set of fields Claude Code sends: `model`, `max_tokens`, `messages` (text/tool_use/tool_result/image/thinking blocks), `system` (array with cache_control), `tools` (input_schema), `tool_choice`, `metadata.user_id`, `stream`, `temperature`, `thinking`, `context_management` (beta). (basis: general knowledge + ADR-0009 / verify: U1 / if wrong: IC3 and R10 targets change)
 - A4. Images are inline base64 png/jpeg. (verify: U1 / if wrong: translated types change)
@@ -52,7 +56,7 @@ Common premise: WHERE the backend is configured as the OpenAI kind.
 - R5. WHEN `stream=true` THEN the system SHALL translate backend chunks into the Anthropic SSE events of IC4 and forward them as they arrive. (Must) — Verify: for a text + tool_calls chunk stream the client receives events in `message_start … message_stop` order with IC4 content — Basis: G1(a), F1, A1
 - R6. WHILE streaming the system SHALL accumulate `tool_calls` deltas with the same `index` into one `tool_use` block and emit `arguments` as `input_json_delta`. (Must) — Verify: two parallel tool calls arrive as distinct block indexes and concatenating each block's `partial_json` reproduces the original `arguments` — Basis: G1(b), A1
 - R7. The system SHALL translate `finish_reason` and `usage` into `stop_reason` and `usage` per IC4. (Must) — Verify: `stop/length/tool_calls` yield `end_turn/max_tokens/tool_use` in `message_delta` — Basis: F1, A1
-- R8. WHEN `stream=false` THEN the system SHALL translate the completed response into an Anthropic message document. (Should — promoted to Must depending on U5) — Verify: a non-streaming tool_calls response becomes `content[]` with `text` and `tool_use` blocks — Basis: A3
+- R8. WHEN `stream=false` THEN the system SHALL translate the completed response into an Anthropic message document. (Must — E11 shows non-streaming requests) — Verify: a non-streaming tool_calls response becomes `content[]` with `text` and `tool_use` blocks — Basis: A3
 - R9. The system SHALL NOT forward `thinking` or `redacted_thinking` blocks from the history to the backend. (Must) — Verify: with a history produced by an Anthropic backend, the mock backend receives no such content — Basis: G1(d), E10
 - R10. The system SHALL NOT forward fields with no Chat Completions counterpart (`cache_control`, `metadata`, `context_management`, `top_k`, the `thinking` request parameter). (Must) — Verify: the mock backend's body contains none of these keys — Basis: A3, ADR-0009 context (fixed-schema servers answer 400)
 - R11. The system SHALL translate `image` blocks (base64) into `image_url` parts with a `data:` URI. (Should) — Verify: one png block arrives as `data:image/png;base64,…` — Basis: user round 1, A4, U6
@@ -104,7 +108,7 @@ Common premise: WHERE the backend is configured as the OpenAI kind.
 
 ## 10. Unknowns and next actions
 
-- U1. What Claude Code actually sends — normal, background and `count_tokens` requests. Discriminate: run the corporate anthroxy with `serve --body-dir DIR` for one session and collect three `request.json` files → confirms or refutes A3, A4; closes U3 (is `count_tokens` called), U5 (any `stream=false`), U7 (any PDF blocks). **Top priority.**
+- ~~U1~~ (closed by E11 on this box; the corporate Claude Code version may differ — re-check there if it is older than 2.1.267)
 - U2. Extent of the in-house service's Chat Completions implementation (bundled: U4, U6, U9). Discriminate: one curl with `stream=true` + `tools` + `stream_options.include_usage=true` + one image part + one assistant message carrying `reasoning_content`:
   - `tool_calls` deltas carry `index` → A1 confirmed; otherwise R5–R7 revisited
   - usage chunk present → IC4 usage mapping holds; absent → `usage` stays 0
@@ -113,11 +117,11 @@ Common premise: WHERE the backend is configured as the OpenAI kind.
   - `GET /v1/models` answers → NFR4 holds (U4)
   - `reasoning_content` in history rejected or ignored → keep R9; required → reverse R9 (U9)
   Second priority.
-- U3. Whether Claude Code calls `count_tokens`. (bundled: U1)
+- U3. Whether Claude Code calls `count_tokens` in interactive sessions (not seen in a `claude -p` session, E11). Discriminate: one interactive session through `serve --body-dir`.
 - U4. Whether the in-house service serves `GET /v1/models`. (bundled: U2)
-- U5. Whether Claude Code ever sends `stream=false`. (bundled: U1)
+- ~~U5~~ (closed: yes, E11)
 - U6. Whether the in-house service accepts `image_url` parts with `data:` URIs. (bundled: U2)
-- U7. Whether Claude Code sends document (PDF) blocks. (bundled: U1)
+- U7. Whether Claude Code sends document (PDF) blocks. Discriminate: attach a PDF in an interactive session through `serve --body-dir`.
 - U8. Whether the in-house service accepts file (PDF) parts. (dependent: U7)
 - U9. Whether the in-house service rejects, ignores or requires `reasoning_content` in assistant history messages. (bundled: U2)
 
@@ -133,12 +137,12 @@ Policy conflict: ADR-0003's verbatim-passthrough rule cannot coexist with R1–R
 Risks (accepted in round 4):
 
 - RISK1 (D2). `thinking` blocks produced by the router carry no signature; a history holding them sent back to an Anthropic backend gets a 400 and Claude Code retries once without them (E10). G1(d) holds; the first request after switching back is sent twice.
-- RISK2 (U1). Claude Code's real request fields are unverified; if A3/A4 are wrong, the IC3 mapping targets and the R10 removal list change.
+- ~~RISK2~~ (U1 closed by E11; mapping extended with `role: "system"` messages, `output_config` dropped)
 - RISK3 (U2, U4, U6, U9). The in-house service's implementation extent is unverified; see U2 for the per-outcome consequences.
 - RISK4 (U3 → D5). `count_tokens` behaviour on an OpenAI backend is undefined until U3 closes.
-- RISK5 (U5). R8 stays Should until U5 shows whether non-streaming requests occur.
+- ~~RISK5~~ (U5 closed; R8 is Must)
 - RISK6 (U7 → U8). PDF parts may need adding to R11.
-- RISK7 (F3). A streaming request always carries `stream_options.include_usage`; OpenCode never sends it, so the in-house service has not been proven to accept it. If it answers 400, the error names the backend (R12) and a per-backend switch is the fix.
+- RISK7 (F3). A streaming request always carries `stream_options.include_usage`; OpenCode never sends it, so the in-house service has not been proven to accept it (LM Studio does, E12). If it answers 400, the error names the backend (R12) and a per-backend switch is the fix.
 
 Goal back-check: P1 → G1 → (a) R1, R2, R5, NFR1 / (b) R3, R4, R6, R7 / (c) R12, R13, IC5, IC6 / (d) R4, R9, R14 + RISK1. Multimodal (user round 1) → R11. No unresolved goal.
 
