@@ -14,6 +14,9 @@ pub enum ResponseError {
     NotJson(String),
     #[error("response has no choices")]
     NoChoices,
+    /// A 2xx body that is an error document.
+    #[error("backend reported: {0}")]
+    Backend(String),
 }
 
 pub fn decode(body: &[u8]) -> Result<Vec<Event>, ResponseError> {
