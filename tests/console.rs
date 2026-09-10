@@ -341,8 +341,15 @@ async fn statistics_survive_a_restart_and_are_reported_by_range() {
     assert_eq!(report["report"]["models"][0]["input_tokens"], 12);
     assert_eq!(report["report"]["days"].as_array().unwrap().len(), 1);
 
+    let series = report["report"]["series"].as_array().unwrap();
+    assert_eq!(report["report"]["bucket"], "1d");
+    assert_eq!(series.len(), 1, "{report}");
+    assert_eq!(series[0]["requests"], 1);
+
     let week = api(&router, "/api/stats").await;
     assert_eq!(week["report"]["range"], "7d", "the default range");
+    assert_eq!(week["report"]["bucket"], "6h");
+    assert_eq!(week["report"]["series"].as_array().unwrap().len(), 29);
     let res = router.get("/api/stats?range=forever").send().await.unwrap();
     assert_eq!(res.status(), 400);
 }

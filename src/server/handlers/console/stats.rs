@@ -42,10 +42,11 @@ pub async fn stats(
             }
         },
     };
-    let since = range.since(jiff::Timestamp::now());
+    let now = jiff::Timestamp::now();
     let dir = log.dir().display().to_string();
-    let report = tokio::task::spawn_blocking(move || aggregate(&log.read(since), range, since))
-        .await
-        .expect("aggregation does not panic");
+    let report =
+        tokio::task::spawn_blocking(move || aggregate(&log.read(range.since(now)), range, now))
+            .await
+            .expect("aggregation does not panic");
     live(&json!({"enabled": true, "dir": dir, "report": report}))
 }

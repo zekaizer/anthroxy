@@ -37,6 +37,15 @@ impl Range {
         }
     }
 
+    /// Width of one point of the report's time series.
+    pub fn bucket(self) -> jiff::SignedDuration {
+        jiff::SignedDuration::from_hours(match self {
+            Range::Day => 1,
+            Range::Week => 6,
+            Range::Month | Range::All => 24,
+        })
+    }
+
     /// Start of the range; `None` for everything kept.
     pub fn since(self, now: jiff::Timestamp) -> Option<jiff::Timestamp> {
         let days = match self {
@@ -54,11 +63,17 @@ impl Range {
 pub struct Report {
     pub range: &'static str,
     pub since: Option<jiff::Timestamp>,
+    /// Width of a [`Report::series`] point: `1h`, `6h` or `1d`.
+    pub bucket: &'static str,
     pub total: Row,
     /// Most requests first.
     pub models: Vec<Row>,
     /// UTC dates, oldest first.
     pub days: Vec<Row>,
+    /// One row per bucket from the start of the range to now, keyed by the
+    /// bucket's start (RFC 3339); buckets without requests are present with
+    /// zeros. Buckets are aligned to UTC midnight.
+    pub series: Vec<Row>,
 }
 
 /// Figures for one group. Latency percentiles come from complete, successful
@@ -123,8 +138,10 @@ pub fn generation(
     })
 }
 
-pub fn aggregate(records: &[StatsRecord], range: Range, since: Option<jiff::Timestamp>) -> Report {
-    let mut total = Group::new("total");
+/// Figures over `records`, which the caller read for `range` ending `now`.
+pub fn aggregate(records: &[StatsRecord], range: Range, now: jiff::Timestamp) -> Report {
+    let since = range.since(now);
+    let mut total = Group::new("total", false);
     let mut models: BTreeMap<String, Group> = BTreeMap::new();
     let mut days: BTreeMap<String, Group> = BTreeMap::new();
     for record in records {
@@ -132,7 +149,7 @@ pub fn aggregate(records: &[StatsRecord], range: Range, since: Option<jiff::Time
         let model = record.model.as_deref().unwrap_or("(unrouted)");
         models
             .entry(model.to_owned())
-            .or_insert_with(|| Group::new(model))
+            .or_insert_with(|| Group::new(model, true))
             .add(record);
         let day = record
             .ts
@@ -140,7 +157,7 @@ pub fn aggregate(records: &[StatsRecord], range: Range, since: Option<jiff::Time
             .date()
             .to_string();
         days.entry(day.clone())
-            .or_insert_with(|| Group::new(&day))
+            .or_insert_with(|| Group::new(&day, false))
             .add(record);
     }
     let mut models: Vec<Row> = models.into_values().map(Group::finish).collect();
@@ -148,15 +165,56 @@ pub fn aggregate(records: &[StatsRecord], range: Range, since: Option<jiff::Time
     Report {
         range: range.label(),
         since,
+        bucket: match range {
+            Range::Day => "1h",
+            Range::Week => "6h",
+            Range::Month | Range::All => "1d",
+        },
+        series: series(records, range, since, now),
         total: total.finish(),
         models,
         days: days.into_values().map(Group::finish).collect(),
     }
 }
 
+/// Rows per bucket from the start of the range, or the first record when the
+/// range keeps everything, through the bucket holding `now`.
+fn series(
+    records: &[StatsRecord],
+    range: Range,
+    since: Option<jiff::Timestamp>,
+    now: jiff::Timestamp,
+) -> Vec<Row> {
+    let width = range.bucket().as_secs();
+    let floor = |at: jiff::Timestamp| at.as_second().div_euclid(width) * width;
+    let Some(start) = since
+        .map(floor)
+        .or_else(|| records.iter().map(|r| floor(r.ts)).min())
+    else {
+        return Vec::new();
+    };
+    let mut buckets: BTreeMap<i64, Group> = (start..=floor(now))
+        .step_by(width as usize)
+        .map(|second| {
+            let key = jiff::Timestamp::from_second(second)
+                .map(|at| at.to_string())
+                .unwrap_or_default();
+            (second, Group::new(&key, false))
+        })
+        .collect();
+    for record in records {
+        if let Some(group) = buckets.get_mut(&floor(record.ts)) {
+            group.add(record);
+        }
+    }
+    buckets.into_values().map(Group::finish).collect()
+}
+
 /// A row being filled, with the samples its percentiles and rates need.
 struct Group {
     row: Row,
+    /// Model rows name the backend that served them.
+    names_backend: bool,
     ttfb: Vec<u64>,
     duration: Vec<u64>,
     generating_ms: u64,
@@ -164,12 +222,13 @@ struct Group {
 }
 
 impl Group {
-    fn new(key: &str) -> Self {
+    fn new(key: &str, names_backend: bool) -> Self {
         Self {
             row: Row {
                 key: key.to_owned(),
                 ..Row::default()
             },
+            names_backend,
             ttfb: Vec::new(),
             duration: Vec::new(),
             generating_ms: 0,
@@ -180,7 +239,7 @@ impl Group {
     fn add(&mut self, record: &StatsRecord) {
         let row = &mut self.row;
         row.requests += 1;
-        if row.backend.is_none() && row.key != "total" {
+        if self.names_backend && row.backend.is_none() {
             row.backend.clone_from(&record.backend);
         }
         let failed =

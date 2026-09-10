@@ -195,7 +195,7 @@ fn aggregation_by_model_and_day() {
     unknown.usage = None;
     records.push(unknown);
 
-    let report = aggregate(&records, Range::All, None);
+    let report = aggregate(&records, Range::All, ts("2026-09-11T12:00:00Z"));
     assert_eq!(report.range, "all");
     assert_eq!(report.total.requests, 24);
     assert_eq!(report.total.errors, 3);
@@ -284,4 +284,74 @@ fn generation_needs_a_complete_stream_with_time_after_the_first_byte() {
             "{stream} {complete} {ttfb:?} {duration:?} {output:?}"
         );
     }
+}
+
+fn at(when: &str) -> StatsRecord {
+    record(when, Some("fast"))
+}
+
+fn keys_and_requests(report: &Report) -> Vec<(String, u64)> {
+    report
+        .series
+        .iter()
+        .map(|row| (row.key.clone(), row.requests))
+        .collect()
+}
+
+#[test]
+fn a_day_is_a_series_of_hours_with_the_quiet_ones_filled() {
+    let records = [
+        at("2026-09-11T10:05:00Z"),
+        at("2026-09-11T10:59:59Z"),
+        at("2026-09-11T10:30:00Z"),
+        at("2026-09-11T12:10:00Z"),
+    ];
+    let report = aggregate(&records, Range::Day, ts("2026-09-11T12:30:00Z"));
+    assert_eq!(report.bucket, "1h");
+    let series = keys_and_requests(&report);
+    assert_eq!(series.len(), 25, "12:00 yesterday through 12:00 today");
+    assert_eq!(series[0], ("2026-09-10T12:00:00Z".to_owned(), 0));
+    assert_eq!(series[22], ("2026-09-11T10:00:00Z".to_owned(), 3));
+    assert_eq!(series[23], ("2026-09-11T11:00:00Z".to_owned(), 0));
+    assert_eq!(series[24], ("2026-09-11T12:00:00Z".to_owned(), 1));
+    let busy = &report.series[22];
+    assert_eq!(busy.output_tokens, 150);
+    assert_eq!(busy.ttfb_p50_ms, Some(100));
+    assert!(busy.output_tokens_per_second.is_some());
+    assert_eq!(report.series[23].ttfb_p50_ms, None);
+}
+
+#[test]
+fn a_week_is_drawn_in_six_hours_and_everything_in_days() {
+    let week = aggregate(
+        &[at("2026-09-08T07:00:00Z")],
+        Range::Week,
+        ts("2026-09-11T12:30:00Z"),
+    );
+    assert_eq!(week.bucket, "6h");
+    let series = keys_and_requests(&week);
+    assert_eq!(series.len(), 29);
+    assert_eq!(series[0].0, "2026-09-04T12:00:00Z");
+    assert_eq!(series[28].0, "2026-09-11T12:00:00Z");
+    assert!(series.contains(&("2026-09-08T06:00:00Z".to_owned(), 1)));
+
+    let everything = aggregate(
+        &[at("2026-09-09T05:00:00Z"), at("2026-09-11T01:00:00Z")],
+        Range::All,
+        ts("2026-09-11T12:30:00Z"),
+    );
+    assert_eq!(everything.bucket, "1d");
+    assert_eq!(
+        keys_and_requests(&everything),
+        [
+            ("2026-09-09T00:00:00Z".to_owned(), 1),
+            ("2026-09-10T00:00:00Z".to_owned(), 0),
+            ("2026-09-11T00:00:00Z".to_owned(), 1)
+        ]
+    );
+    assert!(
+        aggregate(&[], Range::All, ts("2026-09-11T12:30:00Z"))
+            .series
+            .is_empty()
+    );
 }
