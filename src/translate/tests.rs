@@ -390,6 +390,7 @@ fn streaming_and_document_paths_produce_the_same_message() {
         let streamed = document_from_sse(&sse);
         let folded: Value = serde_json::from_slice(&crate::anthropic::encode_message(
             &crate::ir::Message::from_events(events).unwrap(),
+            "fallback",
         ))
         .unwrap();
         assert_eq!(streamed, folded, "{sse}");

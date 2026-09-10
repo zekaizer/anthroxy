@@ -4,6 +4,7 @@
 
 mod decode;
 mod error;
+mod fragments;
 mod message;
 mod models;
 mod request;

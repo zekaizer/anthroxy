@@ -2,9 +2,11 @@
 
 use serde_json::{Value, json};
 
+use super::fragments::{identity, stop_reason_name, usage_json};
 use crate::ir::{Block, Message};
 
-pub fn encode(message: &Message) -> Vec<u8> {
+/// `fallback_model` is reported when the backend named none.
+pub fn encode(message: &Message, fallback_model: &str) -> Vec<u8> {
     let content: Vec<Value> = message
         .blocks
         .iter()
@@ -20,15 +22,16 @@ pub fn encode(message: &Message) -> Vec<u8> {
             }
         })
         .collect();
+    let (id, model) = identity(&message.id, &message.model, fallback_model);
     let document = json!({
-        "id": message.id,
+        "id": id,
         "type": "message",
         "role": "assistant",
-        "model": message.model,
+        "model": model,
         "content": content,
-        "stop_reason": super::stream::stop_reason_name(message.stop_reason),
+        "stop_reason": stop_reason_name(message.stop_reason),
         "stop_sequence": null,
-        "usage": super::stream::usage_json(&message.usage),
+        "usage": usage_json(&message.usage),
     });
     serde_json::to_vec(&document).expect("a JSON tree serializes")
 }
@@ -75,7 +78,8 @@ mod tests {
                 thinking_tokens: 0,
             },
         };
-        let document: serde_json::Value = serde_json::from_slice(&encode(&message)).unwrap();
+        let document: serde_json::Value =
+            serde_json::from_slice(&encode(&message, "fallback")).unwrap();
         assert_eq!(
             document,
             json!({

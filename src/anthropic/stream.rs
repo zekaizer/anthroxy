@@ -5,6 +5,7 @@ use std::fmt::Write;
 
 use serde_json::{Value, json};
 
+use super::fragments::{identity, stop_reason_name, usage_json};
 use crate::ir::{Event, StopReason, Usage};
 
 /// Turns events into SSE frames as they arrive. Block indexes follow arrival
@@ -14,14 +15,22 @@ use crate::ir::{Event, StopReason, Usage};
 #[derive(Debug)]
 pub struct StreamEncoder {
     fallback_model: String,
-    started: bool,
-    closed: bool,
+    state: State,
     next_index: u32,
     open: Option<Open>,
     /// Tool call index → content block index, for every call started.
     tools: BTreeMap<u32, u32>,
-    stop: Option<StopReason>,
+    stop: StopReason,
     usage: Usage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// No `message_start` yet.
+    Idle,
+    Open,
+    /// `message_stop` or an error went out; nothing follows.
+    Closed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,65 +48,45 @@ impl Open {
     }
 }
 
+/// The two streaming text kinds, which differ only in their JSON names.
+#[derive(Debug, Clone, Copy)]
+enum TextKind {
+    Thinking,
+    Text,
+}
+
 impl StreamEncoder {
     /// `fallback_model` is reported when the backend names none.
     pub fn new(fallback_model: impl Into<String>) -> Self {
         Self {
             fallback_model: fallback_model.into(),
-            started: false,
-            closed: false,
+            state: State::Idle,
             next_index: 0,
             open: None,
             tools: BTreeMap::new(),
-            stop: None,
+            stop: StopReason::EndTurn,
             usage: Usage::default(),
+        }
+    }
+
+    /// Appends the frames for every event to `out`.
+    pub fn encode_all(&mut self, events: impl IntoIterator<Item = Event>, out: &mut String) {
+        for event in events {
+            self.encode(event, out);
         }
     }
 
     /// Appends the frames for `event` to `out`.
     pub fn encode(&mut self, event: Event, out: &mut String) {
-        if self.closed {
+        if self.state == State::Closed {
             return;
         }
         match event {
             Event::Start { id, model } => self.start(&id, &model, out),
-            Event::ThinkingDelta(text) => {
-                if text.is_empty() {
-                    return;
-                }
-                self.ensure_started(out);
-                let block = match self.open {
-                    Some(Open::Thinking(block)) => block,
-                    _ => {
-                        let block =
-                            self.open_block(json!({"type": "thinking", "thinking": ""}), out);
-                        self.open = Some(Open::Thinking(block));
-                        block
-                    }
-                };
-                delta(
-                    block,
-                    json!({"type": "thinking_delta", "thinking": text}),
-                    out,
-                );
-            }
-            Event::TextDelta(text) => {
-                if text.is_empty() {
-                    return;
-                }
-                self.ensure_started(out);
-                let block = match self.open {
-                    Some(Open::Text(block)) => block,
-                    _ => {
-                        let block = self.open_block(json!({"type": "text", "text": ""}), out);
-                        self.open = Some(Open::Text(block));
-                        block
-                    }
-                };
-                delta(block, json!({"type": "text_delta", "text": text}), out);
-            }
+            Event::ThinkingDelta(text) => self.text_delta(TextKind::Thinking, &text, out),
+            Event::TextDelta(text) => self.text_delta(TextKind::Text, &text, out),
             Event::ToolCallStart { index, id, name } => {
-                self.ensure_started(out);
+                self.start("", "", out);
                 let block = self.open_block(
                     json!({"type": "tool_use", "id": id, "name": name, "input": {}}),
                     out,
@@ -106,25 +95,13 @@ impl StreamEncoder {
                 self.open = Some(Open::Tool { call: index, block });
             }
             Event::ToolCallDelta { index, arguments } => {
-                let block = match self.open {
-                    Some(Open::Tool { call, block }) if call == index => block,
-                    _ => match self.tools.get(&index) {
-                        Some(&block) => {
-                            tracing::warn!(
-                                index,
-                                "tool call arguments arrived after its block closed"
-                            );
-                            block
-                        }
-                        None => {
-                            tracing::warn!(
-                                index,
-                                "tool call arguments for a call that never started"
-                            );
-                            return;
-                        }
-                    },
+                let Some(&block) = self.tools.get(&index) else {
+                    tracing::warn!(index, "tool call arguments for a call that never started");
+                    return;
                 };
+                if self.open != Some(Open::Tool { call: index, block }) {
+                    tracing::warn!(index, "tool call arguments arrived after its block closed");
+                }
                 delta(
                     block,
                     json!({"type": "input_json_delta", "partial_json": arguments}),
@@ -133,7 +110,7 @@ impl StreamEncoder {
             }
             Event::Finish(reason) => {
                 self.close_open(out);
-                self.stop = Some(reason);
+                self.stop = reason;
             }
             Event::Usage(usage) => self.usage = usage,
             Event::Error(message) => self.error(&message, out),
@@ -143,19 +120,16 @@ impl StreamEncoder {
 
     /// End of input without `Done`: closes what is open.
     pub fn finish(&mut self, out: &mut String) {
-        if self.closed {
-            return;
-        }
-        if !self.started {
-            self.error("backend closed the stream without a response", out);
-            return;
+        match self.state {
+            State::Closed => return,
+            State::Idle => {
+                self.error("backend closed the stream without a response", out);
+                return;
+            }
+            State::Open => {}
         }
         self.close_open(out);
-        let stop_reason = match self.stop {
-            Some(StopReason::EndTurn) | None if !self.tools.is_empty() => StopReason::ToolUse,
-            Some(reason) => reason,
-            None => StopReason::EndTurn,
-        };
+        let stop_reason = self.stop.resolve(!self.tools.is_empty());
         frame(
             "message_delta",
             json!({
@@ -166,12 +140,12 @@ impl StreamEncoder {
             out,
         );
         frame("message_stop", json!({"type": "message_stop"}), out);
-        self.closed = true;
+        self.state = State::Closed;
     }
 
     /// One `error` frame; `message` is shown to the user as is.
     pub fn error(&mut self, message: &str, out: &mut String) {
-        if self.closed {
+        if self.state == State::Closed {
             return;
         }
         frame(
@@ -179,24 +153,17 @@ impl StreamEncoder {
             json!({"type": "error", "error": {"type": "api_error", "message": message}}),
             out,
         );
-        self.closed = true;
+        self.state = State::Closed;
     }
 
+    /// Opens the message unless it is open already, so a delta before any
+    /// `Start` still gets a `message_start`.
     fn start(&mut self, id: &str, model: &str, out: &mut String) {
-        if self.started {
+        if self.state != State::Idle {
             return;
         }
-        self.started = true;
-        let id = if id.is_empty() {
-            format!("msg_{}", uuid::Uuid::new_v4().simple())
-        } else {
-            id.to_owned()
-        };
-        let model = if model.is_empty() {
-            self.fallback_model.as_str()
-        } else {
-            model
-        };
+        self.state = State::Open;
+        let (id, model) = identity(id, model, &self.fallback_model);
         frame(
             "message_start",
             json!({
@@ -216,11 +183,30 @@ impl StreamEncoder {
         );
     }
 
-    /// A delta before any `Start`: open the message with what we know.
-    fn ensure_started(&mut self, out: &mut String) {
-        if !self.started {
-            self.start("", "", out);
+    fn text_delta(&mut self, kind: TextKind, text: &str, out: &mut String) {
+        if text.is_empty() {
+            return;
         }
+        self.start("", "", out);
+        let block = match (kind, self.open) {
+            (TextKind::Thinking, Some(Open::Thinking(block)))
+            | (TextKind::Text, Some(Open::Text(block))) => block,
+            (TextKind::Thinking, _) => {
+                let block = self.open_block(json!({"type": "thinking", "thinking": ""}), out);
+                self.open = Some(Open::Thinking(block));
+                block
+            }
+            (TextKind::Text, _) => {
+                let block = self.open_block(json!({"type": "text", "text": ""}), out);
+                self.open = Some(Open::Text(block));
+                block
+            }
+        };
+        let payload = match kind {
+            TextKind::Thinking => json!({"type": "thinking_delta", "thinking": text}),
+            TextKind::Text => json!({"type": "text_delta", "text": text}),
+        };
+        delta(block, payload, out);
     }
 
     /// Closes the open block and starts a new one; returns its index.
@@ -245,36 +231,6 @@ impl StreamEncoder {
             );
         }
     }
-}
-
-pub(super) fn stop_reason_name(reason: StopReason) -> &'static str {
-    match reason {
-        StopReason::EndTurn => "end_turn",
-        StopReason::MaxTokens => "max_tokens",
-        StopReason::ToolUse => "tool_use",
-        StopReason::Refusal => "refusal",
-    }
-}
-
-/// Anthropic usage: cache and thinking counters only when there are any,
-/// so a backend that reports none yields the plain two-field shape.
-pub(super) fn usage_json(usage: &Usage) -> Value {
-    let mut out = serde_json::Map::new();
-    out.insert("input_tokens".into(), json!(usage.input_tokens));
-    out.insert("output_tokens".into(), json!(usage.output_tokens));
-    if usage.cache_read_tokens > 0 {
-        out.insert(
-            "cache_read_input_tokens".into(),
-            json!(usage.cache_read_tokens),
-        );
-    }
-    if usage.thinking_tokens > 0 {
-        out.insert(
-            "output_tokens_details".into(),
-            json!({"thinking_tokens": usage.thinking_tokens}),
-        );
-    }
-    Value::Object(out)
 }
 
 fn delta(block: u32, delta: Value, out: &mut String) {
