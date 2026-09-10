@@ -8,15 +8,21 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::response::Response;
 use bytes::Bytes;
+use http::HeaderValue;
+use http::header::CONTENT_TYPE;
 use http_body_util::LengthLimitError;
 
 use crate::anthropic;
+use crate::config::BackendKind;
 use crate::observability::body_log::headers_for_record;
 use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
+use crate::server::buffered::read_all;
+use crate::server::handlers::openai;
 use crate::server::relay::{Relay, RelayOutcome};
 use crate::server::{RequestId, RouterError, Snapshot};
 use crate::text::short;
+use crate::translate;
 use crate::upstream::{
     UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
     header_value, response_headers, upstream_headers,
@@ -66,17 +72,27 @@ async fn handle(
         body_bytes = body.len(),
         "routed"
     );
-    let rename = (requested_model != route.upstream_model).then_some(route.upstream_model.as_str());
-    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields)? {
+    // The translated body names the upstream model itself; only a relayed
+    // body needs the rename here.
+    let anthropic_kind = backend.kind == BackendKind::Anthropic;
+    let rename = (anthropic_kind && requested_model != route.upstream_model)
+        .then_some(route.upstream_model.as_str());
+    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields, anthropic_kind)? {
         Some(rewritten) => Bytes::from(rewritten),
         None => body,
     };
 
-    let path_and_query = parts
+    let client_path = parts
         .uri
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or("/");
+    let (path_and_query, body) = match backend.kind {
+        BackendKind::Anthropic => (client_path, body),
+        BackendKind::OpenAi => {
+            openai::prepare(&body, client_path, &backend.name, &route.upstream_model)?
+        }
+    };
     let headers = upstream_headers(&parts.headers, backend);
     let recorder = state.body_log.as_ref().map(|log| {
         let record = request_record(
@@ -144,36 +160,51 @@ async fn handle(
     );
 
     let body = if status.is_client_error() || status.is_server_error() {
-        let raw = match upstream.response.bytes().await {
-            Ok(raw) => raw,
-            Err(source) => {
-                let error = UpstreamError::Body {
-                    backend: backend.name.clone(),
-                    source,
-                };
-                record_failure(recorder, &error);
-                return Err(error.into());
-            }
-        };
+        // ADR-0005: error bodies are buffered so they can be annotated.
+        let raw = read_all(upstream, &backend.name, recorder).await?;
         tracing::warn!(
             status = status.as_u16(),
             bytes = raw.len(),
             "upstream returned an error"
         );
-        if let Some(recorder) = recorder {
-            recorder.finish_with_body(&raw);
-        }
-        match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
-            Some(annotated) => Body::from(annotated),
-            None => Body::from(raw),
+        match backend.kind {
+            BackendKind::Anthropic => {
+                match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
+                    Some(annotated) => Body::from(annotated),
+                    None => Body::from(raw),
+                }
+            }
+            BackendKind::OpenAi => {
+                let document =
+                    translate::upstream_error(status, &raw, &backend.name, request_id.as_str());
+                headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                Body::from(serde_json::to_vec(&document).expect("an error document serializes"))
+            }
         }
     } else {
-        Body::from_stream(Relay::new(
-            upstream.response.bytes_stream(),
-            span,
-            started,
-            recorder,
-        ))
+        match backend.kind {
+            // ADR-0003: relayed as it arrives.
+            BackendKind::Anthropic => Body::from_stream(Relay::new(
+                upstream.response.bytes_stream(),
+                span,
+                started,
+                recorder,
+            )),
+            BackendKind::OpenAi => {
+                let (overrides, body) = openai::body(
+                    upstream,
+                    &backend.name,
+                    &route.upstream_model,
+                    peek.stream,
+                    span,
+                    started,
+                    recorder,
+                )
+                .await?;
+                headers.extend(overrides);
+                body
+            }
+        }
     };
 
     let mut response = Response::new(body);

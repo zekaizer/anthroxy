@@ -1,9 +1,10 @@
 use super::*;
 use http::StatusCode;
+use serde_json::{Value, json};
 
 /// `rewrite` for a body already known to parse.
 fn unwrapped_rewrite(body: &[u8], model: Option<&str>, drop_fields: &[String]) -> Option<Vec<u8>> {
-    rewrite(body, model, drop_fields).expect("a body peek accepted")
+    rewrite(body, model, drop_fields, false).expect("a body peek accepted")
 }
 
 #[test]
@@ -125,11 +126,15 @@ fn rewrite_reports_a_body_it_cannot_parse_as_a_bad_request() {
         peek(deep.as_bytes()).is_ok(),
         "the body reaches the rewrite"
     );
-    let err = rewrite(deep.as_bytes(), Some("m2"), &[]).err().unwrap();
+    let err = rewrite(deep.as_bytes(), Some("m2"), &[], false)
+        .err()
+        .unwrap();
     assert!(matches!(err, PeekError::NotJson(_)), "{err}");
 
     assert!(
-        rewrite(deep.as_bytes(), None, &[]).unwrap().is_none(),
+        rewrite(deep.as_bytes(), None, &[], false)
+            .unwrap()
+            .is_none(),
         "nothing to rewrite: the body is forwarded unread"
     );
 }
@@ -150,4 +155,108 @@ fn rewrite_is_a_no_op_when_nothing_matches() {
         std::str::from_utf8(&out).unwrap(),
         r#"{"model":"up","messages":[{"a":1}],"metadata":{"k":1}}"#
     );
+}
+
+#[test]
+fn error_type_from_status_follows_the_api_table() {
+    use http::StatusCode;
+    for (status, expected) in [
+        (400, ErrorType::InvalidRequestError),
+        (401, ErrorType::AuthenticationError),
+        (403, ErrorType::PermissionError),
+        (404, ErrorType::NotFoundError),
+        (413, ErrorType::RequestTooLarge),
+        (429, ErrorType::RateLimitError),
+        (422, ErrorType::ApiError),
+        (500, ErrorType::ApiError),
+        (503, ErrorType::ApiError),
+        (529, ErrorType::ApiError),
+    ] {
+        assert_eq!(
+            ErrorType::from_status(StatusCode::from_u16(status).unwrap()),
+            expected,
+            "{status}"
+        );
+    }
+}
+
+// ---- unsigned thinking blocks (rewrite)
+
+fn run(body: Value) -> Option<Value> {
+    rewrite(&serde_json::to_vec(&body).unwrap(), None, &[], true)
+        .expect("a JSON object")
+        .map(|b| serde_json::from_slice(&b).unwrap())
+}
+
+#[test]
+fn unsigned_blocks_go_and_signed_ones_stay() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "router made"},
+            {"type": "thinking", "thinking": "anthropic made", "signature": "sig"},
+            {"type": "redacted_thinking", "data": "xx"},
+            {"type": "text", "text": "hello"}
+        ]},
+        {"role": "user", "content": [{"type": "text", "text": "more"}]}
+    ]});
+    assert_eq!(
+        run(body).unwrap()["messages"],
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "anthropic made", "signature": "sig"},
+                {"type": "redacted_thinking", "data": "xx"},
+                {"type": "text", "text": "hello"}
+            ]},
+            {"role": "user", "content": [{"type": "text", "text": "more"}]}
+        ])
+    );
+}
+
+#[test]
+fn an_empty_signature_is_what_claude_code_stores_for_router_blocks() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "router made", "signature": ""},
+            {"type": "text", "text": "hello"}
+        ]}
+    ]});
+    assert_eq!(
+        run(body).unwrap()["messages"][0]["content"],
+        json!([{"type": "text", "text": "hello"}])
+    );
+}
+
+#[test]
+fn an_assistant_turn_left_empty_is_dropped() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "only"}]},
+        {"role": "user", "content": "again"}
+    ]});
+    assert_eq!(
+        run(body).unwrap()["messages"],
+        json!([{"role": "user", "content": "hi"}, {"role": "user", "content": "again"}])
+    );
+}
+
+#[test]
+fn untouched_bodies_are_not_rewritten() {
+    assert_eq!(
+        run(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]})),
+        None
+    );
+    assert_eq!(
+        run(
+            json!({"model": "m", "messages": [{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "t", "signature": "s"}]}]})
+        ),
+        None
+    );
+    assert_eq!(
+        run(json!({"model": "m", "messages": [{"role": "user", "content": "the word thinking"}]})),
+        None
+    );
+    assert_eq!(rewrite(b"{}", None, &[], true).unwrap(), None);
 }

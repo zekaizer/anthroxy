@@ -2,6 +2,7 @@
 
 mod annotate;
 mod auth;
+mod buffered;
 mod error;
 mod handlers;
 pub mod relay;
@@ -16,6 +17,7 @@ use tokio::net::TcpListener;
 
 use crate::config::Config;
 
+pub use annotate::backend_prefix;
 pub use auth::ClientToken;
 pub use error::RouterError;
 pub use request_id::RequestId;

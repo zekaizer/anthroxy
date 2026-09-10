@@ -62,7 +62,9 @@ struct EndMeta {
     duration_ms: u64,
 }
 
-/// Accumulates one exchange and writes it out when the response ends.
+/// Accumulates one exchange and writes it out when the response ends. A
+/// recorder dropped before [`Recorder::finish`] records a client that left:
+/// a handler awaiting a buffered body is dropped when its client goes away.
 pub struct Recorder {
     dir: PathBuf,
     meta: Meta,
@@ -70,8 +72,8 @@ pub struct Recorder {
     response: Vec<u8>,
     response_file: &'static str,
     /// The initial write; the final write is ordered after it so `meta.json`
-    /// always ends in its complete form.
-    pending: tokio::task::JoinHandle<()>,
+    /// always ends in its complete form. Taken by the final write.
+    pending: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl BodyLog {
@@ -146,7 +148,7 @@ impl BodyLog {
             started,
             response: Vec::new(),
             response_file: "response.bin",
-            pending,
+            pending: Some(pending),
         }
     }
 }
@@ -258,7 +260,7 @@ fn response_file(headers: &HeaderMap) -> &'static str {
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if content_type.starts_with("text/event-stream") {
+    if crate::upstream::is_event_stream(headers) {
         "response.sse"
     } else if content_type.starts_with("application/json") {
         "response.json"
@@ -297,6 +299,10 @@ impl Recorder {
 
     /// Writes the response body and the final `meta.json`.
     pub fn finish(mut self, outcome: &RelayOutcome) {
+        self.record(outcome);
+    }
+
+    fn record(&mut self, outcome: &RelayOutcome) {
         self.meta.end = Some(EndMeta {
             outcome: match outcome {
                 RelayOutcome::Complete => "complete".to_owned(),
@@ -315,9 +321,17 @@ impl Recorder {
                 ),
                 ("meta.json", to_pretty_json(&self.meta)),
             ],
-            Some(self.pending),
+            self.pending.take(),
         );
         tracing::debug!(dir = %self.dir.display(), "exchange recorded");
+    }
+}
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        if self.meta.end.is_none() {
+            self.record(&RelayOutcome::ClientDisconnected);
+        }
     }
 }
 

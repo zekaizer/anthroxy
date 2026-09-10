@@ -1,12 +1,13 @@
 use http::{HeaderMap, HeaderName, HeaderValue};
 
-use crate::config::BackendConfig;
+use crate::config::{BackendConfig, BackendKind};
 use crate::credential::{self, CredentialError, CredentialSource};
 
 /// A configured backend with its resolved credential source.
 #[derive(Debug)]
 pub struct Backend {
     pub name: String,
+    pub kind: BackendKind,
     /// Origin without trailing slash.
     pub url: String,
     pub credential: Box<dyn CredentialSource>,
@@ -42,6 +43,7 @@ impl Backend {
         }
         Ok(Self {
             name: name.to_owned(),
+            kind: config.kind,
             url: config.url.clone(),
             credential,
             headers,

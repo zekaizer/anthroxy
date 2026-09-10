@@ -51,7 +51,9 @@ retry_on_status = []
 
 # ---------------------------------------------------------------------------
 # Backends: one table per server. `url` is the origin; the request path
-# (/v1/messages) is appended unchanged.
+# (/v1/messages) is appended unchanged. `kind` is "anthropic" (default) for
+# a server that speaks the Messages API, "openai" for one that speaks Chat
+# Completions.
 # ---------------------------------------------------------------------------
 
 [backends.local]
@@ -73,6 +75,15 @@ credential = { kind = "none" }
 # # Request body fields this backend rejects as unknown, removed before
 # # forwarding. Dot-separated paths reach into objects (not arrays).
 # drop_fields = ["context_management", "metadata.user_id"]
+
+# A server that speaks the OpenAI Chat Completions API. Requests are
+# translated to /v1/chat/completions and answers back to Messages events;
+# `count_tokens` is answered 404 by the router. `anthropic_beta` does not
+# apply here.
+# [backends.inhouse]
+# kind = "openai"
+# url = "https://llm.example.corp"
+# credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
 
 # A backend whose token another program keeps fresh; the command is re-run
 # every `refresh`, and once more immediately if the backend answers 401.

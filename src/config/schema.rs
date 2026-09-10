@@ -116,11 +116,24 @@ impl Default for UpstreamConfig {
     }
 }
 
+/// Which API a backend speaks. `Anthropic` bodies are relayed as bytes
+/// (ADR-0003); `OpenAi` bodies are translated (ADR-0010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendKind {
+    #[default]
+    Anthropic,
+    OpenAi,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackendConfig {
-    /// Origin of the backend, e.g. `http://127.0.0.1:8000`. The request path is
-    /// appended unchanged.
+    #[serde(default)]
+    pub kind: BackendKind,
+    /// Origin of the backend, e.g. `http://127.0.0.1:8000`. For `anthropic`
+    /// the request path is appended unchanged; for `openai` it is
+    /// `/v1/chat/completions`.
     pub url: String,
     #[serde(default)]
     pub credential: CredentialConfig,

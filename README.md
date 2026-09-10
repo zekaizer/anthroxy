@@ -3,7 +3,7 @@
 [![CI](https://github.com/zekaizer/anthroxy/actions/workflows/ci.yml/badge.svg)](https://github.com/zekaizer/anthroxy/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zekaizer/anthroxy?sort=semver)](https://github.com/zekaizer/anthroxy/releases/latest)
 
-One endpoint for Claude Code in front of several Anthropic-API-compatible backends (vLLM, LM Studio, api.anthropic.com, …). Claude Code points at the router once; every configured model shows up in its `/model` picker, and switching between them takes effect on the next request without restarting the session.
+One endpoint for Claude Code in front of several backends that speak the Anthropic Messages API (vLLM, LM Studio, api.anthropic.com, …) or the OpenAI Chat Completions API. Claude Code points at the router once; every configured model shows up in its `/model` picker, and switching between them takes effect on the next request without restarting the session.
 
 ```
 Claude Code ──► anthroxy ──┬──► vLLM              (Qwen, …)
@@ -17,6 +17,7 @@ What the router does:
 - **Routing by `model`.** Each request goes to the backend that serves the named model; the model name is rewritten to what that backend calls it. Aliases let Claude Code's built-in model ids land on your backends too.
 - **Per-backend credentials.** None, a static key, an environment variable, or a shell command that is re-run periodically (for tokens another program keeps fresh). Claude Code itself only ever sees one static router token.
 - **Verbatim passthrough.** Unknown request fields, beta headers and response bodies are relayed as-is; streaming responses are forwarded chunk by chunk.
+- **OpenAI backends.** A backend marked `kind = "openai"` gets each request translated to Chat Completions and its answer translated back, streaming, tool calls, images and reasoning included, so Claude Code uses it like any other model.
 - **Retries and clear errors.** Connection failures are retried with backoff; every failure names the backend and cause in the Anthropic error format, so Claude Code shows it.
 - **Tracing.** Every request has an id (`x-request-id`) that ties together the log lines, the error body and, when enabled, an on-disk record of the exact request and response.
 
@@ -120,6 +121,11 @@ anthropic_beta = ["oauth-2025-04-20"]        # merged into the client's anthropi
 url = "https://gateway.example.com"
 credential = { kind = "command", command = "some-cli token --json | jq '{token: .access_token, expires_at: .expires_at}'", output = "json" }
 
+[backends.inhouse]                           # a server that speaks OpenAI Chat Completions
+kind = "openai"
+url = "https://llm.example.corp"
+credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
+
 [[models]]
 id = "qwen"                      # what Claude Code sees and sends
 backend = "vllm"
@@ -143,10 +149,12 @@ Notes:
 - Credential kinds: `none` (default), `static`, `env` (`name = "VAR"`), `command`. `header` is `bearer` (default, `Authorization: Bearer <token>`), `x_api_key` (`x-api-key: <token>`), or any header as `{ name = "api-key" }` / `{ name = "authorization", scheme = "Token" }`; a `scheme` is written before the token with one space.
 - A `command` credential runs through `sh -c`. With `output = "text"` (default) trimmed stdout is the token; with `output = "json"` stdout is `{"token": "...", "expires_at": ...}`, where the optional `expires_at` is an RFC 3339 timestamp or a number of unix seconds (milliseconds when ≥ 10^11, fractions allowed, up to year 9999). The command is re-run after `refresh`, two minutes before `expires_at`, and once more immediately if the backend answers 401/403. A token whose `expires_at` has passed is an error, not sent upstream.
 - `drop_fields` removes request body fields before forwarding to that backend, for servers that reject parameters they do not know (vLLM and `context_management`, for example). Paths are dot-separated object keys (`metadata.user_id`); arrays cannot be reached and `model` cannot be dropped. The `anthropic-beta` header is left alone. Claude Code's own `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is the client-side alternative, but it applies to every backend in the session.
+- `kind = "openai"` marks a backend that speaks the OpenAI Chat Completions API. `POST /v1/messages` is translated and sent to `<url>/v1/chat/completions`: `system`, messages, tool definitions, tool calls and results, and base64 images are mapped (an image inside a tool result rides in the following user message, since tool messages are text-only); `metadata.user_id` and `output_config.effort` become `user` and `reasoning_effort`; `cache_control`, `context_management`, `top_k` and the `thinking` parameter are dropped, as are `thinking` blocks in the history; a PDF or other `document` block is replaced by a note saying it was omitted, so the model can say so instead of the turn failing. The answer is translated back, streaming included; `reasoning_content` appears as thinking blocks (removed again before any Anthropic backend sees them, so switching models back costs no failed request), and cached and reasoning token counts reach Claude Code when the server reports them. `count_tokens` is answered 404 by the router. `anthropic_beta` is not accepted on such a backend, and `anthropic-version`/`anthropic-beta` are not sent to it. `check` still probes `GET /v1/models`, so a server without that endpoint fails `check` while `serve` works. See ADR-0010 for the exact mapping.
 - Unknown keys are errors. `check` reports every problem at once with its TOML path.
 - HTTPS backends are verified against the Mozilla roots built into the binary plus the OS certificate store (`update-ca-certificates` on Ubuntu, the keychain on macOS). `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the OS store when set; under systemd they go in the unit as `Environment=`. `upstream.ca_certificate` adds every certificate in a PEM file on top, for a private CA that should travel with the configuration file; a file that cannot be read or holds no certificate fails `check` and `serve`. There is no way to skip verification.
 - Backends are reached at the URL the file names: `http_proxy` / `https_proxy` / `all_proxy` in the environment are ignored, so an ambient proxy cannot take a backend request, and the credential on it, somewhere the configuration never named. A TLS-intercepting proxy on the path still works; it needs its CA, above.
 - Edits take effect on `SIGHUP` (`kill -HUP <pid>` or `anthroxy service reload`): models, backends, credentials, token, body capture and upstream settings swap atomically; in-flight requests finish on the old configuration. `server.listen` and the log level and format need a restart instead, and a reload that changes one of them says so. A file that fails to load leaves the running configuration untouched and logs the error.
+- Claude Code assumes a 200k context window for a model it does not know, so it will not compact a session in time for a smaller local model and the backend answers with a context-size error. Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in Claude Code's environment to the real window (for example `32768`); it applies to every model in that session, so it trades early compaction on large models for correctness on small ones.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.
 
 ## Commands
@@ -169,11 +177,11 @@ Global options: `--config PATH`, `--log-level FILTER`, `--log-format text|json`.
 | --- | --- | --- |
 | `GET /healthz` | no | `{"status":"ok"}` |
 | `GET /v1/models`, `GET /v1/models/{id}` | yes | The configured models, Anthropic list format. |
-| `POST /v1/messages`, `POST /v1/messages/count_tokens` | yes | Routed by the body's `model`; path and query forwarded unchanged. |
+| `POST /v1/messages`, `POST /v1/messages/count_tokens` | yes | Routed by the body's `model`; path and query forwarded unchanged. On an `openai` backend, `/v1/messages` is translated and sent to `/v1/chat/completions`; `count_tokens` is 404. |
 
 Auth is `x-api-key: <token>` or `Authorization: Bearer <token>`; failures are 401 in the Anthropic error format. Every response carries `x-request-id`; proxied ones also carry `x-anthroxy-backend`, `x-anthroxy-model` and `x-anthroxy-upstream-model`.
 
-Errors the router produces are `{"type":"error","error":{"type":…,"message":…},"request_id":…}`: 400 for a body that is not a JSON object, has no `model`, or nests deeper than the router can rewrite, 404 for an unknown model (listing the configured ones), 413 over `server.max_body_bytes`, 502 when a backend is unreachable, redirects (the router will not follow one, and neither should Claude Code), or its credential cannot be obtained. Backend errors are relayed with their status; if the body is an Anthropic error, its message is prefixed with `[backend <name>, HTTP <status>]`.
+Errors the router produces are `{"type":"error","error":{"type":…,"message":…},"request_id":…}`: 400 for a body that is not a JSON object, has no `model`, or nests deeper than the router can rewrite, 404 for an unknown model (listing the configured ones), 413 over `server.max_body_bytes`, 502 when a backend is unreachable, redirects (the router will not follow one, and neither should Claude Code), or its credential cannot be obtained. Backend errors are relayed with their status; if the body is an Anthropic error, its message is prefixed with `[backend <name>, HTTP <status>]`. An `openai` backend's error body is always converted to an Anthropic error document (type from the status, same prefix); a failure in the middle of its stream is one `error` event.
 
 ## Running on WSL2 as a service
 

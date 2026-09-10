@@ -26,10 +26,7 @@ pub fn annotate_upstream_error(
         .as_object_mut()?
         .get_mut("message")?;
     let text = message.as_str()?.to_owned();
-    *message = Value::String(format!(
-        "[backend {backend}, HTTP {}] {text}",
-        status.as_u16()
-    ));
+    *message = Value::String(format!("{}{text}", backend_prefix(backend, status)));
     if object.get("request_id").is_none_or(Value::is_null) {
         object.insert(
             "request_id".to_owned(),
@@ -37,6 +34,12 @@ pub fn annotate_upstream_error(
         );
     }
     serde_json::to_vec(&document).ok()
+}
+
+/// `[backend <name>, HTTP <status>] `, the prefix every relayed error
+/// message starts with (ADR-0005).
+pub fn backend_prefix(backend: &str, status: StatusCode) -> String {
+    format!("[backend {backend}, HTTP {}] ", status.as_u16())
 }
 
 #[cfg(test)]

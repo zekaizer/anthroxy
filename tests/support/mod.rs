@@ -4,6 +4,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod mock_upstream;
+pub mod openai;
 pub mod router;
 pub mod tls;
 

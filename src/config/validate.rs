@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use super::{Config, ConfigError, CredentialConfig};
+use super::{BackendKind, Config, ConfigError, CredentialConfig};
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut problems = Vec::new();
@@ -96,6 +96,11 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                     "backends.{name}.drop_fields: `{path}` has an empty segment"
                 ));
             }
+        }
+        if backend.kind == BackendKind::OpenAi && !backend.anthropic_beta.is_empty() {
+            problems.push(format!(
+                "backends.{name}.anthropic_beta: not sent to a backend with kind = \"openai\""
+            ));
         }
         for flag in &backend.anthropic_beta {
             if flag.contains(',') || http::HeaderValue::from_str(flag).is_err() {

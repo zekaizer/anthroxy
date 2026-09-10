@@ -10,7 +10,7 @@ use clap::Args;
 use super::models::{default_route_line, table_rows};
 use super::style::table;
 use super::{Cli, Style, display_path};
-use crate::config::{self, Config};
+use crate::config::{self, BackendKind, Config};
 use crate::routing::{Registry, Route};
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
 use crate::upstream::{Backend, RetryPolicy, UpstreamClient, http_client};
@@ -82,10 +82,11 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
     if args.no_probe {
         for backend in registry.backends() {
             println!(
-                "  {}  {}  {}",
+                "  {}  {}  {}{}",
                 style.dim("-"),
                 style.bold(&backend.name),
-                style.dim(&backend.url)
+                style.dim(&backend.url),
+                kind_label(backend, style)
             );
             println!("       credential: {}", backend.credential.describe());
         }
@@ -138,6 +139,14 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
     }
 }
 
+/// ` (openai)` after the URL of a backend that is not the default kind.
+fn kind_label(backend: &Backend, style: &Style) -> String {
+    match backend.kind {
+        BackendKind::Anthropic => String::new(),
+        BackendKind::OpenAi => format!("  {}", style.dim("(openai)")),
+    }
+}
+
 /// Prints one backend block; returns (healthy, model ids if the backend listed any).
 fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Option<Vec<String>>) {
     let mut ok = true;
@@ -185,9 +194,10 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
         style.err_mark()
     };
     println!(
-        "  {mark}  {}  {}",
+        "  {mark}  {}  {}{}",
         style.bold(&backend.name),
-        style.dim(&backend.url)
+        style.dim(&backend.url),
+        kind_label(backend, style)
     );
     println!("       {credential_line}");
     if probe.credential.is_err() {

@@ -576,3 +576,38 @@ backend = "local"
         CredentialConfig::Command { refresh, .. } if refresh.is_zero()
     ));
 }
+
+#[test]
+fn backend_kind_defaults_to_anthropic_and_accepts_openai() {
+    assert_eq!(
+        parse(MINIMAL).unwrap().backends["local"].kind,
+        BackendKind::Anthropic
+    );
+    let text = MINIMAL.replace("[backends.local]", "[backends.local]\nkind = \"openai\"");
+    assert_eq!(
+        parse(&text).unwrap().backends["local"].kind,
+        BackendKind::OpenAi
+    );
+}
+
+#[test]
+fn backend_kind_rejects_unknown_values() {
+    let text = MINIMAL.replace("[backends.local]", "[backends.local]\nkind = \"responses\"");
+    let error = parse(&text).unwrap_err();
+    assert!(matches!(error, ConfigError::Parse(_)), "{error:?}");
+    assert!(error.to_string().contains("responses"), "{error}");
+}
+
+#[test]
+fn validation_rejects_anthropic_beta_on_openai_backend() {
+    let text = MINIMAL.replace(
+        "[backends.local]",
+        "[backends.local]\nkind = \"openai\"\nanthropic_beta = [\"oauth-2025-04-20\"]",
+    );
+    let p = problems(&text);
+    assert_eq!(p.len(), 1, "{p:?}");
+    assert!(
+        p[0].contains("backends.local.anthropic_beta") && p[0].contains("openai"),
+        "{p:?}"
+    );
+}

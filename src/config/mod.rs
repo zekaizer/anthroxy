@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 pub use credential_header::{CredentialHeader, X_API_KEY};
 pub use error::ConfigError;
 pub use schema::{
-    BackendConfig, CommandOutput, Config, CredentialConfig, LogFormat, LoggingConfig, ModelConfig,
-    RoutingConfig, ServerConfig, UpstreamConfig,
+    BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, LogFormat, LoggingConfig,
+    ModelConfig, RoutingConfig, ServerConfig, UpstreamConfig,
 };
 
 /// Environment variable naming the configuration file.

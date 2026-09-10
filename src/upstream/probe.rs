@@ -131,7 +131,7 @@ mod tests {
 
     use tokio::sync::Barrier;
 
-    use crate::config::{BackendConfig, CredentialConfig, CredentialHeader};
+    use crate::config::{BackendConfig, BackendKind, CredentialConfig, CredentialHeader};
     use crate::upstream::RetryPolicy;
 
     fn client() -> UpstreamClient {
@@ -159,6 +159,7 @@ mod tests {
         Backend::from_config(
             name,
             &BackendConfig {
+                kind: BackendKind::Anthropic,
                 url,
                 credential: CredentialConfig::None,
                 headers: Default::default(),
