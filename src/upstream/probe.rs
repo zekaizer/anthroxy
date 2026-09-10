@@ -1,6 +1,7 @@
 //! Reachability check used by `anthroxy check`: acquire the credential
 //! and call `GET /v1/models` on the backend.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -18,15 +19,23 @@ pub struct Probe {
 
 #[derive(Debug)]
 pub enum ModelsProbe {
-    /// The backend answered; `ids` is filled when the body listed models,
+    /// The backend answered; `models` is filled when the body listed models,
     /// `detail` when it carried an error message.
     Answered {
         status: u16,
         latency: Duration,
-        ids: Vec<String>,
+        models: Vec<ListedModel>,
         detail: Option<String>,
     },
     Failed(UpstreamError),
+}
+
+/// One entry of a backend's model list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedModel {
+    pub id: String,
+    /// Tokens the server accepts for this model, when its list says.
+    pub context_length: Option<u64>,
 }
 
 /// Never fails: every outcome is data for the report. `client` decides the
@@ -45,35 +54,27 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
         Some(c) => format!("{} ({})", backend.credential.describe(), c.masked()),
         None => backend.credential.describe(),
     };
-    // What Claude Code always sends; backend `headers` still override.
-    let mut base = HeaderMap::new();
-    base.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
-    base.insert(
-        http::header::ACCEPT,
-        HeaderValue::from_static("application/json"),
-    );
-    let request = UpstreamRequest {
-        backend,
-        method: Method::GET,
-        path_and_query: "/v1/models",
-        headers: upstream_headers(&base, backend),
-        body: Bytes::new(),
-    };
-    let models = match client.send(request).await {
+    let models = match client.send(list_request(backend, "/v1/models")).await {
         Ok(upstream) => {
             let status = upstream.response.status().as_u16();
             let body = upstream.response.bytes().await.unwrap_or_default();
             let json = serde_json::from_slice::<serde_json::Value>(&body).ok();
-            let ids = json.as_ref().map(model_ids).unwrap_or_default();
+            let mut models = json.as_ref().map(listed_models).unwrap_or_default();
             let detail = if (200..300).contains(&status) {
                 None
             } else {
                 Some(error_detail(json.as_ref(), &body))
             };
+            if detail.is_none()
+                && !models.is_empty()
+                && models.iter().all(|m| m.context_length.is_none())
+            {
+                fill_native_context(client, backend, &mut models).await;
+            }
             ModelsProbe::Answered {
                 status,
                 latency: upstream.latency,
-                ids,
+                models,
                 detail,
             }
         }
@@ -82,6 +83,51 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
     Probe {
         credential: Ok(description),
         models: Some(models),
+    }
+}
+
+/// LM Studio gives context lengths only in its native `/api/v0/models`.
+/// Any failure there leaves them unknown.
+async fn fill_native_context(
+    client: &UpstreamClient,
+    backend: &Backend,
+    models: &mut [ListedModel],
+) {
+    let Ok(upstream) = client.send(list_request(backend, "/api/v0/models")).await else {
+        return;
+    };
+    if !upstream.response.status().is_success() {
+        return;
+    }
+    let Ok(body) = upstream.response.bytes().await else {
+        return;
+    };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return;
+    };
+    let native: HashMap<String, u64> = listed_models(&json)
+        .into_iter()
+        .filter_map(|m| Some((m.id, m.context_length?)))
+        .collect();
+    for model in models {
+        model.context_length = native.get(&model.id).copied();
+    }
+}
+
+fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> {
+    // What Claude Code always sends; backend `headers` still override.
+    let mut base = HeaderMap::new();
+    base.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    base.insert(
+        http::header::ACCEPT,
+        HeaderValue::from_static("application/json"),
+    );
+    UpstreamRequest {
+        backend,
+        method: Method::GET,
+        path_and_query: path,
+        headers: upstream_headers(&base, backend),
+        body: Bytes::new(),
     }
 }
 
@@ -110,14 +156,32 @@ fn error_detail(json: Option<&serde_json::Value>, body: &[u8]) -> String {
         })
 }
 
-/// `data[].id` of either an Anthropic or an OpenAI model list.
-fn model_ids(body: &serde_json::Value) -> Vec<String> {
+/// Fields model lists use for the context window, most specific first: LM
+/// Studio's loaded context before its maximum, vLLM's `max_model_len`.
+const CONTEXT_FIELDS: [&str; 6] = [
+    "loaded_context_length",
+    "max_model_len",
+    "context_length",
+    "max_context_length",
+    "context_window",
+    "max_input_tokens",
+];
+
+/// `data[]` of either an Anthropic or an OpenAI model list.
+fn listed_models(body: &serde_json::Value) -> Vec<ListedModel> {
     body.get("data")
         .and_then(|d| d.as_array())
         .map(|items| {
             items
                 .iter()
-                .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(str::to_owned))
+                .filter_map(|m| {
+                    Some(ListedModel {
+                        id: m.get("id")?.as_str()?.to_owned(),
+                        context_length: CONTEXT_FIELDS
+                            .iter()
+                            .find_map(|field| m.get(*field)?.as_u64()),
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -181,9 +245,10 @@ mod tests {
         assert_eq!(probes.len(), 2);
         for p in &probes {
             match &p.models {
-                Some(ModelsProbe::Answered { status, ids, .. }) => {
+                Some(ModelsProbe::Answered { status, models, .. }) => {
                     assert_eq!(*status, 200);
-                    assert_eq!(ids, &["m"]);
+                    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+                    assert_eq!(ids, ["m"]);
                 }
                 other => panic!("{other:?}"),
             }
@@ -212,14 +277,123 @@ mod tests {
         );
     }
 
+    fn ids(models: Vec<ListedModel>) -> Vec<String> {
+        models.into_iter().map(|m| m.id).collect()
+    }
+
     #[test]
     fn extracts_ids_from_both_list_shapes() {
         let anthropic =
             serde_json::json!({"data": [{"id": "a", "type": "model"}], "has_more": false});
         let openai = serde_json::json!({"object": "list", "data": [{"id": "x", "object": "model"}, {"id": "y"}]});
-        assert_eq!(model_ids(&anthropic), vec!["a"]);
-        assert_eq!(model_ids(&openai), vec!["x", "y"]);
-        assert!(model_ids(&serde_json::json!({"error": "nope"})).is_empty());
+        assert_eq!(ids(listed_models(&anthropic)), vec!["a"]);
+        assert_eq!(ids(listed_models(&openai)), vec!["x", "y"]);
+        assert!(listed_models(&serde_json::json!({"error": "nope"})).is_empty());
+    }
+
+    #[test]
+    fn context_lengths_come_from_the_fields_servers_use() {
+        let list = serde_json::json!({"data": [
+            {"id": "vllm", "max_model_len": 32768},
+            {"id": "lmstudio", "max_context_length": 131072, "loaded_context_length": 8192},
+            {"id": "openrouter", "context_length": 200000},
+            {"id": "plain"},
+            {"id": "odd", "max_model_len": "big"}
+        ]});
+        let context: Vec<(String, Option<u64>)> = listed_models(&list)
+            .into_iter()
+            .map(|m| (m.id, m.context_length))
+            .collect();
+        assert_eq!(
+            context,
+            [
+                ("vllm".to_owned(), Some(32768)),
+                ("lmstudio".to_owned(), Some(8192)),
+                ("openrouter".to_owned(), Some(200000)),
+                ("plain".to_owned(), None),
+                ("odd".to_owned(), None)
+            ]
+        );
+    }
+
+    /// A backend listing `gemma` without a context length, with LM Studio's
+    /// native list at `/api/v0/models` when `native` is set.
+    async fn lm_studio(native: bool) -> Backend {
+        let mut app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({"data": [{"id": "gemma", "object": "model"}, {"id": "other"}]}))
+            }),
+        );
+        if native {
+            app = app.route(
+                "/api/v0/models",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({"data": [
+                        {"id": "gemma", "max_context_length": 131072, "loaded_context_length": 32768},
+                        {"id": "unlisted", "max_context_length": 4096}
+                    ]}))
+                }),
+            );
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Backend::from_config(
+            "lmstudio",
+            &BackendConfig {
+                kind: BackendKind::OpenAi,
+                url,
+                credential: CredentialConfig::None,
+                headers: Default::default(),
+                anthropic_beta: Vec::new(),
+                drop_fields: Vec::new(),
+            },
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn lm_studio_context_comes_from_its_native_list() {
+        let probe = probe(&client(), &lm_studio(true).await).await;
+        match probe.models {
+            Some(ModelsProbe::Answered {
+                status: 200,
+                models,
+                detail: None,
+                ..
+            }) => assert_eq!(
+                models,
+                [
+                    ListedModel {
+                        id: "gemma".into(),
+                        context_length: Some(32768)
+                    },
+                    ListedModel {
+                        id: "other".into(),
+                        context_length: None
+                    }
+                ]
+            ),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_native_list_context_stays_unknown() {
+        let probe = probe(&client(), &lm_studio(false).await).await;
+        match probe.models {
+            Some(ModelsProbe::Answered {
+                status: 200,
+                models,
+                detail: None,
+                ..
+            }) => assert!(
+                models.iter().all(|m| m.context_length.is_none()),
+                "{models:?}"
+            ),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

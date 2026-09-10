@@ -751,11 +751,18 @@ async fn check_probes_an_openai_backend_without_anthropic_headers() {
     })
     .await
     .unwrap();
-    let probe = upstream.last();
-    assert_eq!(probe.path_and_query, "/v1/models");
-    assert_eq!(probe.header("anthropic-version"), None);
+    let received = upstream.received();
+    let paths: Vec<&str> = received.iter().map(|r| r.path_and_query.as_str()).collect();
     assert_eq!(
-        probe.header("authorization"),
-        Some("Bearer backend-secret-key")
+        paths,
+        ["/v1/models", "/api/v0/models"],
+        "a list without context lengths is followed by LM Studio's native list"
     );
+    for probe in &received {
+        assert_eq!(probe.header("anthropic-version"), None);
+        assert_eq!(
+            probe.header("authorization"),
+            Some("Bearer backend-secret-key")
+        );
+    }
 }
