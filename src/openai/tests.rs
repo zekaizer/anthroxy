@@ -170,8 +170,8 @@ fn tools_tool_choice_and_sampling() {
     assert_eq!(
         body["tools"],
         json!([
-            {"type": "function", "function": {"name": "read", "description": "Read", "parameters": {"type": "object"}}},
-            {"type": "function", "function": {"name": "bare", "parameters": {"type": "object"}}}
+            {"type": "function", "function": {"name": "read", "description": "Read", "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "bare", "parameters": {"type": "object", "properties": {}}}}
         ])
     );
     assert_eq!(body["tool_choice"], json!("auto"));
@@ -804,4 +804,39 @@ fn user_effort_and_parallel_tool_calls_are_forwarded() {
     for key in ["user", "reasoning_effort", "parallel_tool_calls"] {
         assert!(plain.get(key).is_none(), "{key} absent when unset");
     }
+}
+
+#[test]
+fn object_schemas_without_properties_get_an_empty_map() {
+    let mut r = request(vec![user(vec![Part::Text("hi".into())])]);
+    r.tools = vec![
+        Tool {
+            name: "noop".into(),
+            description: None,
+            parameters: json!({"type": "object"}),
+        },
+        Tool {
+            name: "kept".into(),
+            description: None,
+            parameters: json!({"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}),
+        },
+        Tool {
+            name: "odd".into(),
+            description: None,
+            parameters: json!({"type": "string"}),
+        },
+    ];
+    let tools = encoded(&r)["tools"].clone();
+    assert_eq!(
+        tools[0]["function"]["parameters"],
+        json!({"type": "object", "properties": {}})
+    );
+    assert_eq!(
+        tools[1]["function"]["parameters"],
+        json!({"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]})
+    );
+    assert_eq!(
+        tools[2]["function"]["parameters"],
+        json!({"type": "string"})
+    );
 }

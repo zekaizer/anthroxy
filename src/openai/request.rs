@@ -28,7 +28,7 @@ pub fn encode(request: &Request) -> Vec<u8> {
                 if let Some(description) = &tool.description {
                     function.insert("description".into(), json!(description));
                 }
-                function.insert("parameters".into(), tool.parameters.clone());
+                function.insert("parameters".into(), with_properties(&tool.parameters));
                 json!({"type": "function", "function": function})
             })
             .collect();
@@ -169,6 +169,23 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
     }
     if object.len() > 1 {
         out.push(Value::Object(object));
+    }
+}
+
+/// An object schema always carries `properties`: some servers (LM Studio)
+/// reject a tool whose schema has none, and a tool without arguments is a
+/// legitimate Anthropic tool.
+fn with_properties(schema: &Value) -> Value {
+    match schema {
+        Value::Object(fields)
+            if fields.get("type").and_then(Value::as_str) == Some("object")
+                && !fields.contains_key("properties") =>
+        {
+            let mut fields = fields.clone();
+            fields.insert("properties".into(), json!({}));
+            Value::Object(fields)
+        }
+        other => other.clone(),
     }
 }
 
