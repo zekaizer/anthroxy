@@ -3,16 +3,16 @@
 
 use serde_json::Value;
 
-use super::chunk::{
-    content_events, error_document, first_choice, generated_id, start_event, stop_reason,
-    usage_event,
+use super::common::{
+    ParseError, content_events, error_document, first_choice, parse_object, push_tool_call,
+    start_event, stop_reason, tool_call, usage_event,
 };
 use crate::ir::Event;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ResponseError {
-    #[error("response is not a JSON object: {0}")]
-    NotJson(String),
+    #[error("response is {0}")]
+    Parse(#[from] ParseError),
     #[error("response has no choices")]
     NoChoices,
     /// A 2xx body that is an error document.
@@ -21,16 +21,12 @@ pub enum ResponseError {
 }
 
 pub fn decode(body: &[u8]) -> Result<Vec<Event>, ResponseError> {
-    let root: Value =
-        serde_json::from_slice(body).map_err(|e| ResponseError::NotJson(e.to_string()))?;
-    let root = root
-        .as_object()
-        .ok_or_else(|| ResponseError::NotJson("not an object".to_owned()))?;
-    if let Some(message) = error_document(root) {
+    let root = parse_object(body)?;
+    if let Some(message) = error_document(&root) {
         return Ok(vec![Event::Error(message)]);
     }
-    let choice = first_choice(root).ok_or(ResponseError::NoChoices)?;
-    let mut events = vec![start_event(root)];
+    let choice = first_choice(&root).ok_or(ResponseError::NoChoices)?;
+    let mut events = vec![start_event(&root)];
     if let Some(message) = choice.get("message").and_then(Value::as_object) {
         content_events(message, &mut events);
         let calls = message
@@ -39,35 +35,25 @@ pub fn decode(body: &[u8]) -> Result<Vec<Event>, ResponseError> {
             .map(Vec::as_slice)
             .unwrap_or_default();
         for (index, call) in (0u32..).zip(calls) {
-            let function = call.get("function");
-            let Some(name) = function.and_then(|f| f.get("name")).and_then(Value::as_str) else {
-                continue;
-            };
-            events.push(Event::ToolCallStart {
-                index,
-                id: call
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(generated_id),
-                name: name.to_owned(),
-            });
-            let arguments = function
-                .and_then(|f| f.get("arguments"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if !arguments.is_empty() {
-                events.push(Event::ToolCallDelta {
+            let call = tool_call(call);
+            match call.name {
+                Some(name) => push_tool_call(
                     index,
-                    arguments: arguments.to_owned(),
-                });
+                    call.id.map(str::to_owned),
+                    name,
+                    call.arguments.to_owned(),
+                    &mut events,
+                ),
+                None => events.push(Event::Error(format!(
+                    "tool call {index} has no function name"
+                ))),
             }
         }
     }
     if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
         events.push(Event::Finish(stop_reason(reason)));
     }
-    if let Some(usage) = usage_event(root) {
+    if let Some(usage) = usage_event(&root) {
         events.push(usage);
     }
     Ok(events)

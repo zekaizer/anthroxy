@@ -416,8 +416,8 @@ fn finish_reasons_usage_done_and_errors() {
         d.decode(r#"{"error": "plain text"}"#).unwrap(),
         vec![Event::Error("plain text".into())]
     );
-    assert!(matches!(d.decode("not json"), Err(ChunkError::NotJson(_))));
-    assert!(matches!(d.decode("[1, 2]"), Err(ChunkError::NotJson(_))));
+    assert!(matches!(d.decode("not json"), Err(ParseError::NotJson(_))));
+    assert!(matches!(d.decode("[1, 2]"), Err(ParseError::NotJson(_))));
 }
 
 #[test]
@@ -511,7 +511,7 @@ fn completed_response_yields_the_stream_events() {
     );
     assert!(matches!(
         decode_response(b"[]"),
-        Err(ResponseError::NotJson(_))
+        Err(ResponseError::Parse(_))
     ));
 }
 
