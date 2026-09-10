@@ -231,3 +231,163 @@ async fn a_tool_call_without_a_name_is_an_error_not_a_silent_loss() {
         "{out}"
     );
 }
+
+// ---- stream path and document path agree ----
+
+use crate::ir::{Event, StopReason, Usage};
+
+/// Folds Anthropic SSE text back into the document shape `encode_message`
+/// produces, so both paths can be compared field by field.
+fn document_from_sse(sse: &str) -> Value {
+    let mut blocks: Vec<Value> = Vec::new();
+    let mut message = json!({});
+    let mut partial: std::collections::BTreeMap<u64, String> = Default::default();
+    for frame in sse.split("\n\n").filter(|f| !f.is_empty()) {
+        let data: Value = serde_json::from_str(
+            frame
+                .lines()
+                .nth(1)
+                .unwrap()
+                .strip_prefix("data: ")
+                .unwrap(),
+        )
+        .unwrap();
+        match data["type"].as_str().unwrap() {
+            "message_start" => message = data["message"].clone(),
+            "content_block_start" => {
+                assert_eq!(
+                    data["index"].as_u64().unwrap() as usize,
+                    blocks.len(),
+                    "indexes are dense"
+                );
+                blocks.push(data["content_block"].clone());
+            }
+            "content_block_delta" => {
+                let index = data["index"].as_u64().unwrap();
+                let block = &mut blocks[index as usize];
+                match data["delta"]["type"].as_str().unwrap() {
+                    "thinking_delta" => {
+                        let text = block["thinking"].as_str().unwrap().to_owned()
+                            + data["delta"]["thinking"].as_str().unwrap();
+                        block["thinking"] = json!(text);
+                    }
+                    "text_delta" => {
+                        let text = block["text"].as_str().unwrap().to_owned()
+                            + data["delta"]["text"].as_str().unwrap();
+                        block["text"] = json!(text);
+                    }
+                    "input_json_delta" => partial
+                        .entry(index)
+                        .or_default()
+                        .push_str(data["delta"]["partial_json"].as_str().unwrap()),
+                    other => panic!("{other}"),
+                }
+            }
+            "content_block_stop" => {}
+            "message_delta" => {
+                message["stop_reason"] = data["delta"]["stop_reason"].clone();
+                message["usage"] = data["usage"].clone();
+            }
+            "message_stop" => {}
+            other => panic!("unexpected {other} in {sse}"),
+        }
+    }
+    for (index, json) in partial {
+        blocks[index as usize]["input"] = serde_json::from_str(&json).unwrap_or(json!({}));
+    }
+    message["content"] = Value::Array(blocks);
+    message
+}
+
+#[test]
+fn streaming_and_document_paths_produce_the_same_message() {
+    let cases: Vec<Vec<Event>> = vec![
+        vec![
+            Event::Start {
+                id: "a".into(),
+                model: "m".into(),
+            },
+            Event::ThinkingDelta("t1".into()),
+            Event::ThinkingDelta("t2".into()),
+            Event::TextDelta("x".into()),
+            Event::ToolCallStart {
+                index: 0,
+                id: "c0".into(),
+                name: "read".into(),
+            },
+            Event::ToolCallDelta {
+                index: 0,
+                arguments: "{\"p\":".into(),
+            },
+            Event::ToolCallStart {
+                index: 1,
+                id: "c1".into(),
+                name: "bash".into(),
+            },
+            Event::ToolCallDelta {
+                index: 1,
+                arguments: "{}".into(),
+            },
+            Event::ToolCallDelta {
+                index: 0,
+                arguments: "1}".into(),
+            },
+            Event::Finish(StopReason::ToolUse),
+            Event::Usage(Usage {
+                input_tokens: 3,
+                output_tokens: 4,
+            }),
+            Event::Done,
+        ],
+        vec![
+            Event::Start {
+                id: "b".into(),
+                model: "m".into(),
+            },
+            Event::TextDelta("a".into()),
+            Event::ToolCallStart {
+                index: 0,
+                id: "c".into(),
+                name: "t".into(),
+            },
+            Event::TextDelta("b".into()),
+            Event::ThinkingDelta("late".into()),
+            Event::Finish(StopReason::EndTurn),
+            Event::Done,
+        ],
+        vec![
+            Event::Start {
+                id: "c".into(),
+                model: "m".into(),
+            },
+            Event::TextDelta("only text".into()),
+            Event::Finish(StopReason::MaxTokens),
+            Event::Done,
+        ],
+        vec![
+            Event::Start {
+                id: "d".into(),
+                model: "m".into(),
+            },
+            Event::ToolCallStart {
+                index: 0,
+                id: "c".into(),
+                name: "t".into(),
+            },
+            Event::Done,
+        ],
+    ];
+    for events in cases {
+        let mut sse = String::new();
+        let mut encoder = crate::anthropic::StreamEncoder::new("fallback");
+        for event in events.clone() {
+            encoder.encode(event, &mut sse);
+        }
+        let streamed = document_from_sse(&sse);
+        let folded: Value = serde_json::from_slice(&crate::anthropic::encode_message(
+            &crate::ir::Message::from_events(events).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(streamed, folded, "{sse}");
+    }
+}
