@@ -12,6 +12,7 @@ pub mod credential;
 pub mod ir;
 pub mod observability;
 pub mod openai;
+pub(crate) mod private_fs;
 pub mod routing;
 pub mod server;
 pub mod service;
