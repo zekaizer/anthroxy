@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::ir::{Part, Request, RequestMessage, Role, Tool, ToolChoice};
+use crate::ir::{Image, Part, Request, RequestMessage, Role, Tool, ToolChoice};
 
 fn request(messages: Vec<RequestMessage>) -> Request {
     Request {
@@ -76,10 +76,12 @@ fn tool_loop_history() {
             Part::ToolResult {
                 tool_use_id: "toolu_1".into(),
                 content: "fn main() {}".into(),
+                images: vec![],
             },
             Part::ToolResult {
                 tool_use_id: "toolu_2".into(),
                 content: "a.rs".into(),
+                images: vec![],
             },
             Part::Text("thanks".into()),
         ]),
@@ -637,6 +639,7 @@ fn a_turn_whose_parts_were_all_dropped_still_keeps_role_alternation() {
         user(vec![Part::ToolResult {
             tool_use_id: "t".into(),
             content: "r".into(),
+            images: vec![],
         }]),
     ]);
     assert_eq!(
@@ -668,6 +671,40 @@ fn mid_conversation_system_messages_stay_in_place() {
             {"role": "user", "content": "hi"},
             {"role": "system", "content": "env changed\n\nagain"},
             {"role": "assistant", "content": "ok"}
+        ])
+    );
+}
+
+#[test]
+fn images_in_a_tool_result_follow_it_in_a_user_message() {
+    let image = Image {
+        media_type: "image/png".into(),
+        data: "AAAA".into(),
+    };
+    let r = request(vec![user(vec![
+        Part::ToolResult {
+            tool_use_id: "toolu_1".into(),
+            content: String::new(),
+            images: vec![image.clone()],
+        },
+        Part::ToolResult {
+            tool_use_id: "toolu_2".into(),
+            content: "text too".into(),
+            images: vec![image.clone(), image],
+        },
+        Part::Text("what do you see".into()),
+    ])]);
+    let png = json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}});
+    assert_eq!(
+        encoded(&r)["messages"],
+        json!([
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "(1 image from this tool call follows in the next user message)"},
+            {"role": "tool", "tool_call_id": "toolu_2", "content": "text too\n\n(2 images from this tool call follow in the next user message)"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Image from tool call toolu_1:"}, png,
+                {"type": "text", "text": "Images from tool call toolu_2:"}, png, png,
+                {"type": "text", "text": "what do you see"}
+            ]}
         ])
     );
 }

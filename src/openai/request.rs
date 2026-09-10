@@ -79,10 +79,7 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
             }
             Part::Image { media_type, data } => {
                 has_image = true;
-                parts.push(json!({
-                    "type": "image_url",
-                    "image_url": {"url": format!("data:{media_type};base64,{data}")}
-                }));
+                parts.push(image_part(media_type, data));
             }
             Part::ToolUse { id, name, input } => tool_calls.push(json!({
                 "id": id,
@@ -95,11 +92,43 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
             Part::ToolResult {
                 tool_use_id,
                 content,
-            } => out.push(json!({
-                "role": "tool",
-                "tool_call_id": tool_use_id,
-                "content": content,
-            })),
+                images,
+            } => {
+                // A tool message carries text only; its images ride in the
+                // user message that follows, labelled with the call.
+                let mut content = content.clone();
+                if !images.is_empty() {
+                    let note = format!(
+                        "({} from this tool call {} in the next user message)",
+                        count_images(images.len()),
+                        if images.len() == 1 {
+                            "follows"
+                        } else {
+                            "follow"
+                        }
+                    );
+                    if !content.is_empty() {
+                        content.push_str(TEXT_SEPARATOR);
+                    }
+                    content.push_str(&note);
+                    has_image = true;
+                    parts.push(json!({
+                        "type": "text",
+                        "text": format!(
+                            "{} from tool call {tool_use_id}:",
+                            if images.len() == 1 { "Image" } else { "Images" }
+                        ),
+                    }));
+                    for image in images {
+                        parts.push(image_part(&image.media_type, &image.data));
+                    }
+                }
+                out.push(json!({
+                    "role": "tool",
+                    "tool_call_id": tool_use_id,
+                    "content": content,
+                }));
+            }
         }
     }
     // A turn that produced nothing (its blocks were all dropped) still
@@ -131,5 +160,20 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
     }
     if object.len() > 1 {
         out.push(Value::Object(object));
+    }
+}
+
+fn image_part(media_type: &str, data: &str) -> Value {
+    json!({
+        "type": "image_url",
+        "image_url": {"url": format!("data:{media_type};base64,{data}")}
+    })
+}
+
+fn count_images(n: usize) -> String {
+    if n == 1 {
+        "1 image".to_owned()
+    } else {
+        format!("{n} images")
     }
 }

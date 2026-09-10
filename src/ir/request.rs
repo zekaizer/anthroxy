@@ -41,11 +41,20 @@ pub enum Part {
         name: String,
         input: serde_json::Value,
     },
-    /// Content flattened to text.
+    /// Text content flattened; images kept apart, since a tool message
+    /// cannot carry them on every API.
     ToolResult {
         tool_use_id: String,
         content: String,
+        images: Vec<Image>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Image {
+    pub media_type: String,
+    /// The base64 payload as received.
+    pub data: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

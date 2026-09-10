@@ -842,6 +842,38 @@ async fn body_log_marks_a_client_that_left_before_a_buffered_answer() {
 }
 
 #[tokio::test]
+async fn an_image_read_by_a_tool_reaches_the_model() {
+    let upstream = MockUpstream::start(|_| {
+        completion(
+            json!({"role": "assistant", "content": "a blue square"}),
+            "stop",
+        )
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("qwen");
+    body["messages"] = json!([
+        {"role": "user", "content": "read shape.png"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "shape.png"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
+        ]}]}
+    ]);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    let messages = sent["messages"].as_array().unwrap();
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], "toolu_1");
+    assert!(messages[2]["content"].as_str().unwrap().contains("image"));
+    assert_eq!(messages[3]["role"], "user");
+    assert_eq!(
+        messages[3]["content"][1]["image_url"]["url"],
+        "data:image/png;base64,AAAA"
+    );
+}
+
+#[tokio::test]
 async fn anthropic_kind_never_translates() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

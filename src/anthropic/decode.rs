@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use crate::ir::{Part, Request, RequestMessage, Role, Tool, ToolChoice};
+use crate::ir::{Image, Part, Request, RequestMessage, Role, Tool, ToolChoice};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DecodeError {
@@ -182,10 +182,14 @@ fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError
                 .cloned()
                 .unwrap_or(Value::Object(Default::default())),
         },
-        "tool_result" => Part::ToolResult {
-            tool_use_id: field_str(block, "tool_use_id")?.to_owned(),
-            content: flatten_text(index, block.get("content"))?,
-        },
+        "tool_result" => {
+            let (content, images) = tool_result_content(index, block.get("content"))?;
+            Part::ToolResult {
+                tool_use_id: field_str(block, "tool_use_id")?.to_owned(),
+                content,
+                images,
+            }
+        }
         "thinking" | "redacted_thinking" => return Ok(None),
         other => {
             return Err(DecodeError::UnsupportedBlock {
@@ -197,28 +201,35 @@ fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError
     Ok(Some(part))
 }
 
-/// Text of a tool result: a string as is, blocks by their text. Images are
-/// left out (ADR-0010); any other block type is an error, as at message
-/// level.
-fn flatten_text(index: usize, content: Option<&Value>) -> Result<String, DecodeError> {
+/// A tool result as text plus its images: a string as is, blocks by their
+/// text, image blocks apart. Any other block type is an error, as at
+/// message level.
+fn tool_result_content(
+    index: usize,
+    content: Option<&Value>,
+) -> Result<(String, Vec<Image>), DecodeError> {
     match content {
-        None | Some(Value::Null) => Ok(String::new()),
-        Some(Value::String(text)) => Ok(text.clone()),
+        None | Some(Value::Null) => Ok((String::new(), Vec::new())),
+        Some(Value::String(text)) => Ok((text.clone(), Vec::new())),
         Some(Value::Array(blocks)) => {
             let mut texts = Vec::new();
+            let mut images = Vec::new();
             for block in blocks {
-                match field_str(block, "type")? {
-                    "text" => texts.push(field_str(block, "text")?),
-                    "image" => {}
-                    other => {
+                match decode_block(index, block)? {
+                    Some(Part::Text(text)) => texts.push(text),
+                    Some(Part::Image { media_type, data }) => {
+                        images.push(Image { media_type, data })
+                    }
+                    Some(_) => {
                         return Err(DecodeError::UnsupportedBlock {
                             index,
-                            block: other.to_owned(),
+                            block: field_str(block, "type")?.to_owned(),
                         });
                     }
+                    None => {}
                 }
             }
-            Ok(texts.join(TEXT_SEPARATOR))
+            Ok((texts.join(TEXT_SEPARATOR), images))
         }
         Some(_) => Err(DecodeError::Field("content")),
     }
@@ -301,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn content_blocks_map_to_parts_and_thinking_is_dropped() {
+    fn content_blocks_map_to_parts_thinking_is_dropped_and_result_images_kept() {
         let mut v = base();
         v["messages"] = json!([
             {"role": "user", "content": [
@@ -355,14 +366,20 @@ mod tests {
                         Part::ToolResult {
                             tool_use_id: "toolu_1".into(),
                             content: "fn main() {}".into(),
+                            images: vec![],
                         },
                         Part::ToolResult {
                             tool_use_id: "toolu_2".into(),
                             content: "line 1\n\nline 2".into(),
+                            images: vec![Image {
+                                media_type: "image/png".into(),
+                                data: "BBBB".into()
+                            }],
                         },
                         Part::ToolResult {
                             tool_use_id: "toolu_3".into(),
                             content: String::new(),
+                            images: vec![],
                         },
                     ],
                 },
