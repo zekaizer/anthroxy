@@ -190,6 +190,7 @@ fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError
                 images,
             }
         }
+        "document" => Part::Text(document_text(block)?),
         "thinking" | "redacted_thinking" => return Ok(None),
         other => {
             return Err(DecodeError::UnsupportedBlock {
@@ -199,6 +200,31 @@ fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError
         }
     };
     Ok(Some(part))
+}
+
+/// A `document` block as text: its content for a plain-text source, a note
+/// saying what was left out otherwise. Chat Completions servers seldom take
+/// files, and a note lets the model tell the user instead of the turn
+/// failing.
+fn document_text(block: &Value) -> Result<String, DecodeError> {
+    let source = block.get("source").ok_or(DecodeError::Field("source"))?;
+    if field_str(source, "type")? == "text" {
+        return Ok(field_str(source, "data")?.to_owned());
+    }
+    let media_type = source
+        .get("media_type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown type");
+    let data = source.get("data").and_then(Value::as_str).unwrap_or("");
+    let bytes = data.len() / 4 * 3 - data.bytes().rev().take_while(|&b| b == b'=').count();
+    let title = block
+        .get("title")
+        .and_then(Value::as_str)
+        .map(|t| format!(" \"{t}\""))
+        .unwrap_or_default();
+    Ok(format!(
+        "[document{title} ({media_type}, {bytes} bytes) omitted: this backend cannot receive documents]"
+    ))
 }
 
 /// A tool result as text plus its images: a string as is, blocks by their
@@ -453,13 +479,13 @@ mod tests {
     fn unsupported_block_types_are_errors() {
         let mut v = base();
         v["messages"] = json!([{"role": "user", "content": [
-            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "x"}}
+            {"type": "server_tool_use", "id": "x", "name": "web_search", "input": {}}
         ]}]);
         assert_eq!(
             decode_json(v),
             Err(DecodeError::UnsupportedBlock {
                 index: 0,
-                block: "document".into()
+                block: "server_tool_use".into()
             })
         );
     }
@@ -514,14 +540,14 @@ mod tests {
         let mut v = base();
         v["messages"] = json!([{"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t", "content": [
-                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "x"}}
+                {"type": "server_tool_use", "id": "x", "name": "web_search", "input": {}}
             ]}
         ]}]);
         assert_eq!(
             decode_json(v),
             Err(DecodeError::UnsupportedBlock {
                 index: 0,
-                block: "document".into()
+                block: "server_tool_use".into()
             })
         );
     }
@@ -577,6 +603,32 @@ mod tests {
                 block: "image".into(),
                 role: "system".into()
             })
+        );
+    }
+
+    #[test]
+    fn documents_become_a_note_or_their_text() {
+        let mut v = base();
+        v["messages"] = json!([{"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}, "title": "secret.pdf"},
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "plain words"}},
+            {"type": "tool_result", "tool_use_id": "t", "content": [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}}
+            ]}
+        ]}]);
+        let parts = decode_json(v).unwrap().messages.remove(0).parts;
+        assert_eq!(
+            parts[0],
+            Part::Text("[document \"secret.pdf\" (application/pdf, 9 bytes) omitted: this backend cannot receive documents]".into())
+        );
+        assert_eq!(parts[1], Part::Text("plain words".into()));
+        assert_eq!(
+            parts[2],
+            Part::ToolResult {
+                tool_use_id: "t".into(),
+                content: "[document (application/pdf, 9 bytes) omitted: this backend cannot receive documents]".into(),
+                images: vec![],
+            }
         );
     }
 

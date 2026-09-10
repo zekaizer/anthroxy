@@ -649,7 +649,7 @@ async fn untranslatable_requests_are_400_naming_the_block() {
     let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
     let mut body = messages_body("qwen");
     body["messages"] = json!([{"role": "user", "content": [
-        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "x"}}
+        {"type": "server_tool_use", "id": "x", "name": "web_search", "input": {}}
     ]}]);
     let res = router.post("/v1/messages", &body).send().await.unwrap();
     assert_eq!(res.status(), 400);
@@ -657,7 +657,7 @@ async fn untranslatable_requests_are_400_naming_the_block() {
     assert_eq!(body["error"]["type"], "invalid_request_error");
     let message = body["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains("document") && message.contains("mock"),
+        message.contains("server_tool_use") && message.contains("mock"),
         "{message}"
     );
 }
@@ -870,6 +870,36 @@ async fn an_image_read_by_a_tool_reaches_the_model() {
     assert_eq!(
         messages[3]["content"][1]["image_url"]["url"],
         "data:image/png;base64,AAAA"
+    );
+}
+
+#[tokio::test]
+async fn a_pdf_read_by_a_tool_becomes_a_note_instead_of_killing_the_turn() {
+    let upstream = MockUpstream::start(|_| {
+        completion(
+            json!({"role": "assistant", "content": "I cannot read PDFs here"}),
+            "stop",
+        )
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("qwen");
+    body["messages"] = json!([
+        {"role": "user", "content": "read secret.pdf"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "secret.pdf"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}}
+        ]}]}
+    ]);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    let tool = &sent["messages"][2];
+    assert_eq!(tool["role"], "tool");
+    let note = tool["content"].as_str().unwrap();
+    assert!(
+        note.contains("application/pdf") && note.contains("omitted"),
+        "{note}"
     );
 }
 
