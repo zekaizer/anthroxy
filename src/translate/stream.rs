@@ -5,9 +5,8 @@ use bytes::Bytes;
 use futures_util::Stream;
 
 use crate::anthropic::StreamEncoder;
-use crate::ir::Event;
 use crate::openai::ChunkDecoder;
-use crate::sse::Parser;
+use crate::sse::{Frame, Parser, SseError};
 
 /// Chat Completions SSE bytes in, Messages SSE bytes out, one output chunk
 /// per input chunk at most. After a malformed event or an `error` frame one
@@ -46,55 +45,26 @@ impl<S> Translator<S> {
             .error(&format!("[backend {}] {detail}", self.backend), out);
     }
 
-    /// Frames of `chunk` as output text; a bad frame ends the message.
-    fn translate(&mut self, chunk: &[u8], out: &mut String) {
-        let frames = match self.parser.feed(chunk) {
+    /// Encodes the frames the parser produced; a bad frame ends the message.
+    fn frames(&mut self, parsed: Result<Vec<Frame>, SseError>, out: &mut String) {
+        let frames = match parsed {
             Ok(frames) => frames,
-            Err(error) => {
-                self.fail(&format!("malformed event stream: {error}"), out);
-                return;
-            }
+            Err(error) => return self.fail(&format!("malformed event stream: {error}"), out),
         };
         for frame in frames {
-            // A frame without data is a keep-alive.
-            if frame.data.is_empty() {
-                continue;
-            }
             match self.decoder.decode(&frame.data) {
-                Ok(events) => self.encode_all(events, out),
-                Err(error) => {
-                    self.fail(&format!("malformed event: {error}"), out);
-                    return;
-                }
+                Ok(events) => self.encoder.encode_all(events, out),
+                Err(error) => return self.fail(&format!("malformed event: {error}"), out),
             }
         }
     }
 
-    /// `Done` closes the message, so what the decoder still holds is
-    /// reported before it.
-    fn encode_all(&mut self, events: Vec<Event>, out: &mut String) {
-        for event in events {
-            if event == Event::Done {
-                for held in self.decoder.finish() {
-                    self.encoder.encode(held, out);
-                }
-            }
-            self.encoder.encode(event, out);
-        }
-    }
-
+    /// End of input: the last frame, then what the decoder still holds.
     fn end(&mut self, out: &mut String) {
-        match self.parser.finish() {
-            Ok(Some(frame)) if !frame.data.is_empty() => match self.decoder.decode(&frame.data) {
-                Ok(events) => self.encode_all(events, out),
-                Err(error) => self.fail(&format!("malformed event: {error}"), out),
-            },
-            Ok(_) => {}
-            Err(error) => self.fail(&format!("malformed event stream: {error}"), out),
-        }
-        for event in self.decoder.finish() {
-            self.encoder.encode(event, out);
-        }
+        let parsed = self.parser.finish();
+        self.frames(parsed, out);
+        let held = self.decoder.finish();
+        self.encoder.encode_all(held, out);
         self.encoder.finish(out);
     }
 }
@@ -114,29 +84,23 @@ where
         loop {
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Ok(chunk))) => this.translate(&chunk, &mut out),
+                Poll::Ready(Some(Ok(chunk))) => {
+                    let parsed = this.parser.feed(&chunk);
+                    this.frames(parsed, &mut out);
+                }
                 Poll::Ready(Some(Err(error))) => {
                     this.done = true;
                     this.fail(&format!("connection lost mid-stream: {error}"), &mut out);
-                    return if out.is_empty() {
-                        Poll::Ready(None)
-                    } else {
-                        Poll::Ready(Some(Ok(Bytes::from(out))))
-                    };
                 }
                 Poll::Ready(None) => {
                     this.done = true;
                     this.end(&mut out);
-                    return if out.is_empty() {
-                        Poll::Ready(None)
-                    } else {
-                        Poll::Ready(Some(Ok(Bytes::from(out))))
-                    };
                 }
             }
-            if !out.is_empty() {
-                return Poll::Ready(Some(Ok(Bytes::from(out))));
+            if this.done || !out.is_empty() {
+                break;
             }
         }
+        Poll::Ready((!out.is_empty()).then(|| Ok(Bytes::from(out))))
     }
 }
