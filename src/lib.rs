@@ -9,6 +9,7 @@ pub mod build_info;
 pub mod cli;
 pub mod config;
 pub mod credential;
+pub mod ir;
 pub mod observability;
 pub mod routing;
 pub mod server;
