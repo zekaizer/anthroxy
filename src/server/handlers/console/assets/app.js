@@ -26,6 +26,8 @@ const state = {
   lastProbe: null,
   lastSmoke: null,
   reloadNotice: null,
+  /// Milliseconds the browser's clock runs ahead of the router's.
+  skew: 0,
 };
 
 const root = document.getElementById("app");
@@ -60,6 +62,70 @@ function replace(el, ...children) {
   append(el, children);
 }
 
+/// Replaces `el`'s content, keeping what the reader did to it: which
+/// `<details>` are open and how far tables and code blocks are scrolled.
+/// Elements are matched by their panel and their order within it.
+function rerender(el, ...children) {
+  const saved = new Map();
+  walkViewState(el, (key, node, kind) => {
+    saved.set(key, kind === "open" ? node.open : [node.scrollLeft, node.scrollTop]);
+  });
+  replace(el, ...children);
+  walkViewState(el, (key, node, kind) => {
+    if (!saved.has(key)) return;
+    const value = saved.get(key);
+    if (kind === "open") node.open = value;
+    else [node.scrollLeft, node.scrollTop] = value;
+  });
+}
+
+function walkViewState(el, visit) {
+  const counts = new Map();
+  const keyOf = (node, kind) => {
+    const section = node.closest("section.panel");
+    const prefix = `${section && el.contains(section) ? section.dataset.key : ""}|${kind}`;
+    const index = counts.get(prefix) || 0;
+    counts.set(prefix, index + 1);
+    return `${prefix}|${index}`;
+  };
+  el.querySelectorAll("details").forEach((node) => visit(keyOf(node, "open"), node, "open"));
+  el.querySelectorAll(".table-wrap, pre").forEach((node) => visit(keyOf(node, "scroll"), node, "scroll"));
+}
+
+/// The router's clock, from the `now` its answers carry.
+function serverNow() {
+  return Date.now() - state.skew;
+}
+
+function noteServerTime(now) {
+  if (now) state.skew = Date.now() - new Date(now).getTime();
+}
+
+/// "3m ago" that keeps counting between refreshes.
+function rel(at) {
+  return h("span", { class: "tick", "data-at": at }, fmt.relative(at));
+}
+
+/// Time since `at`, as an uptime ("2h 5m") or a duration ("1.2 s").
+function since(at, format) {
+  const el = h("span", { class: "tick", "data-since": at, "data-format": format });
+  tickOne(el);
+  return el;
+}
+
+function tickOne(el) {
+  if (el.dataset.at) {
+    el.textContent = fmt.relative(el.dataset.at);
+    return;
+  }
+  const ms = Math.max(0, serverNow() - new Date(el.dataset.since).getTime());
+  el.textContent = el.dataset.format === "uptime" ? fmt.seconds(Math.floor(ms / 1000)) : fmt.ms(ms);
+}
+
+function tick() {
+  document.querySelectorAll(".tick").forEach(tickOne);
+}
+
 function table(headers, rows, options = {}) {
   const head = h("tr", null, headers.map((header) => {
     const [label, cls] = Array.isArray(header) ? header : [header, null];
@@ -76,7 +142,7 @@ function badge(text, kind) {
 }
 
 function panel(title, actions, ...content) {
-  return h("section", { class: "panel" },
+  return h("section", { class: "panel", "data-key": String(title) },
     h("div", { class: "panel-head" },
       h("h2", null, title),
       actions ? h("div", { class: "actions" }, actions) : null),
@@ -144,7 +210,7 @@ const fmt = {
   clock: (t) => (t ? new Date(t).toLocaleTimeString() : "–"),
   relative: (t) => {
     if (!t) return "–";
-    const diff = (new Date(t).getTime() - Date.now()) / 1000;
+    const diff = (new Date(t).getTime() - serverNow()) / 1000;
     const abs = Math.abs(diff);
     const text = abs < 60 ? `${Math.round(abs)}s`
       : abs < 3600 ? `${Math.round(abs / 60)}m`
@@ -339,9 +405,10 @@ async function refreshHeader() {
   try {
     const status = await api("/api/status");
     state.status = status;
+    noteServerTime(status.now);
     replace(header.meta,
       h("span", null, status.version),
-      h("span", null, `up ${fmt.seconds(status.uptime_s)}`),
+      h("span", null, "up ", since(status.started_at, "uptime")),
       h("span", null, status.listen));
   } catch (error) {
     if (!(error instanceof SignedOut)) replace(header.meta, h("span", { class: "error-text" }, `offline: ${error.message}`));
@@ -369,6 +436,7 @@ function route() {
   clearTimers();
   state.reloadNotice = null;
   every(10000, refreshHeader);
+  every(1000, tick);
   const view = document.getElementById("view");
   view.replaceChildren();
   const views = { overview, requests, stats, tools, recordings };
@@ -382,10 +450,26 @@ window.addEventListener("hashchange", route);
 function overview(view) {
   const body = h("div");
   view.append(body);
+  // Redrawn only when something changed, so what the reader unfolded or
+  // scrolled stays put; ages tick on their own.
+  let drawn = null;
   const load = async () => {
-    const status = await api("/api/status");
+    let status;
+    try {
+      status = await api("/api/status");
+    } catch (error) {
+      drawn = null;
+      throw error;
+    }
     state.status = status;
-    replace(body, overviewContent(status, () => guarded(body, load)));
+    noteServerTime(status.now);
+    const signature = JSON.stringify({ ...status, now: null, uptime_s: null });
+    if (signature === drawn) return;
+    drawn = signature;
+    rerender(body, overviewContent(status, () => {
+      drawn = null;
+      return guarded(body, load);
+    }));
   };
   guarded(body, load);
   every(5000, () => guarded(body, load));
@@ -395,7 +479,7 @@ function overviewContent(status, reload) {
   const lastReload = status.reloads[status.reloads.length - 1];
   const cards = h("div", { class: "cards" },
     card("Version", status.version, true),
-    card("Uptime", fmt.seconds(status.uptime_s)),
+    card("Uptime", since(status.started_at, "uptime")),
     card("Listening on", status.listen, true),
     card("Configuration", status.config_path || "built in memory", true),
     card("Statistics", status.stats ? `${status.stats.dir} (keeps ${status.stats.retention})` : "off", true),
@@ -420,7 +504,7 @@ function overviewContent(status, reload) {
 
   const reloads = [...status.reloads].reverse().map((event) =>
     h("tr", null,
-      h("td", { class: "nowrap" }, fmt.time(event.at), h("div", { class: "sub" }, fmt.relative(event.at))),
+      h("td", { class: "nowrap" }, fmt.time(event.at), h("div", { class: "sub" }, rel(event.at))),
       h("td", null, badge(event.trigger)),
       h("td", null, event.result === "applied" ? badge("applied", "ok") : badge("rejected", "err")),
       h("td", { class: "wrap-anywhere" },
@@ -447,9 +531,9 @@ function overviewContent(status, reload) {
       h("td", { class: "wrap-anywhere" }, credential.source),
       h("td", null, credential.masked ? h("code", null, credential.masked) : h("span", { class: "muted" }, credential.source === "none" ? "none" : "not cached")),
       h("td", { class: "nowrap" },
-        credential.fetched_at ? h("div", null, `fetched ${fmt.relative(credential.fetched_at)}`) : null,
-        credential.expires_at ? h("div", null, `expires ${fmt.relative(credential.expires_at)}`) : null,
-        credential.refresh_at ? h("div", { class: "sub" }, `re-run ${fmt.relative(credential.refresh_at)}`) : null),
+        credential.fetched_at ? h("div", null, "fetched ", rel(credential.fetched_at)) : null,
+        credential.expires_at ? h("div", null, "expires ", rel(credential.expires_at)) : null,
+        credential.refresh_at ? h("div", { class: "sub" }, "re-run ", rel(credential.refresh_at)) : null),
       h("td", null,
         runs.length ? h("div", { class: "runs" }, runs) : h("span", { class: "muted" }, "–"),
         lastRun && lastRun.error ? h("div", { class: "sub error-text" }, lastRun.error) : null));
@@ -469,7 +553,7 @@ function overviewContent(status, reload) {
       h("td", { class: "mono wrap-anywhere" }, name.name),
       h("td", { class: "num" }, fmt.int(name.unknown)),
       h("td", { class: "num" }, fmt.int(name.defaulted)),
-      h("td", { class: "nowrap" }, fmt.relative(name.last_seen))));
+      h("td", { class: "nowrap" }, rel(name.last_seen))));
 
   return [
     panel("Router", null, cards),
@@ -526,7 +610,7 @@ function requests(view, selected) {
       return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
-    replace(inFlight, table(
+    rerender(inFlight, table(
       ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
       data.in_flight.filter(matches).map((v) =>
         h("tr", { class: "clickable", onclick: () => go("requests", v.id) },
@@ -534,11 +618,11 @@ function requests(view, selected) {
           h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
           h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
           h("td", null, statusBadge(v.status)),
-          h("td", { class: "num" }, fmt.ms(v.elapsed_ms)),
+          h("td", { class: "num" }, since(v.received_at, "ms")),
           h("td", { class: "num" }, v.ttfb_ms === null ? h("span", { class: "muted" }, "waiting") : fmt.ms(v.ttfb_ms)),
           h("td", { class: "num" }, fmt.bytes(v.bytes)))),
       { empty: "No request in flight." }));
-    replace(recent, table(
+    rerender(recent, table(
       ["Time", "Model", "Backend / upstream", "Status", "Attempts", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
       data.recent.filter(matches).map((v) =>
         h("tr", { class: `clickable ${v.id === selected ? "selected" : ""}`, onclick: () => go("requests", v.id) },
@@ -557,8 +641,24 @@ function requests(view, selected) {
       { empty: "No finished request since the router started." }));
   };
 
+  let drawn = null;
   const load = async () => {
-    data = await api("/api/requests");
+    let fresh;
+    try {
+      fresh = await api("/api/requests");
+    } catch (error) {
+      drawn = null;
+      throw error;
+    }
+    noteServerTime(fresh.now);
+    // Elapsed times tick in the page; only real changes redraw.
+    const signature = JSON.stringify({
+      in_flight: fresh.in_flight.map(({ elapsed_ms, ...rest }) => rest),
+      recent: fresh.recent,
+    });
+    if (signature === drawn) return;
+    drawn = signature;
+    data = fresh;
     draw();
   };
   filter.addEventListener("input", () => { state.requestsFilter = filter.value; draw(); });
@@ -641,9 +741,19 @@ function stats(view) {
       "aria-pressed": state.statsRange === id ? "true" : "false",
       onclick: () => { state.statsRange = id; drawRanges(); guarded(body, load); },
     }, label)));
+  let drawn = null;
   const load = async () => {
-    const data = await api(`/api/stats?range=${state.statsRange}`);
-    replace(body, statsContent(data));
+    let data;
+    try {
+      data = await api(`/api/stats?range=${state.statsRange}`);
+    } catch (error) {
+      drawn = null;
+      throw error;
+    }
+    const signature = JSON.stringify({ ...data, report: data.report && { ...data.report, since: null } });
+    if (signature === drawn) return;
+    drawn = signature;
+    rerender(body, statsContent(data));
   };
   drawRanges();
   view.append(panel("Statistics", ranges, body));
