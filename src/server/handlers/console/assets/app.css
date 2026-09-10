@@ -14,6 +14,11 @@
   --err-soft: #fbe6e3;
   --code: #eef1f5;
   --shadow: 0 1px 2px rgba(20, 30, 50, 0.06);
+  /* Chart series: validated as a set against --panel (dataviz palette). */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --critical: #d03b3b;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
@@ -34,6 +39,10 @@
     --err-soft: #3d1f1b;
     --code: #232a35;
     --shadow: none;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --critical: #d03b3b;
   }
 }
 
@@ -225,6 +234,42 @@ dl.facts dd { margin: 0; overflow-wrap: anywhere; }
 .signin .form-row { justify-content: space-between; }
 
 .offscreen { position: fixed; left: -9999px; top: 0; }
+[hidden] { display: none !important; }
+
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0.75rem; margin: 0.5rem 0 0.6rem; }
+figure.chart { position: relative; margin: 0; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.6rem 0.25rem; }
+figure.chart figcaption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.75rem; font-weight: 600; font-size: 13px; margin-bottom: 0.25rem; }
+.chart .legend { display: flex; flex-wrap: wrap; gap: 0.2rem 0.75rem; font-weight: 400; font-size: 12px; color: var(--muted); }
+.legend-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.3rem; vertical-align: -1px; }
+.legend-key.line { width: 14px; height: 2px; border-radius: 1px; vertical-align: 3px; }
+.chart .plot { width: 100%; }
+.chart svg { display: block; }
+.chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.chart .grid line { stroke: var(--line); stroke-width: 1; shape-rendering: crispEdges; }
+.chart .axis text, .chart .empty { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .hit { fill: transparent; }
+.chart .hover-band { fill: var(--accent-soft); }
+.chart .crosshair { stroke: var(--muted); stroke-width: 1; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .dot { stroke: var(--panel); stroke-width: 2; }
+.chart .fill-s1 { fill: var(--series-1); }
+.chart .fill-s2 { fill: var(--series-2); }
+.chart .fill-s3 { fill: var(--series-3); }
+.chart .fill-crit { fill: var(--critical); }
+.chart .stroke-s1 { stroke: var(--series-1); }
+.chart .stroke-s2 { stroke: var(--series-2); }
+.chart .stroke-s3 { stroke: var(--series-3); }
+.bg-s1 { background: var(--series-1); }
+.bg-s2 { background: var(--series-2); }
+.bg-s3 { background: var(--series-3); }
+.bg-crit { background: var(--critical); }
+.chart-tip { position: absolute; z-index: 2; pointer-events: none; white-space: nowrap; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.35rem 0.55rem; font-size: 12px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14); }
+.chart-tip .when { color: var(--muted); margin-bottom: 0.15rem; }
+.chart-tip .row { display: flex; align-items: center; gap: 0.4rem; }
+.chart-tip .row strong { font-variant-numeric: tabular-nums; }
+.tip-key { display: inline-block; width: 12px; height: 2px; border-radius: 1px; }
+.chart-table { margin-bottom: 0.5rem; }
+.chart-table > summary { margin-bottom: 0.4rem; }
 details > summary { cursor: pointer; color: var(--muted); }
 
 @media (max-width: 640px) {

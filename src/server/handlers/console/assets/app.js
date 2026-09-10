@@ -434,6 +434,7 @@ function route() {
       onclick: () => go(id),
     }, label)));
   clearTimers();
+  document.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
   state.reloadNotice = null;
   every(10000, refreshHeader);
   every(1000, tick);
@@ -753,6 +754,7 @@ function stats(view) {
     const signature = JSON.stringify({ ...data, report: data.report && { ...data.report, since: null } });
     if (signature === drawn) return;
     drawn = signature;
+    body.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
     rerender(body, statsContent(data));
   };
   drawRanges();
@@ -782,6 +784,9 @@ function statsContent(data) {
     ["Cache read", "num"], ["Cache write", "num"], ["Cache hit", "num"], ["Speed", "num"]];
   return [
     cards,
+    report.series.length
+      ? [h("h3", null, `Over time, per ${BUCKET_WORDS[report.bucket] || report.bucket}`), statsCharts(report), seriesTable(report)]
+      : null,
     h("h3", null, "By model"),
     table(headers("Model"), modelRows, { empty: "No request in this range." }),
     h("h3", null, "By day (UTC)"),
@@ -808,6 +813,317 @@ function statsRow(row, first) {
     h("td", { class: "num" }, fmt.int(row.cache_creation_tokens)),
     h("td", { class: "num" }, fmt.pct(row.cache_hit_rate)),
     h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second)));
+}
+
+// ---------------------------------------------------------------- charts
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const PLOT_HEIGHT = 140;
+const BUCKET_WORDS = { "1h": "hour", "6h": "6 hours", "1d": "day (UTC)" };
+
+/// Charts draw at their card's width, and again when it changes.
+const chartObserver = new ResizeObserver((entries) => {
+  for (const entry of entries) {
+    if (entry.target.redraw) entry.target.redraw();
+  }
+});
+
+function svg(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value !== null && value !== undefined) el.setAttribute(key, String(value));
+  }
+  return el;
+}
+
+function present(value) {
+  return value !== null && value !== undefined;
+}
+
+const axisFormat = {
+  count: (v) => Number(v).toLocaleString(),
+  compact: (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(v >= 1e4 ? 0 : 1)}K` : String(Math.round(v))),
+  ms: (v) => (v >= 1000 ? `${(v / 1000).toFixed(v % 1000 ? 1 : 0)} s` : `${Math.round(v)} ms`),
+  rate: (v) => (v < 10 && v % 1 ? v.toFixed(1) : String(Math.round(v))),
+};
+
+/// Four ticks or so on clean numbers from zero.
+function niceScale(max, integer) {
+  if (!(max > 0)) return integer ? { top: 4, step: 1 } : { top: 1, step: 0.25 };
+  const rough = max / 4;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const multiples = integer ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10];
+  let step = multiples.map((m) => m * power).find((candidate) => candidate >= rough);
+  if (integer) step = Math.max(1, Math.round(step));
+  return { top: Math.ceil(max / step) * step, step };
+}
+
+/// A bucket as an axis label, or with its span for a readout. Days are UTC
+/// dates, as the statistics files are; hours are the viewer's local time.
+function bucketLabel(key, bucket, long) {
+  const start = new Date(key);
+  const day = (d, options = {}) => d.toLocaleDateString([], { month: "short", day: "numeric", ...options });
+  const time = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const hour = (d) => d.toLocaleTimeString([], { hour: "numeric" });
+  if (bucket === "1d") return `${day(start, { timeZone: "UTC" })}${long ? " (UTC)" : ""}`;
+  const hours = bucket === "6h" ? 6 : 1;
+  const end = new Date(start.getTime() + hours * 3600 * 1000);
+  if (!long) return bucket === "6h" ? `${day(start)} ${hour(start)}` : hour(start);
+  return `${day(start)} ${time(start)}–${time(end)}`;
+}
+
+const measuring = document.createElement("canvas").getContext("2d");
+
+/// Rendered width of axis text, so labels are placed by what they occupy.
+function textWidth(text, font) {
+  measuring.font = font;
+  return measuring.measureText(text).width;
+}
+
+function columnPath(x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height);
+  return `M${x},${y + height}V${y + r}Q${x},${y} ${x + r},${y}H${x + width - r}Q${x + width},${y} ${x + width},${y + r}V${y + height}Z`;
+}
+
+function statsCharts(report) {
+  const rows = report.series;
+  const keys = rows.map((row) => row.key);
+  const bucket = report.bucket;
+  return h("div", { class: "charts" },
+    chart({
+      title: "Requests",
+      kind: "bars",
+      integer: true,
+      axis: axisFormat.count,
+      format: fmt.int,
+      keys,
+      bucket,
+      series: [
+        { label: "OK", cls: "s1", values: rows.map((row) => row.requests - row.errors) },
+        { label: "Errors", cls: "crit", values: rows.map((row) => row.errors) },
+      ],
+      extra: (i) => (rows[i].disconnects ? [["client left", fmt.int(rows[i].disconnects)]] : []),
+    }),
+    chart({
+      title: "Tokens",
+      kind: "bars",
+      integer: true,
+      axis: axisFormat.compact,
+      format: fmt.int,
+      keys,
+      bucket,
+      series: [
+        { label: "Prompt", cls: "s1", values: rows.map((row) => row.input_tokens + row.cache_creation_tokens) },
+        { label: "Prompt from cache", cls: "s2", values: rows.map((row) => row.cache_read_tokens) },
+        { label: "Output", cls: "s3", values: rows.map((row) => row.output_tokens) },
+      ],
+    }),
+    chart({
+      title: "Time to first byte",
+      kind: "lines",
+      axis: axisFormat.ms,
+      format: fmt.ms,
+      keys,
+      bucket,
+      series: [
+        { label: "p50", cls: "s1", values: rows.map((row) => row.ttfb_p50_ms) },
+        { label: "p95", cls: "s2", values: rows.map((row) => row.ttfb_p95_ms) },
+      ],
+    }),
+    chart({
+      title: "Output speed",
+      subtitle: "tokens per second of streamed answers",
+      kind: "lines",
+      axis: axisFormat.rate,
+      format: fmt.rate,
+      keys,
+      bucket,
+      series: [{ label: "tok/s", cls: "s1", values: rows.map((row) => row.output_tokens_per_second) }],
+    }));
+}
+
+function chart(spec) {
+  const legend = spec.series.length > 1
+    ? h("span", { class: "legend" }, spec.series.map((series) =>
+      h("span", null, h("span", { class: `legend-key ${spec.kind === "lines" ? "line" : ""} bg-${series.cls}` }), series.label)))
+    : h("span", { class: "legend" }, spec.subtitle || "");
+  const plot = h("div", { class: "plot" });
+  const tip = h("div", { class: "chart-tip", hidden: true, role: "status" });
+  const figure = h("figure", { class: "chart" }, h("figcaption", null, h("span", null, spec.title), legend), plot, tip);
+  let width = 0;
+  plot.redraw = () => {
+    const next = Math.floor(plot.clientWidth);
+    if (!next || next === width) return;
+    width = next;
+    drawChart(plot, tip, spec, width);
+  };
+  chartObserver.observe(plot);
+  return figure;
+}
+
+function drawChart(plot, tip, spec, width) {
+  const n = spec.keys.length;
+  const stackTotals = spec.keys.map((_, i) => spec.series.reduce((sum, series) => sum + (series.values[i] || 0), 0));
+  const samples = spec.series.flatMap((series) => series.values.filter(present));
+  const max = spec.kind === "bars" ? Math.max(0, ...stackTotals) : Math.max(0, ...samples);
+  const { top, step } = niceScale(max, spec.integer);
+  const ticks = [];
+  for (let v = 0; v <= top + step / 2; v += step) ticks.push(v);
+  const font = `11px ${getComputedStyle(plot).fontFamily}`;
+  const left = Math.ceil(Math.max(...ticks.map((v) => textWidth(spec.axis(v), font)))) + 10;
+  const right = 10;
+  const above = 8;
+  const below = 22;
+  const plotWidth = Math.max(10, width - left - right);
+  const height = above + PLOT_HEIGHT + below;
+  const band = plotWidth / n;
+  const y = (v) => above + PLOT_HEIGHT - (v / top) * PLOT_HEIGHT;
+  const cx = (i) => left + band * i + band / 2;
+
+  const root = svg("svg", {
+    width,
+    height,
+    viewBox: `0 0 ${width} ${height}`,
+    role: "img",
+    tabindex: 0,
+    "aria-label": `${spec.title} per ${BUCKET_WORDS[spec.bucket] || spec.bucket}. Arrow keys read each point; the table below has every value.`,
+  });
+
+  const grid = svg("g", { class: "grid" });
+  const axis = svg("g", { class: "axis" });
+  for (const v of ticks) {
+    const ty = Math.round(y(v)) + 0.5;
+    grid.append(svg("line", { x1: left, x2: left + plotWidth, y1: ty, y2: ty }));
+    const label = svg("text", { x: left - 6, y: ty + 3.5, "text-anchor": "end" });
+    label.textContent = spec.axis(v);
+    axis.append(label);
+  }
+  // Time labels at a regular stride from the latest bucket, each kept inside
+  // the chart and clear of its right-hand neighbour; the latest has none.
+  const labels = spec.keys.map((key) => bucketLabel(key, spec.bucket, false));
+  const widths = labels.map((text) => textWidth(text, font));
+  const stride = Math.max(1, Math.ceil((Math.max(...widths) + 12) / band));
+  let room = width + 8;
+  for (let i = n - 1; i >= 0; i -= stride) {
+    const x = Math.max(0, Math.min(cx(i) - widths[i] / 2, width - widths[i]));
+    if (x + widths[i] > room - 8) continue;
+    const label = svg("text", { x: x.toFixed(1), y: height - 6, "text-anchor": "start" });
+    label.textContent = labels[i];
+    axis.append(label);
+    room = x;
+  }
+
+  const hover = svg("rect", { class: "hover-band", x: 0, y: above, width: Math.max(1, band), height: PLOT_HEIGHT, visibility: "hidden" });
+  const marks = svg("g");
+  if (spec.kind === "bars") {
+    const barWidth = Math.max(1, Math.min(24, band - 2));
+    spec.keys.forEach((_, i) => {
+      const parts = spec.series.map((series) => [series, series.values[i] || 0]).filter(([, v]) => v > 0);
+      let base = y(0);
+      parts.forEach(([series, v], j) => {
+        const gap = j > 0 ? 2 : 0;
+        const size = Math.max(1, (v / top) * PLOT_HEIGHT - gap);
+        const yTop = base - gap - size;
+        const x = cx(i) - barWidth / 2;
+        marks.append(j === parts.length - 1
+          ? svg("path", { class: `fill-${series.cls}`, d: columnPath(x, yTop, barWidth, size, 4) })
+          : svg("rect", { class: `fill-${series.cls}`, x, y: yTop, width: barWidth, height: size }));
+        base = yTop;
+      });
+    });
+  } else {
+    for (const series of spec.series) {
+      let d = "";
+      series.values.forEach((v, i) => {
+        if (!present(v)) return;
+        const joined = i > 0 && present(series.values[i - 1]);
+        d += `${joined ? "L" : "M"}${cx(i).toFixed(1)},${y(v).toFixed(1)}`;
+        if (!joined && !(i < n - 1 && present(series.values[i + 1]))) {
+          marks.append(svg("circle", { class: `dot fill-${series.cls}`, cx: cx(i), cy: y(v), r: 4 }));
+        }
+      });
+      if (d) marks.prepend(svg("path", { class: `line stroke-${series.cls}`, d }));
+    }
+  }
+
+  const cross = svg("line", { class: "crosshair", x1: 0, x2: 0, y1: above, y2: above + PLOT_HEIGHT, visibility: "hidden" });
+  const pointer = svg("g");
+  root.append(grid, hover, marks, cross, pointer, axis);
+  if (!stackTotals.some((total) => total > 0) && !samples.length) {
+    const empty = svg("text", { class: "empty", x: left + plotWidth / 2, y: above + PLOT_HEIGHT / 2, "text-anchor": "middle" });
+    empty.textContent = spec.kind === "bars" ? "No requests in this range" : "No samples in this range";
+    root.append(empty);
+  }
+
+  let active = null;
+  const show = (i) => {
+    active = i;
+    if (spec.kind === "bars") {
+      hover.setAttribute("x", left + band * i);
+      hover.setAttribute("visibility", "visible");
+    } else {
+      cross.setAttribute("x1", cx(i));
+      cross.setAttribute("x2", cx(i));
+      cross.setAttribute("visibility", "visible");
+      pointer.replaceChildren(...spec.series.filter((series) => present(series.values[i])).map((series) =>
+        svg("circle", { class: `dot fill-${series.cls}`, cx: cx(i), cy: y(series.values[i]), r: 4 })));
+    }
+    const rows = [...spec.series].reverse().map((series) => h("div", { class: "row" },
+      h("span", { class: `tip-key bg-${series.cls}` }),
+      h("strong", null, present(series.values[i]) ? series.format ? series.format(series.values[i]) : spec.format(series.values[i]) : "–"),
+      series.label));
+    const extra = spec.extra ? spec.extra(i).map(([label, value]) =>
+      h("div", { class: "row" }, h("span", { class: "tip-key" }), h("strong", null, value), label)) : [];
+    replace(tip, h("div", { class: "when" }, bucketLabel(spec.keys[i], spec.bucket, true)), rows, extra);
+    tip.hidden = false;
+    const figureWidth = plot.parentElement.clientWidth;
+    let x = plot.offsetLeft + cx(i) + 12;
+    if (x + tip.offsetWidth > figureWidth) x = plot.offsetLeft + cx(i) - 12 - tip.offsetWidth;
+    tip.style.left = `${Math.max(0, x)}px`;
+    tip.style.top = `${plot.offsetTop + above}px`;
+  };
+  const hide = () => {
+    active = null;
+    hover.setAttribute("visibility", "hidden");
+    cross.setAttribute("visibility", "hidden");
+    pointer.replaceChildren();
+    tip.hidden = true;
+  };
+
+  const hits = svg("g");
+  spec.keys.forEach((_, i) => {
+    const hit = svg("rect", { class: "hit", x: left + band * i, y: 0, width: Math.max(1, band), height: above + PLOT_HEIGHT, "data-bucket": i });
+    hit.addEventListener("pointerenter", () => show(i));
+    hits.append(hit);
+  });
+  root.append(hits);
+  root.addEventListener("pointerleave", hide);
+  root.addEventListener("focus", () => show(active === null ? n - 1 : active));
+  root.addEventListener("blur", hide);
+  root.addEventListener("keydown", (event) => {
+    const moves = { ArrowLeft: -1, ArrowRight: 1, Home: -n, End: n };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    show(Math.min(n - 1, Math.max(0, (active === null ? n - 1 : active) + moves[event.key])));
+  });
+  tip.hidden = true;
+  plot.replaceChildren(root);
+}
+
+/// Every charted value, for reading without hovering.
+function seriesTable(report) {
+  return h("details", { class: "chart-table" },
+    h("summary", null, "Chart data as a table"),
+    table(["When", ["Requests", "num"], ["Errors", "num"], ["Prompt", "num"], ["From cache", "num"], ["Output", "num"], ["First byte p50 / p95", "num"], ["Speed", "num"]],
+      [...report.series].reverse().map((row) => h("tr", null,
+        h("td", { class: "nowrap" }, bucketLabel(row.key, report.bucket, true)),
+        h("td", { class: "num" }, fmt.int(row.requests)),
+        h("td", { class: "num" }, fmt.int(row.errors)),
+        h("td", { class: "num" }, fmt.int(row.input_tokens + row.cache_creation_tokens)),
+        h("td", { class: "num" }, fmt.int(row.cache_read_tokens)),
+        h("td", { class: "num" }, fmt.int(row.output_tokens)),
+        h("td", { class: "num" }, `${fmt.ms(row.ttfb_p50_ms)} / ${fmt.ms(row.ttfb_p95_ms)}`),
+        h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second))))));
 }
 
 // ---------------------------------------------------------------- tools
