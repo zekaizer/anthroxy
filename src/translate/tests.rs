@@ -117,7 +117,8 @@ fn request_round_trips_through_the_ir() {
         "metadata": {"user_id": "u"}
     });
     let out: Value =
-        serde_json::from_slice(&request(&serde_json::to_vec(&body).unwrap()).unwrap()).unwrap();
+        serde_json::from_slice(&request(&serde_json::to_vec(&body).unwrap(), "m").unwrap())
+            .unwrap();
     assert_eq!(
         out,
         json!({
@@ -129,7 +130,7 @@ fn request_round_trips_through_the_ir() {
             "stream_options": {"include_usage": true}
         })
     );
-    assert_eq!(request(b"[]"), Err(DecodeError::NotAnObject));
+    assert_eq!(request(b"[]", "m"), Err(DecodeError::NotAnObject));
 }
 
 #[test]

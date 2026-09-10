@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use crate::ir::{Image, Part, Request, RequestMessage, Role, Tool, ToolChoice};
+use crate::ir::{Image, Part, Request, RequestMessage, Role, TEXT_SEPARATOR, Tool, ToolChoice};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DecodeError {
@@ -28,9 +28,6 @@ pub enum DecodeError {
     },
 }
 
-/// Parts of a message are joined with a blank line when flattened to text.
-const TEXT_SEPARATOR: &str = "\n\n";
-
 pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
     let root: Value = serde_json::from_slice(body).map_err(|_| DecodeError::NotAnObject)?;
     let root = root.as_object().ok_or(DecodeError::NotAnObject)?;
@@ -48,34 +45,27 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
         .map(|(index, message)| decode_message(index, message))
         .collect::<Result<Vec<_>, _>>()?;
     let system = match root.get("system") {
-        None | Some(Value::Null) => None,
         Some(Value::String(text)) => Some(text.clone()),
-        Some(Value::Array(blocks)) => Some(
-            blocks
+        _ => Some(
+            optional_array(root, "system")?
                 .iter()
                 .map(|block| field_str(block, "text"))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(TEXT_SEPARATOR),
         ),
-        Some(_) => return Err(DecodeError::Field("system")),
     }
     .filter(|text| !text.is_empty());
-    let tools = match root.get("tools") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(tools)) => tools
-            .iter()
-            .map(decode_tool)
-            .collect::<Result<Vec<_>, _>>()?,
-        Some(_) => return Err(DecodeError::Field("tools")),
-    };
-    let parallel_tool_calls = root
-        .get("tool_choice")
+    let tools = optional_array(root, "tools")?
+        .iter()
+        .map(decode_tool)
+        .collect::<Result<Vec<_>, _>>()?;
+    let choice = root.get("tool_choice").filter(|c| !c.is_null());
+    let disable_parallel_tool_calls = choice
         .and_then(|c| c.get("disable_parallel_tool_use"))
         .and_then(Value::as_bool)
-        .filter(|&disabled| disabled)
-        .map(|_| false);
-    let tool_choice = match root.get("tool_choice") {
-        None | Some(Value::Null) => None,
+        .unwrap_or(false);
+    let tool_choice = match choice {
+        None => None,
         Some(choice) => Some(match field_str(choice, "type")? {
             "auto" => ToolChoice::Auto,
             "any" => ToolChoice::Required,
@@ -84,18 +74,14 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
             _ => return Err(DecodeError::Field("tool_choice.type")),
         }),
     };
-    let stop = match root.get("stop_sequences") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| {
-                item.as_str()
-                    .map(str::to_owned)
-                    .ok_or(DecodeError::Field("stop_sequences"))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        Some(_) => return Err(DecodeError::Field("stop_sequences")),
-    };
+    let stop = optional_array(root, "stop_sequences")?
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::to_owned)
+                .ok_or(DecodeError::Field("stop_sequences"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Request {
         model,
         system,
@@ -120,8 +106,20 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
                 "max" => "high".to_owned(),
                 other => other.to_owned(),
             }),
-        parallel_tool_calls,
+        disable_parallel_tool_calls,
     })
+}
+
+/// An array field that may be absent (then empty), but not of another type.
+fn optional_array<'a>(
+    root: &'a serde_json::Map<String, Value>,
+    field: &'static str,
+) -> Result<&'a [Value], DecodeError> {
+    match root.get(field) {
+        None | Some(Value::Null) => Ok(&[]),
+        Some(Value::Array(items)) => Ok(items),
+        Some(_) => Err(DecodeError::Field(field)),
+    }
 }
 
 /// A field that may be absent, but not of another type: a value the
@@ -138,7 +136,8 @@ fn optional<T>(
 }
 
 fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, DecodeError> {
-    let role = match field_str(message, "role")? {
+    let role_name = field_str(message, "role")?;
+    let role = match role_name {
         "user" => Role::User,
         "assistant" => Role::Assistant,
         "system" => Role::System,
@@ -157,24 +156,26 @@ fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, Decod
             .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(DecodeError::Field("content")),
     };
-    for part in &parts {
-        let misplaced = match (role, part) {
-            (Role::User, Part::ToolUse { .. }) => Some("tool_use"),
-            (Role::Assistant, Part::ToolResult { .. }) => Some("tool_result"),
-            (Role::Assistant | Role::System, Part::Image { .. }) => Some("image"),
-            (Role::System, Part::ToolUse { .. }) => Some("tool_use"),
-            (Role::System, Part::ToolResult { .. }) => Some("tool_result"),
-            _ => None,
-        };
-        if let Some(block) = misplaced {
-            return Err(DecodeError::WrongRole {
-                index,
-                block: block.to_owned(),
-                role: field_str(message, "role")?.to_owned(),
-            });
-        }
+    if let Some(part) = parts.iter().find(|part| !allowed(role, part)) {
+        return Err(DecodeError::WrongRole {
+            index,
+            block: part.kind().to_owned(),
+            role: role_name.to_owned(),
+        });
     }
     Ok(RequestMessage { role, parts })
+}
+
+/// What each role may carry, as the Messages API defines it.
+fn allowed(role: Role, part: &Part) -> bool {
+    matches!(
+        (role, part),
+        (
+            Role::User,
+            Part::Text(_) | Part::Image { .. } | Part::ToolResult { .. }
+        ) | (Role::Assistant, Part::Text(_) | Part::ToolUse { .. })
+            | (Role::System, Part::Text(_))
+    )
 }
 
 /// `None` for blocks that are dropped on purpose (thinking).
@@ -266,10 +267,10 @@ fn tool_result_content(
                     Some(Part::Image { media_type, data }) => {
                         images.push(Image { media_type, data })
                     }
-                    Some(_) => {
+                    Some(part) => {
                         return Err(DecodeError::UnsupportedBlock {
                             index,
-                            block: field_str(block, "type")?.to_owned(),
+                            block: part.kind().to_owned(),
                         });
                     }
                     None => {}
@@ -341,7 +342,7 @@ mod tests {
                 stream: false,
                 user: None,
                 reasoning_effort: None,
-                parallel_tool_calls: None,
+                disable_parallel_tool_calls: false,
             }
         );
     }
@@ -664,14 +665,14 @@ mod tests {
         let request = decode_json(v).unwrap();
         assert_eq!(request.user.as_deref(), Some("{\"device_id\":\"d\"}"));
         assert_eq!(request.reasoning_effort.as_deref(), Some("high"));
-        assert_eq!(request.parallel_tool_calls, Some(false));
+        assert!(request.disable_parallel_tool_calls);
 
         let mut v = base();
         v["output_config"] = json!({"effort": "low"});
         v["tool_choice"] = json!({"type": "auto", "disable_parallel_tool_use": false});
         let request = decode_json(v).unwrap();
         assert_eq!(request.reasoning_effort.as_deref(), Some("low"));
-        assert_eq!(request.parallel_tool_calls, None);
+        assert!(!request.disable_parallel_tool_calls);
         assert_eq!(decode_json(base()).unwrap().user, None);
     }
 

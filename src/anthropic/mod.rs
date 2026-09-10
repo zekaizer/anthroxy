@@ -8,7 +8,6 @@ mod message;
 mod models;
 mod request;
 mod stream;
-mod thinking;
 
 #[cfg(test)]
 mod tests;
@@ -19,4 +18,3 @@ pub use message::encode as encode_message;
 pub use models::{ModelList, ModelObject};
 pub use request::{PeekError, RequestPeek, peek, rewrite};
 pub use stream::StreamEncoder;
-pub use thinking::strip_unsigned as strip_unsigned_thinking;

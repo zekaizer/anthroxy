@@ -1,5 +1,6 @@
 use super::*;
 use http::StatusCode;
+use serde_json::{Value, json};
 
 #[test]
 fn error_response_serializes_to_anthropic_shape() {
@@ -70,7 +71,7 @@ fn peek_rejects_missing_model_and_non_json() {
 #[test]
 fn rewrite_of_model_preserves_everything_else_in_order() {
     let body = br#"{"model":"exposed","max_tokens":1024,"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"x"}],"metadata":{"user_id":"u"},"temperature":1.0,"big":12345678901234567890}"#;
-    let out = rewrite(body, Some("upstream-name"), &[]).unwrap();
+    let out = rewrite(body, Some("upstream-name"), &[], false).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert_eq!(
         text,
@@ -85,13 +86,13 @@ fn rewrite_drops_paths_and_keeps_order() {
         "context_management".to_owned(),
         "metadata.user_id".to_owned(),
     ];
-    let out = rewrite(body, None, &drop).expect("something was dropped");
+    let out = rewrite(body, None, &drop, false).expect("something was dropped");
     assert_eq!(
         std::str::from_utf8(&out).unwrap(),
         r#"{"model":"m","metadata":{"keep":1},"messages":[]}"#
     );
 
-    let out = rewrite(body, Some("up"), &drop).unwrap();
+    let out = rewrite(body, Some("up"), &drop, false).unwrap();
     assert_eq!(
         std::str::from_utf8(&out).unwrap(),
         r#"{"model":"up","metadata":{"keep":1},"messages":[]}"#
@@ -107,9 +108,9 @@ fn rewrite_is_a_no_op_when_nothing_matches() {
         "messages.a".to_owned(),
         "model.x".to_owned(),
     ];
-    assert_eq!(rewrite(body, None, &drop), None);
-    assert_eq!(rewrite(body, None, &[]), None);
-    let out = rewrite(body, Some("up"), &drop).unwrap();
+    assert_eq!(rewrite(body, None, &drop, false), None);
+    assert_eq!(rewrite(body, None, &[], false), None);
+    let out = rewrite(body, Some("up"), &drop, false).unwrap();
     assert_eq!(
         std::str::from_utf8(&out).unwrap(),
         r#"{"model":"up","messages":[{"a":1}],"metadata":{"k":1}}"#
@@ -137,4 +138,84 @@ fn error_type_from_status_follows_the_api_table() {
             "{status}"
         );
     }
+}
+
+// ---- unsigned thinking blocks (rewrite)
+
+fn run(body: Value) -> Option<Value> {
+    rewrite(&serde_json::to_vec(&body).unwrap(), None, &[], true)
+        .map(|b| serde_json::from_slice(&b).unwrap())
+}
+
+#[test]
+fn unsigned_blocks_go_and_signed_ones_stay() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "router made"},
+            {"type": "thinking", "thinking": "anthropic made", "signature": "sig"},
+            {"type": "redacted_thinking", "data": "xx"},
+            {"type": "text", "text": "hello"}
+        ]},
+        {"role": "user", "content": [{"type": "text", "text": "more"}]}
+    ]});
+    assert_eq!(
+        run(body).unwrap()["messages"],
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "anthropic made", "signature": "sig"},
+                {"type": "redacted_thinking", "data": "xx"},
+                {"type": "text", "text": "hello"}
+            ]},
+            {"role": "user", "content": [{"type": "text", "text": "more"}]}
+        ])
+    );
+}
+
+#[test]
+fn an_empty_signature_is_what_claude_code_stores_for_router_blocks() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "router made", "signature": ""},
+            {"type": "text", "text": "hello"}
+        ]}
+    ]});
+    assert_eq!(
+        run(body).unwrap()["messages"][0]["content"],
+        json!([{"type": "text", "text": "hello"}])
+    );
+}
+
+#[test]
+fn an_assistant_turn_left_empty_is_dropped() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "only"}]},
+        {"role": "user", "content": "again"}
+    ]});
+    assert_eq!(
+        run(body).unwrap()["messages"],
+        json!([{"role": "user", "content": "hi"}, {"role": "user", "content": "again"}])
+    );
+}
+
+#[test]
+fn untouched_bodies_are_not_rewritten() {
+    assert_eq!(
+        run(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]})),
+        None
+    );
+    assert_eq!(
+        run(
+            json!({"model": "m", "messages": [{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "t", "signature": "s"}]}]})
+        ),
+        None
+    );
+    assert_eq!(
+        run(json!({"model": "m", "messages": [{"role": "user", "content": "the word thinking"}]})),
+        None
+    );
+    assert_eq!(rewrite(b"{}", None, &[], true), None);
 }

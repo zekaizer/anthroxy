@@ -28,13 +28,26 @@ pub enum Event {
     Done,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum StopReason {
+    #[default]
     EndTurn,
     MaxTokens,
     ToolUse,
     /// The backend declined to continue (content filter).
     Refusal,
+}
+
+impl StopReason {
+    /// The reason a response ends with: a plain end of turn becomes
+    /// `ToolUse` when a tool was called, since clients continue the tool
+    /// loop on that value; anything else stands.
+    pub fn resolve(self, called_tools: bool) -> Self {
+        match self {
+            StopReason::EndTurn if called_tools => StopReason::ToolUse,
+            other => other,
+        }
+    }
 }
 
 /// Token counts in the Anthropic sense: `input_tokens` excludes what was

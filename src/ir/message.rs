@@ -27,9 +27,8 @@ pub enum Block {
 impl Message {
     /// Folds `events` with the block rules the stream encoder applies:
     /// consecutive deltas of one kind share a block, a different kind or a
-    /// `Finish` closes it, empty deltas and a second `Start` are ignored,
-    /// tool calls are keyed by their index. `Err` carries the message of an
-    /// `Event::Error`.
+    /// `Finish` closes it, tool calls are keyed by their index. `Err`
+    /// carries the message of an `Event::Error`.
     pub fn from_events(events: impl IntoIterator<Item = Event>) -> Result<Self, String> {
         let mut message = Self {
             id: String::new(),
@@ -39,23 +38,18 @@ impl Message {
             usage: Usage::default(),
         };
         let mut tools: BTreeMap<u32, usize> = BTreeMap::new();
-        let mut finish = None;
-        let mut started = false;
         // Whether the last block still accepts deltas of its own kind.
         let mut open = false;
         for event in events {
             match event {
                 Event::Start { id, model } => {
-                    if !started {
-                        started = true;
+                    if message.id.is_empty() && message.model.is_empty() {
                         message.id = id;
                         message.model = model;
                     }
                 }
+                Event::ThinkingDelta(text) | Event::TextDelta(text) if text.is_empty() => {}
                 Event::ThinkingDelta(text) => {
-                    if text.is_empty() {
-                        continue;
-                    }
                     match message.blocks.last_mut() {
                         Some(Block::Thinking(existing)) if open => existing.push_str(&text),
                         _ => message.blocks.push(Block::Thinking(text)),
@@ -63,9 +57,6 @@ impl Message {
                     open = true;
                 }
                 Event::TextDelta(text) => {
-                    if text.is_empty() {
-                        continue;
-                    }
                     match message.blocks.last_mut() {
                         Some(Block::Text(existing)) if open => existing.push_str(&text),
                         _ => message.blocks.push(Block::Text(text)),
@@ -89,7 +80,7 @@ impl Message {
                     }
                 }
                 Event::Finish(reason) => {
-                    finish = Some(reason);
+                    message.stop_reason = reason;
                     open = false;
                 }
                 Event::Usage(usage) => message.usage = usage,
@@ -97,11 +88,7 @@ impl Message {
                 Event::Done => break,
             }
         }
-        message.stop_reason = match finish {
-            Some(StopReason::EndTurn) | None if !tools.is_empty() => StopReason::ToolUse,
-            Some(reason) => reason,
-            None => StopReason::EndTurn,
-        };
+        message.stop_reason = message.stop_reason.resolve(!tools.is_empty());
         Ok(message)
     }
 }

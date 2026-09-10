@@ -12,4 +12,6 @@ mod tests;
 
 pub use event::{Event, StopReason, Usage};
 pub use message::{Block, Message};
-pub use request::{Image, Message as RequestMessage, Part, Request, Role, Tool, ToolChoice};
+pub use request::{
+    Image, Message as RequestMessage, Part, Request, Role, TEXT_SEPARATOR, Tool, ToolChoice,
+};

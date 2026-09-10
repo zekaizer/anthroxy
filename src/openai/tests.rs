@@ -17,7 +17,7 @@ fn request(messages: Vec<RequestMessage>) -> Request {
         stream: false,
         user: None,
         reasoning_effort: None,
-        parallel_tool_calls: None,
+        disable_parallel_tool_calls: false,
     }
 }
 
@@ -795,7 +795,7 @@ fn user_effort_and_parallel_tool_calls_are_forwarded() {
     let mut r = request(vec![user(vec![Part::Text("hi".into())])]);
     r.user = Some("device-1".into());
     r.reasoning_effort = Some("high".into());
-    r.parallel_tool_calls = Some(false);
+    r.disable_parallel_tool_calls = true;
     let body = encoded(&r);
     assert_eq!(body["user"], json!("device-1"));
     assert_eq!(body["reasoning_effort"], json!("high"));

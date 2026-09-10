@@ -65,8 +65,12 @@ async fn handle(
         body_bytes = body.len(),
         "routed"
     );
-    let rename = (requested_model != route.upstream_model).then_some(route.upstream_model.as_str());
-    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields) {
+    // The translated body names the upstream model itself; only a relayed
+    // body needs the rename here.
+    let anthropic_kind = backend.kind == BackendKind::Anthropic;
+    let rename = (anthropic_kind && requested_model != route.upstream_model)
+        .then_some(route.upstream_model.as_str());
+    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields, anthropic_kind) {
         Some(rewritten) => Bytes::from(rewritten),
         None => body,
     };
@@ -77,14 +81,10 @@ async fn handle(
         .map(|p| p.as_str())
         .unwrap_or("/");
     let (path_and_query, body) = match backend.kind {
-        BackendKind::Anthropic => (
-            client_path,
-            match anthropic::strip_unsigned_thinking(&body) {
-                Some(stripped) => Bytes::from(stripped),
-                None => body,
-            },
-        ),
-        BackendKind::OpenAi => openai::prepare(&body, client_path, &backend.name)?,
+        BackendKind::Anthropic => (client_path, body),
+        BackendKind::OpenAi => {
+            openai::prepare(&body, client_path, &backend.name, &route.upstream_model)?
+        }
     };
     let headers = upstream_headers(&parts.headers, backend);
     let recorder = state.body_log.as_ref().map(|log| {

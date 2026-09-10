@@ -55,8 +55,8 @@ pub fn encode(request: &Request) -> Vec<u8> {
     if !request.stop.is_empty() {
         body.insert("stop".into(), json!(request.stop));
     }
-    if let Some(parallel) = request.parallel_tool_calls {
-        body.insert("parallel_tool_calls".into(), json!(parallel));
+    if request.disable_parallel_tool_calls {
+        body.insert("parallel_tool_calls".into(), json!(false));
     }
     if let Some(effort) = &request.reasoning_effort {
         body.insert("reasoning_effort".into(), json!(effort));

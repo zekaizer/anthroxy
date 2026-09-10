@@ -21,6 +21,7 @@ pub fn prepare(
     body: &[u8],
     client_path: &str,
     backend: &str,
+    upstream_model: &str,
 ) -> Result<(&'static str, Bytes), RouterError> {
     let path = client_path.split('?').next().unwrap_or(client_path);
     if path != "/v1/messages" {
@@ -29,10 +30,11 @@ pub fn prepare(
             path: path.to_owned(),
         });
     }
-    let translated = translate::request(body).map_err(|source| RouterError::Translate {
-        backend: backend.to_owned(),
-        source,
-    })?;
+    let translated =
+        translate::request(body, upstream_model).map_err(|source| RouterError::Translate {
+            backend: backend.to_owned(),
+            source,
+        })?;
     Ok((translate::CHAT_COMPLETIONS_PATH, Bytes::from(translated)))
 }
 

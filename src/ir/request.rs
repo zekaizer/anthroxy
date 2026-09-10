@@ -1,3 +1,6 @@
+/// Text parts of one message are joined with a blank line when flattened.
+pub const TEXT_SEPARATOR: &str = "\n\n";
+
 /// A chat request. Only what both APIs can express; anything else is dropped
 /// or rejected by the decoder that produced this.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,8 +19,8 @@ pub struct Request {
     pub user: Option<String>,
     /// `low`, `medium` or `high`.
     pub reasoning_effort: Option<String>,
-    /// `Some(false)` when the caller forbids parallel tool calls.
-    pub parallel_tool_calls: Option<bool>,
+    /// The caller forbids parallel tool calls.
+    pub disable_parallel_tool_calls: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +64,18 @@ pub struct Image {
     pub media_type: String,
     /// The base64 payload as received.
     pub data: String,
+}
+
+impl Part {
+    /// The block type this part came from, for messages naming it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Part::Text(_) => "text",
+            Part::Image { .. } => "image",
+            Part::ToolUse { .. } => "tool_use",
+            Part::ToolResult { .. } => "tool_result",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
