@@ -11,6 +11,7 @@ mod env;
 mod error;
 pub mod example;
 mod schema;
+pub mod snippet;
 mod validate;
 
 #[cfg(test)]

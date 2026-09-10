@@ -4,6 +4,7 @@
 //! All behaviour lives here. `src/main.rs` only parses the command line and
 //! calls into this crate.
 
+pub mod activity;
 pub mod anthropic;
 pub mod build_info;
 pub mod cli;
