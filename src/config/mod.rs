@@ -5,6 +5,7 @@
 //! yields a literal `${NAME}`. Keys and comments are never expanded.
 
 mod byte_size;
+pub mod client_env;
 mod credential_header;
 mod env;
 mod error;
