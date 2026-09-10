@@ -708,6 +708,48 @@ async fn body_log_records_the_openai_request() {
 }
 
 #[tokio::test]
+async fn client_disconnect_mid_stream_leaves_the_router_healthy() {
+    let upstream = MockUpstream::start(|_| {
+        let mut frames = vec![chunk(json!({"role": "assistant", "content": "a"}), None)];
+        frames.extend((0..20).map(|i| chunk(json!({"content": format!("{i}")}), None)));
+        frames.extend(usage_and_done(1, 21));
+        sse_response(frames, Duration::from_millis(50))
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(true))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = res.bytes_stream();
+    stream.next().await.unwrap().unwrap();
+    drop(stream);
+
+    let res = router
+        .post("/v1/messages", &claude_code_request(true))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let text = res.text().await.unwrap();
+    assert_eq!(
+        events(&text).last().map(|(e, _)| e.as_str()),
+        Some("message_stop"),
+        "{text}"
+    );
+    let health: Value = router
+        .get("/healthz")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["status"], "ok");
+}
+
+#[tokio::test]
 async fn anthropic_kind_never_translates() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
