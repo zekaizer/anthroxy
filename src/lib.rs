@@ -13,4 +13,5 @@ pub mod observability;
 pub mod routing;
 pub mod server;
 pub mod service;
+pub mod sse;
 pub mod upstream;
