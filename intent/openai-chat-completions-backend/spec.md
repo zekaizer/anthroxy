@@ -117,12 +117,12 @@ Common premise: WHERE the backend is configured as the OpenAI kind.
   - `GET /v1/models` answers → NFR4 holds (U4)
   - `reasoning_content` in history rejected or ignored → keep R9; required → reverse R9 (U9)
   Second priority.
-- U3. Whether Claude Code calls `count_tokens` in interactive sessions (not seen in a `claude -p` session, E11). Discriminate: one interactive session through `serve --body-dir`.
+- ~~U3~~ (closed: the Claude Code 2.1.267 bundle calls `/v1/messages/count_tokens` in some paths, logs `countTokens API call failed` on any error and falls back to its own estimate; a 501 has a special fallback only under the enterprise gateway credential slot. 404 stands.)
 - U4. Whether the in-house service serves `GET /v1/models`. (bundled: U2)
 - ~~U5~~ (closed: yes, E11)
 - U6. Whether the in-house service accepts `image_url` parts with `data:` URIs. (bundled: U2)
-- U7. Whether Claude Code sends document (PDF) blocks. Discriminate: attach a PDF in an interactive session through `serve --body-dir`.
-- U8. Whether the in-house service accepts file (PDF) parts. (dependent: U7)
+- ~~U7~~ (closed: Read on a PDF sends a `document` block with a base64 `application/pdf` source inside the `tool_result`, E14)
+- U8. Whether the in-house service accepts OpenAI `file` parts. Not needed for correctness: documents are replaced by a note (E14); a `file`-part mapping is a possible later addition for servers that take them.
 - U9. Whether the in-house service rejects, ignores or requires `reasoning_content` in assistant history messages. (bundled: U2)
 
 ## 11. Withdrawn premises
@@ -139,9 +139,10 @@ Risks (accepted in round 4):
 - RISK1 (D2). `thinking` blocks produced by the router carry no signature; a history holding them sent back to an Anthropic backend gets a 400 and Claude Code retries once without them (E10). G1(d) holds; the first request after switching back is sent twice.
 - ~~RISK2~~ (U1 closed by E11; mapping extended with `role: "system"` messages, `output_config` dropped)
 - RISK3 (U2, U4, U6, U9). The in-house service's implementation extent is unverified; see U2 for the per-outcome consequences.
-- RISK4 (U3 → D5). `count_tokens` behaviour on an OpenAI backend is undefined until U3 closes.
+- ~~RISK4~~ (U3 closed; the 404 is tolerated by Claude Code)
 - ~~RISK5~~ (U5 closed; R8 is Must)
-- RISK6 (U7 → U8). PDF parts may need adding to R11.
+- ~~RISK6~~ (U7 closed; documents are noted, not dropped or fatal)
+- E14. On 2026-09-10 Claude Code's Read of a PDF sent a `document` block inside the `tool_result`; the router's 400 ended the turn (`terminal_reason: api_error`). Documents are now replaced by an omission note so the turn continues. A prompt over the model's context window (40k tokens into 32k) came back as LM Studio's 400 relayed as `invalid_request_error` with its message. [this session]
 - E13. Images end to end on 2026-09-10 against LM Studio `gemma-4-e2b-it-qat`: an Anthropic `image` block sent directly, and an image read by Claude Code's Read tool (arrives inside `tool_result`), were both described correctly by the model once tool-result images were carried into the following user message. Usage is reported per turn and aggregated by Claude Code; cache tokens are always 0 and Claude Code assumes a 200k context window for an unknown model. [this session]
 - RISK7 (F3). A streaming request always carries `stream_options.include_usage`; OpenCode never sends it, so the in-house service has not been proven to accept it (LM Studio does, E12). If it answers 400, the error names the backend (R12) and a per-backend switch is the fix.
 
