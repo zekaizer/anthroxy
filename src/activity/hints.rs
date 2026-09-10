@@ -107,8 +107,10 @@ fn rejected_fields(body: &str) -> Vec<String> {
     while let Some(at) = rest.find(marker) {
         let before = &rest[..at];
         let start = before
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
-            .map_or(0, |i| i + 1);
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '.'))
+            .map_or(0, |(at, c)| at + c.len_utf8());
         fields.extend(field_path(&before[start..]));
         rest = &rest[at + marker.len()..];
     }
@@ -286,6 +288,23 @@ drop_fields = ["metadata.user_id", "context_management", "metadata.trace"]"#]
             hints[0].summary.contains("anthroxy credential vllm"),
             "{hints:?}"
         );
+    }
+
+    #[test]
+    fn a_multibyte_character_before_the_field_does_not_break_the_scan() {
+        for body in [
+            "\u{201c}context_management: Extra inputs are not permitted",
+            "\u{fffd}context_management: Extra inputs are not permitted",
+            "\u{d544}\u{b4dc} context_management: Extra inputs are not permitted",
+        ] {
+            let hints = hints(&failure(400, body, &[]));
+            assert_eq!(
+                snippets(&hints),
+                ["[backends.vllm]\ndrop_fields = [\"context_management\"]"],
+                "{body}"
+            );
+        }
+        assert!(hints(&failure(400, "\u{e9}: Extra inputs are not permitted", &[])).is_empty());
     }
 
     #[test]
