@@ -96,10 +96,17 @@ impl Exchange {
     }
 
     /// Response headers arrived from the backend.
-    pub fn responded(&self, status: u16, attempts: u32, latency: Duration) {
+    pub fn responded(
+        &self,
+        status: u16,
+        attempts: u32,
+        credential_refreshed: bool,
+        latency: Duration,
+    ) {
         self.update(|v| {
             v.status = Some(status);
             v.attempts = Some(attempts);
+            v.credential_refreshed = credential_refreshed;
             v.latency_ms = Some(latency.as_millis() as u64);
         });
     }

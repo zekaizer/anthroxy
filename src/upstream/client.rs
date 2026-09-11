@@ -33,6 +33,9 @@ pub struct UpstreamResponse {
     pub response: reqwest::Response,
     /// Attempts made, including the successful one.
     pub attempts: u32,
+    /// The backend rejected the credential, which was re-acquired and the
+    /// request sent again; that send is one of `attempts`.
+    pub credential_refreshed: bool,
     /// From first attempt to response headers.
     pub latency: Duration,
 }
@@ -241,6 +244,7 @@ impl UpstreamClient {
                             return Ok(UpstreamResponse {
                                 response,
                                 attempts: attempt,
+                                credential_refreshed,
                                 latency: started.elapsed(),
                             });
                         }

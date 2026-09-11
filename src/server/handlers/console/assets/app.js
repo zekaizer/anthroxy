@@ -701,7 +701,7 @@ async function showRequest(target, id) {
         fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
         fact("Model", v.requested_model ? `${v.requested_model}${v.model ? ` → ${v.model} (${v.matched})` : " (no route)"}` : "–"),
         fact("Backend", v.backend ? `${v.backend} (${v.kind}), upstream model ${v.upstream_model}` : "–"),
-        fact("Status", v.status === null ? "–" : `${v.status}${v.attempts ? ` after ${v.attempts} attempt(s)` : ""}`),
+        fact("Status", v.status === null ? "–" : `${v.status}${v.attempts ? ` after ${v.attempts} attempt(s)` : ""}${v.credential_refreshed ? ", one re-sent with a re-acquired credential" : ""}`),
         fact("Timing", `headers ${fmt.ms(v.latency_ms)}, first byte ${fmt.ms(v.ttfb_ms)}, total ${fmt.ms(v.duration_ms)}`),
         fact("Body", fmt.bytes(v.bytes)),
         fact("Tokens", v.usage
@@ -774,6 +774,7 @@ function statsContent(data) {
     card("Requests", fmt.int(total.requests)),
     card("Errors", `${fmt.int(total.errors)} (${fmt.pct(errorRate)})`),
     card("Fallbacks", fmt.int(total.defaulted)),
+    card("Credential re-sends", fmt.int(total.credential_refreshed)),
     card("Input tokens", fmt.int(total.input_tokens)),
     card("Output tokens", fmt.int(total.output_tokens)),
     card("Cache hit rate", fmt.pct(total.cache_hit_rate)),

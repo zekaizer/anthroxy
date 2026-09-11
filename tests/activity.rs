@@ -333,3 +333,45 @@ async fn how_the_model_name_matched_is_persisted() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_credential_re_acquired_after_a_401_is_tracked_and_persisted() {
+    let upstream = MockUpstream::start(|received| {
+        if received.header("authorization") == Some("Bearer tok2") {
+            echo(received)
+        } else {
+            json_response(
+                401,
+                json!({"type":"error","error":{"type":"authentication_error","message":"stale"}}),
+            )
+        }
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("n");
+    std::fs::write(&counter, "0").unwrap();
+    let command = format!(
+        "n=$(cat {c}); n=$((n+1)); echo $n > {c}; echo tok$n",
+        c = counter.display()
+    );
+    let config = config_with_backend(&upstream.url(), "").replace(
+        r#"credential = { kind = "static", value = "backend-secret-key" }"#,
+        &format!(r#"credential = {{ kind = "command", command = '{command}' }}"#),
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    let id = request_id(&res);
+    assert_eq!(res.status(), 200);
+    let _ = res.text().await;
+
+    let view = finished(&router, &id).await;
+    assert_eq!(view.attempts, Some(2));
+    assert!(view.credential_refreshed, "{view:?}");
+    let records = stats_records(&router.stats_dir, 1).await;
+    assert!(records[0].credential_refreshed, "{:?}", records[0]);
+}

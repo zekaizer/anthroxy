@@ -22,6 +22,7 @@ fn record(at: &str, model: Option<&str>) -> StatsRecord {
         stream: true,
         status: Some(200),
         attempts: Some(1),
+        credential_refreshed: false,
         latency_ms: Some(50),
         ttfb_ms: Some(100),
         duration_ms: Some(1100),
@@ -411,4 +412,27 @@ fn a_line_written_before_matched_existed_reads_as_unknown() {
     line.as_object_mut().unwrap().remove("matched");
     let read: StatsRecord = serde_json::from_value(line).unwrap();
     assert_eq!(read.matched, None);
+}
+
+#[test]
+fn a_credential_re_send_is_counted_apart_from_retries() {
+    let mut refreshed = record("2026-09-11T08:00:00Z", Some("fast"));
+    refreshed.attempts = Some(2);
+    refreshed.credential_refreshed = true;
+    let mut refreshed_then_retried = record("2026-09-11T08:10:00Z", Some("fast"));
+    refreshed_then_retried.attempts = Some(3);
+    refreshed_then_retried.credential_refreshed = true;
+    let mut retried = record("2026-09-11T08:20:00Z", Some("fast"));
+    retried.attempts = Some(2);
+
+    let report = aggregate(
+        &[refreshed, refreshed_then_retried, retried],
+        Range::All,
+        ts("2026-09-11T12:00:00Z"),
+    );
+    assert_eq!(report.total.credential_refreshed, 2);
+    assert_eq!(
+        report.total.retried, 2,
+        "a re-send after a rejected credential is not a retry"
+    );
 }

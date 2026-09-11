@@ -33,6 +33,9 @@ pub struct StatsRecord {
     pub status: Option<u16>,
     #[serde(default)]
     pub attempts: Option<u32>,
+    /// One of `attempts` re-sent the request with a re-acquired credential.
+    #[serde(default)]
+    pub credential_refreshed: bool,
     #[serde(default)]
     pub latency_ms: Option<u64>,
     #[serde(default)]
@@ -62,6 +65,7 @@ impl StatsRecord {
             stream: view.stream,
             status: view.status,
             attempts: view.attempts,
+            credential_refreshed: view.credential_refreshed,
             latency_ms: view.latency_ms,
             ttfb_ms: view.ttfb_ms,
             duration_ms: view.duration_ms,

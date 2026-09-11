@@ -93,6 +93,9 @@ pub struct Row {
     pub retried: u64,
     /// Served by `routing.default_model` because no route has the name.
     pub defaulted: u64,
+    /// Re-sent once with a re-acquired credential after the backend
+    /// rejected the first; not counted in `retried`.
+    pub credential_refreshed: u64,
     pub ttfb_p50_ms: Option<u64>,
     pub ttfb_p95_ms: Option<u64>,
     pub duration_p50_ms: Option<u64>,
@@ -291,7 +294,13 @@ impl Group {
             record.status.is_some_and(|status| status >= 400) || record.outcome == Outcome::Error;
         row.errors += u64::from(failed);
         row.disconnects += u64::from(record.outcome == Outcome::ClientDisconnected);
-        row.retried += u64::from(record.attempts.is_some_and(|attempts| attempts > 1));
+        let resent = u32::from(record.credential_refreshed);
+        row.retried += u64::from(
+            record
+                .attempts
+                .is_some_and(|attempts| attempts > 1 + resent),
+        );
+        row.credential_refreshed += u64::from(record.credential_refreshed);
         row.defaulted += u64::from(record.matched.as_deref() == Some("default"));
         if let Some(usage) = record.usage {
             row.input_tokens += usage.input;
