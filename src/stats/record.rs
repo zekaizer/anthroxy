@@ -20,6 +20,9 @@ pub struct StatsRecord {
     pub requested_model: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// How `requested_model` found its route: `exact`, `alias` or `default`.
+    #[serde(default)]
+    pub matched: Option<String>,
     #[serde(default)]
     pub backend: Option<String>,
     #[serde(default)]
@@ -30,6 +33,9 @@ pub struct StatsRecord {
     pub status: Option<u16>,
     #[serde(default)]
     pub attempts: Option<u32>,
+    /// One of `attempts` re-sent the request with a re-acquired credential.
+    #[serde(default)]
+    pub credential_refreshed: bool,
     #[serde(default)]
     pub latency_ms: Option<u64>,
     #[serde(default)]
@@ -53,11 +59,13 @@ impl StatsRecord {
             source: view.source,
             requested_model: view.requested_model.clone(),
             model: view.model.clone(),
+            matched: view.matched.map(str::to_owned),
             backend: view.backend.clone(),
             upstream_model: view.upstream_model.clone(),
             stream: view.stream,
             status: view.status,
             attempts: view.attempts,
+            credential_refreshed: view.credential_refreshed,
             latency_ms: view.latency_ms,
             ttfb_ms: view.ttfb_ms,
             duration_ms: view.duration_ms,

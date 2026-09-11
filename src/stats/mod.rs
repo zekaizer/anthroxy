@@ -8,6 +8,6 @@ mod record;
 #[cfg(test)]
 mod tests;
 
-pub use aggregate::{Generation, Range, Report, Row, aggregate, generation};
+pub use aggregate::{Fallback, Generation, Range, Report, Row, aggregate, generation};
 pub use log::StatsLog;
 pub use record::{SCHEMA, StatsRecord};

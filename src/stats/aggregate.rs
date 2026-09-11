@@ -68,6 +68,8 @@ pub struct Report {
     pub total: Row,
     /// Most requests first.
     pub models: Vec<Row>,
+    /// Model names no route serves by id or alias, most requests first.
+    pub fallbacks: Vec<Fallback>,
     /// UTC dates, oldest first.
     pub days: Vec<Row>,
     /// One row per bucket from the start of the range to now, keyed by the
@@ -89,6 +91,11 @@ pub struct Row {
     pub disconnects: u64,
     /// Exchanges that needed more than one attempt.
     pub retried: u64,
+    /// Served by `routing.default_model` because no route has the name.
+    pub defaulted: u64,
+    /// Re-sent once with a re-acquired credential after the backend
+    /// rejected the first; not counted in `retried`.
+    pub credential_refreshed: u64,
     pub ttfb_p50_ms: Option<u64>,
     pub ttfb_p95_ms: Option<u64>,
     pub duration_p50_ms: Option<u64>,
@@ -102,6 +109,16 @@ pub struct Row {
     /// Output tokens over the time between first byte and end, streamed
     /// complete exchanges only.
     pub output_tokens_per_second: Option<f64>,
+}
+
+/// A model name the client asked for that no route has as id or alias.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Fallback {
+    pub requested: String,
+    /// The default model that served it; `None` when nothing did.
+    pub model: Option<String>,
+    pub requests: u64,
+    pub last_seen: jiff::Timestamp,
 }
 
 /// Output tokens and the milliseconds spent producing them after the first
@@ -144,8 +161,20 @@ pub fn aggregate(records: &[StatsRecord], range: Range, now: jiff::Timestamp) ->
     let mut total = Group::new("total", false);
     let mut models: BTreeMap<String, Group> = BTreeMap::new();
     let mut days: BTreeMap<String, Group> = BTreeMap::new();
+    let mut fallbacks: BTreeMap<(String, Option<String>), Fallback> = BTreeMap::new();
     for record in records {
         total.add(record);
+        if let Some((requested, model)) = unserved_name(record) {
+            let key = (requested.to_owned(), model.map(str::to_owned));
+            let fallback = fallbacks.entry(key).or_insert_with(|| Fallback {
+                requested: requested.to_owned(),
+                model: model.map(str::to_owned),
+                requests: 0,
+                last_seen: record.ts,
+            });
+            fallback.requests += 1;
+            fallback.last_seen = fallback.last_seen.max(record.ts);
+        }
         let model = record.model.as_deref().unwrap_or("(unrouted)");
         models
             .entry(model.to_owned())
@@ -162,6 +191,12 @@ pub fn aggregate(records: &[StatsRecord], range: Range, now: jiff::Timestamp) ->
     }
     let mut models: Vec<Row> = models.into_values().map(Group::finish).collect();
     models.sort_by(|a, b| b.requests.cmp(&a.requests).then_with(|| a.key.cmp(&b.key)));
+    let mut fallbacks: Vec<Fallback> = fallbacks.into_values().collect();
+    fallbacks.sort_by(|a, b| {
+        b.requests
+            .cmp(&a.requests)
+            .then_with(|| a.requested.cmp(&b.requested))
+    });
     Report {
         range: range.label(),
         since,
@@ -173,7 +208,20 @@ pub fn aggregate(records: &[StatsRecord], range: Range, now: jiff::Timestamp) ->
         series: series(records, range, since, now),
         total: total.finish(),
         models,
+        fallbacks,
         days: days.into_values().map(Group::finish).collect(),
+    }
+}
+
+/// The name a record asked for when no route has it as id or alias, with the
+/// default model that served it; a record without a routed model was served
+/// by nothing.
+fn unserved_name(record: &StatsRecord) -> Option<(&str, Option<&str>)> {
+    let requested = record.requested_model.as_deref()?;
+    match (record.model.as_deref(), record.matched.as_deref()) {
+        (Some(model), Some("default")) => Some((requested, Some(model))),
+        (None, _) => Some((requested, None)),
+        _ => None,
     }
 }
 
@@ -246,7 +294,14 @@ impl Group {
             record.status.is_some_and(|status| status >= 400) || record.outcome == Outcome::Error;
         row.errors += u64::from(failed);
         row.disconnects += u64::from(record.outcome == Outcome::ClientDisconnected);
-        row.retried += u64::from(record.attempts.is_some_and(|attempts| attempts > 1));
+        let resent = u32::from(record.credential_refreshed);
+        row.retried += u64::from(
+            record
+                .attempts
+                .is_some_and(|attempts| attempts > 1 + resent),
+        );
+        row.credential_refreshed += u64::from(record.credential_refreshed);
+        row.defaulted += u64::from(record.matched.as_deref() == Some("default"));
         if let Some(usage) = record.usage {
             row.input_tokens += usage.input;
             row.output_tokens += usage.output;

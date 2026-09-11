@@ -64,6 +64,8 @@ pub struct ExchangeView {
     pub stream: bool,
     pub status: Option<u16>,
     pub attempts: Option<u32>,
+    /// A rejected credential was re-acquired and the request sent again.
+    pub credential_refreshed: bool,
     /// From arrival to the backend's response headers.
     pub latency_ms: Option<u64>,
     /// From arrival to the first body byte handed to the client.
@@ -122,6 +124,7 @@ impl Activity {
                 stream: false,
                 status: None,
                 attempts: None,
+                credential_refreshed: false,
                 latency_ms: None,
                 ttfb_ms: None,
                 duration_ms: None,

@@ -36,7 +36,7 @@ async fn a_streamed_exchange_moves_from_in_flight_to_recent_with_its_usage() {
     let exchange = begin(&activity, "rtr_1");
     routed(&exchange, Match::Alias);
     exchange.recording("20260911T000000.000Z-rtr_1".into());
-    exchange.responded(200, 2, Duration::from_millis(30));
+    exchange.responded(200, 2, false, Duration::from_millis(30));
 
     let in_flight = activity.in_flight();
     assert_eq!(in_flight.len(), 1);
@@ -99,7 +99,7 @@ async fn a_stream_the_client_leaves_or_that_fails_is_recorded_as_such() {
     let activity = Activity::new();
     let exchange = begin(&activity, "rtr_left");
     routed(&exchange, Match::Exact);
-    exchange.responded(200, 1, Duration::ZERO);
+    exchange.responded(200, 1, false, Duration::ZERO);
     let mut tracked = exchange.track(
         futures_util::stream::iter(vec![Ok(Bytes::from_static(b"data: {}\n\n"))])
             .chain(futures_util::stream::pending()),
@@ -114,7 +114,7 @@ async fn a_stream_the_client_leaves_or_that_fails_is_recorded_as_such() {
 
     let exchange = begin(&activity, "rtr_broken");
     routed(&exchange, Match::Exact);
-    exchange.responded(200, 1, Duration::ZERO);
+    exchange.responded(200, 1, false, Duration::ZERO);
     let chunks: Vec<Result<Bytes, std::io::Error>> =
         vec![Err(std::io::Error::other("connection reset"))];
     let _ = exchange
@@ -134,7 +134,7 @@ async fn an_error_event_in_a_200_stream_is_an_error() {
     let activity = Activity::new();
     let exchange = begin(&activity, "rtr_overloaded");
     routed(&exchange, Match::Exact);
-    exchange.responded(200, 1, Duration::ZERO);
+    exchange.responded(200, 1, false, Duration::ZERO);
     let body = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n";
     let _ = exchange
         .track(
@@ -177,7 +177,7 @@ fn router_failures_upstream_errors_and_buffered_bodies() {
 
     let exchange = begin(&activity, "rtr_400");
     routed(&exchange, Match::Default);
-    exchange.responded(400, 1, Duration::ZERO);
+    exchange.responded(400, 1, false, Duration::ZERO);
     let body = format!(
         "{{\"type\":\"error\",\"error\":{{\"type\":\"invalid_request_error\",\"message\":\"bad\"}},\"pad\":\"{}\"}}",
         "x".repeat(ERROR_BODY_BYTES)
@@ -197,7 +197,7 @@ fn router_failures_upstream_errors_and_buffered_bodies() {
 
     let exchange = begin(&activity, "rtr_doc");
     routed(&exchange, Match::Exact);
-    exchange.responded(200, 1, Duration::ZERO);
+    exchange.responded(200, 1, false, Duration::ZERO);
     exchange.finish_body(
         200,
         br#"{"type":"message","usage":{"input_tokens":1,"output_tokens":2}}"#,

@@ -188,7 +188,12 @@ async fn handle(
         "upstream responded"
     );
     note(exchange, |e| {
-        e.responded(status.as_u16(), upstream.attempts, upstream.latency)
+        e.responded(
+            status.as_u16(),
+            upstream.attempts,
+            upstream.credential_refreshed,
+            upstream.latency,
+        )
     });
 
     let recorder = recorder.map(|mut recorder| {

@@ -701,7 +701,7 @@ async function showRequest(target, id) {
         fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
         fact("Model", v.requested_model ? `${v.requested_model}${v.model ? ` → ${v.model} (${v.matched})` : " (no route)"}` : "–"),
         fact("Backend", v.backend ? `${v.backend} (${v.kind}), upstream model ${v.upstream_model}` : "–"),
-        fact("Status", v.status === null ? "–" : `${v.status}${v.attempts ? ` after ${v.attempts} attempt(s)` : ""}`),
+        fact("Status", v.status === null ? "–" : `${v.status}${v.attempts ? ` after ${v.attempts} attempt(s)` : ""}${v.credential_refreshed ? ", one re-sent with a re-acquired credential" : ""}`),
         fact("Timing", `headers ${fmt.ms(v.latency_ms)}, first byte ${fmt.ms(v.ttfb_ms)}, total ${fmt.ms(v.duration_ms)}`),
         fact("Body", fmt.bytes(v.bytes)),
         fact("Tokens", v.usage
@@ -773,6 +773,8 @@ function statsContent(data) {
   const cards = h("div", { class: "cards" },
     card("Requests", fmt.int(total.requests)),
     card("Errors", `${fmt.int(total.errors)} (${fmt.pct(errorRate)})`),
+    card("Fallbacks", fmt.int(total.defaulted)),
+    card("Credential re-sends", fmt.int(total.credential_refreshed)),
     card("Input tokens", fmt.int(total.input_tokens)),
     card("Output tokens", fmt.int(total.output_tokens)),
     card("Cache hit rate", fmt.pct(total.cache_hit_rate)),
@@ -789,6 +791,16 @@ function statsContent(data) {
       : null,
     h("h3", null, "By model"),
     table(headers("Model"), modelRows, { empty: "No request in this range." }),
+    report.fallbacks.length
+      ? [h("h3", null, "Names no route serves"),
+        h("p", { class: "note" }, "Claude Code asked for these names. The default model served them, or nothing did and the request failed with 404. Give a model the name as an alias to serve it on purpose."),
+        table(["Requested", "Served by", ["Requests", "num"], "Last seen"], report.fallbacks.map((f) =>
+          h("tr", null,
+            h("td", { class: "mono wrap-anywhere" }, f.requested),
+            h("td", { class: "mono" }, f.model || h("span", { class: "error-text" }, "nothing (404)")),
+            h("td", { class: "num" }, fmt.int(f.requests)),
+            h("td", { class: "nowrap" }, rel(f.last_seen)))))]
+      : null,
     h("h3", null, "By day (UTC)"),
     table(headers("Date"), dayRows, { empty: "No request in this range." }),
     h("p", { class: "note" },

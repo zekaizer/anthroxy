@@ -300,3 +300,78 @@ async fn a_recorded_exchange_names_its_recording() {
     assert!(entry.ends_with(&id), "{entry}");
     assert!(dir.path().join("bodies").join(&entry).is_dir());
 }
+
+#[tokio::test]
+async fn how_the_model_name_matched_is_persisted() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(
+        &upstream.url(),
+        "\n[routing]\ndefault_model = \"fast\"\n",
+    ))
+    .await;
+    for model in ["smart", "claude-haiku-4-5", "claude-opus-9"] {
+        let res = router
+            .post("/v1/messages", &messages_body(model))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200, "{model}");
+        let _ = res.text().await;
+    }
+    let mut seen: Vec<(String, Option<String>)> = stats_records(&router.stats_dir, 3)
+        .await
+        .into_iter()
+        .map(|r| (r.requested_model.unwrap(), r.matched))
+        .collect();
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            ("claude-haiku-4-5".to_owned(), Some("alias".to_owned())),
+            ("claude-opus-9".to_owned(), Some("default".to_owned())),
+            ("smart".to_owned(), Some("exact".to_owned())),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_credential_re_acquired_after_a_401_is_tracked_and_persisted() {
+    let upstream = MockUpstream::start(|received| {
+        if received.header("authorization") == Some("Bearer tok2") {
+            echo(received)
+        } else {
+            json_response(
+                401,
+                json!({"type":"error","error":{"type":"authentication_error","message":"stale"}}),
+            )
+        }
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("n");
+    std::fs::write(&counter, "0").unwrap();
+    let command = format!(
+        "n=$(cat {c}); n=$((n+1)); echo $n > {c}; echo tok$n",
+        c = counter.display()
+    );
+    let config = config_with_backend(&upstream.url(), "").replace(
+        r#"credential = { kind = "static", value = "backend-secret-key" }"#,
+        &format!(r#"credential = {{ kind = "command", command = '{command}' }}"#),
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    let id = request_id(&res);
+    assert_eq!(res.status(), 200);
+    let _ = res.text().await;
+
+    let view = finished(&router, &id).await;
+    assert_eq!(view.attempts, Some(2));
+    assert!(view.credential_refreshed, "{view:?}");
+    let records = stats_records(&router.stats_dir, 1).await;
+    assert!(records[0].credential_refreshed, "{:?}", records[0]);
+}
