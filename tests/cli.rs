@@ -19,11 +19,6 @@ fn spawnable() -> std::process::Command {
         .env_remove("RUST_LOG")
         .env_remove("SSL_CERT_FILE")
         .env_remove("SSL_CERT_DIR")
-        // Statistics default to the state directory; keep them out of $HOME.
-        .env(
-            "XDG_STATE_HOME",
-            std::env::temp_dir().join("anthroxy-cli-tests-state"),
-        )
         .env("NO_COLOR", "1");
     cmd
 }
@@ -35,8 +30,19 @@ fn bin() -> Command {
 /// The shared test configuration, pointing at a port nothing listens on.
 fn write_config(dir: &std::path::Path, extra: &str) -> std::path::PathBuf {
     let path = dir.join("config.toml");
-    std::fs::write(&path, config_with_backend("http://127.0.0.1:1", extra)).unwrap();
+    std::fs::write(
+        &path,
+        with_stats_in(dir, config_with_backend("http://127.0.0.1:1", extra)),
+    )
+    .unwrap();
     path
+}
+
+/// `text` with statistics under `dir`. The default directory is in the
+/// user's home, and only Linux moves it for `XDG_STATE_HOME`.
+fn with_stats_in(dir: &std::path::Path, text: String) -> String {
+    let stats = toml::Value::String(dir.join("stats").display().to_string());
+    format!("{text}\n[stats]\ndir = {stats}\n")
 }
 
 #[test]
@@ -483,7 +489,11 @@ fn an_ambient_proxy_does_not_redirect_a_backend_request() {
     let upstream = runtime.block_on(MockUpstream::start(echo));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    std::fs::write(&path, config_with_backend(&upstream.url(), "")).unwrap();
+    std::fs::write(
+        &path,
+        with_stats_in(dir.path(), config_with_backend(&upstream.url(), "")),
+    )
+    .unwrap();
 
     let mut child = spawnable()
         // Nothing listens there, so a proxied request cannot be answered.
@@ -593,6 +603,7 @@ fn serve_logs_how_each_backend_is_reached() {
 fn serve_starts_answers_health_and_stops_on_sigterm() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(dir.path(), "");
+    let stats_dir = dir.path().join("stats").display().to_string();
     let mut child = serve(&path);
     let banner = wait_for_banner(&mut child);
     assert!(
@@ -607,8 +618,8 @@ fn serve_starts_answers_health_and_stops_on_sigterm() {
         banner
             .lines
             .iter()
-            .any(|l| l.contains("stats") && l.contains("anthroxy-cli-tests-state")),
-        "statistics go to the state directory: {banner:?}"
+            .any(|l| l.contains("stats") && l.contains(&stats_dir)),
+        "statistics go where the file says: {banner:?}"
     );
 
     let body = http_get(&format!("{}/healthz", banner.url), None);
@@ -694,7 +705,10 @@ fn a_logging_change_on_reload_says_it_needs_a_restart() {
 
     std::fs::write(
         &path,
-        config_with_backend("http://127.0.0.1:1", "[logging]\nlevel = \"debug\"\n"),
+        with_stats_in(
+            dir.path(),
+            config_with_backend("http://127.0.0.1:1", "[logging]\nlevel = \"debug\"\n"),
+        ),
     )
     .unwrap();
     // SAFETY: plain libc call on a pid this test owns.
