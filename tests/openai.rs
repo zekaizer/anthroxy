@@ -681,13 +681,19 @@ async fn body_log_records_the_openai_request() {
 
     let mut entry = None;
     for _ in 0..100 {
-        let entries: Vec<_> = std::fs::read_dir(dir.path())
+        // The response file lands before the meta that closes the entry, and
+        // the meta exists from the start; only an outcome marks it finished.
+        let finished = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().path())
-            .filter(|p| p.join("meta.json").exists() && p.join("response.json").exists())
-            .collect();
-        if let Some(found) = entries.into_iter().next() {
-            entry = Some(found);
+            .find(|p| {
+                std::fs::read(p.join("meta.json"))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                    .is_some_and(|m| m.get("outcome").is_some())
+            });
+        if finished.is_some() {
+            entry = finished;
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
