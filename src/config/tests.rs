@@ -633,3 +633,65 @@ fn validation_rejects_anthropic_beta_on_openai_backend() {
         "{p:?}"
     );
 }
+
+fn with_proxy(proxy: &str) -> String {
+    MINIMAL.replace(
+        "url = \"http://127.0.0.1:1234\"\n",
+        &format!("url = \"http://127.0.0.1:1234\"\nproxy = \"{proxy}\"\n"),
+    )
+}
+
+#[test]
+fn a_proxy_is_an_http_or_https_origin() {
+    for proxy in [
+        "http://proxy.corp:3128",
+        "http://proxy.corp:3128/",
+        "https://user:p%40ss@proxy.corp",
+    ] {
+        let c = parse(&with_proxy(proxy)).unwrap_or_else(|e| panic!("{proxy}: {e}"));
+        assert_eq!(c.backends["local"].proxy.as_deref(), Some(proxy));
+    }
+    for proxy in [
+        "",
+        "proxy.corp:3128",
+        "socks5://proxy.corp:1080",
+        "http://",
+        "http://proxy.corp:3128/path",
+        "http://proxy.corp:3128/?x=1",
+        "http://proxy.corp:3128/#top",
+    ] {
+        let p = problems(&with_proxy(proxy));
+        assert!(
+            p.iter().any(|m| m.contains("backends.local.proxy")),
+            "{proxy:?} accepted: {p:?}"
+        );
+    }
+}
+
+#[test]
+fn backends_on_one_origin_must_agree_on_the_proxy() {
+    let mismatched = with_proxy("http://proxy.corp:3128")
+        + "\n[backends.other]\nurl = \"http://127.0.0.1:1234/prefix\"\n";
+    let p = problems(&mismatched);
+    assert!(
+        p.iter()
+            .any(|m| m.contains("backends.other.proxy") && m.contains("`local`")),
+        "{p:?}"
+    );
+
+    let agreed = with_proxy("http://proxy.corp:3128")
+        + "\n[backends.other]\nurl = \"http://127.0.0.1:1234/prefix\"\nproxy = \"http://proxy.corp:3128/\"\n";
+    assert!(parse(&agreed).is_ok());
+
+    // The default port written out is still the same origin.
+    let text = MINIMAL.to_owned()
+        + "\n[backends.a]\nurl = \"https://gw.corp\"\nproxy = \"http://proxy.corp:3128\"\n"
+        + "\n[backends.b]\nurl = \"https://gw.corp:443\"\n";
+    let p = problems(&text);
+    assert!(p.iter().any(|m| m.contains("backends.b.proxy")), "{p:?}");
+
+    let text = MINIMAL.to_owned()
+        + "\n[backends.a]\nurl = \"https://gw.corp\"\nproxy = \"http://proxy.corp:3128\"\n"
+        + "\n[backends.b]\nurl = \"https://gw.corp:8443\"\n";
+    assert!(parse(&text).is_ok(), "another port is another origin");
+}

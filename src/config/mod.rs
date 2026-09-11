@@ -10,6 +10,7 @@ mod credential_header;
 mod env;
 mod error;
 pub mod example;
+mod origin;
 mod schema;
 pub mod snippet;
 mod validate;
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 pub use credential_header::{CredentialHeader, X_API_KEY};
 pub use error::ConfigError;
+pub use origin::origin;
 pub use schema::{
     BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, LogFormat, LoggingConfig,
     ModelConfig, RoutingConfig, ServerConfig, StatsConfig, UpstreamConfig,

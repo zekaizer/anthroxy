@@ -519,6 +519,76 @@ fn an_ambient_proxy_does_not_redirect_a_backend_request() {
     assert_eq!(upstream.received().len(), 1);
 }
 
+/// How each backend is reached is in the log before the router answers, and
+/// no proxy password is.
+#[test]
+fn serve_logs_how_each_backend_is_reached() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(
+        dir.path(),
+        "\n[backends.far]\nurl = \"https://gw.corp\"\nproxy = \"http://alice:proxy-secret@127.0.0.1:3128\"\n",
+    );
+    let mut child = spawnable()
+        .env("HTTPS_PROXY", "http://bob:env-secret@127.0.0.1:1")
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut lines = Vec::new();
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                let listening = line.contains("anthroxy listening");
+                lines.push(line);
+                if listening {
+                    break;
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let log = lines.join("\n");
+    assert!(
+        lines.iter().any(|l| l.contains("through a proxy")
+            && l.contains("far")
+            && l.contains("http://<redacted>@127.0.0.1:3128")),
+        "{log}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("directly") && l.contains("mock")),
+        "{log}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("ignored") && l.contains("HTTPS_PROXY")),
+        "{log}"
+    );
+    assert!(
+        !log.contains("proxy-secret") && !log.contains("env-secret"),
+        "{log}"
+    );
+}
+
 #[test]
 fn serve_starts_answers_health_and_stops_on_sigterm() {
     let dir = tempfile::tempdir().unwrap();

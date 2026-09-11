@@ -184,6 +184,10 @@ pub struct BackendConfig {
     /// parameters it does not know.
     #[serde(default)]
     pub drop_fields: Vec<String>,
+    /// Proxy this backend is reached through (ADR-0012); unset connects
+    /// directly.
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

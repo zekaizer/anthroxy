@@ -52,6 +52,11 @@ impl Credential {
     pub fn masked(&self) -> String {
         mask(&self.secret)
     }
+
+    /// The header value with the secret masked, e.g. `Bearer abcd…wxyz`.
+    pub fn masked_value(&self) -> String {
+        self.header.value(&self.masked())
+    }
 }
 
 impl std::fmt::Debug for Credential {

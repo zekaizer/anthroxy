@@ -67,7 +67,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
     };
 
-    let client = match http_client(&config.upstream) {
+    let client = match http_client(&config.upstream, &config.backends) {
         Ok(client) => client,
         Err(error) => {
             println!("{} {error}", style.err_mark());
@@ -168,6 +168,7 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
             latency,
             models,
             detail,
+            ..
         }) => {
             let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
             let count = if ids.is_empty() {

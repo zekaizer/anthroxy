@@ -99,6 +99,9 @@ credential = { kind = "none" }
 # [backends.claude]
 # url = "https://api.anthropic.com"
 # credential = { kind = "command", command = "cat ~/.claude-oauth-token", refresh = "5m" }
+# # A backend that answers only through a proxy names it; http_proxy and
+# # friends in the environment are ignored. Userinfo is sent as basic auth.
+# proxy = "http://proxy.corp:3128"
 # # Beta flags merged into the client's anthropic-beta header.
 # anthropic_beta = ["oauth-2025-04-20"]
 # # Headers forced on every request to this backend.

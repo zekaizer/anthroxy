@@ -1,20 +1,43 @@
 //! Reachability check used by `anthroxy check`: acquire the credential
 //! and call `GET /v1/models` on the backend.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method};
 
+use super::headers::ANTHROPIC_BETA;
 use super::{Backend, UpstreamClient, UpstreamError, UpstreamRequest, upstream_headers};
-use crate::credential::CredentialError;
+use crate::credential::{Credential, CredentialError, mask};
 
 #[derive(Debug)]
 pub struct Probe {
     /// Credential source, plus the masked value when there is one.
     pub credential: Result<String, CredentialError>,
+    /// What the router set on `GET /v1/models`, by name; empty when no
+    /// credential could be had and nothing was sent.
+    pub request_headers: Vec<SentHeader>,
     pub models: Option<ModelsProbe>,
+}
+
+/// One request header as the report shows it: backend-forced values and the
+/// credential masked, the router's own defaults as sent.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SentHeader {
+    pub name: String,
+    pub value: String,
+    pub source: HeaderSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderSource {
+    /// What Claude Code would send.
+    Default,
+    /// The backend's `headers` or `anthropic_beta`.
+    Backend,
+    Credential,
 }
 
 #[derive(Debug)]
@@ -24,6 +47,8 @@ pub enum ModelsProbe {
     Answered {
         status: u16,
         latency: Duration,
+        /// Response headers as received, in order.
+        headers: Vec<(String, String)>,
         models: Vec<ListedModel>,
         detail: Option<String>,
     },
@@ -46,6 +71,7 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
         Err(error) => {
             return Probe {
                 credential: Err(error),
+                request_headers: Vec::new(),
                 models: None,
             };
         }
@@ -54,9 +80,17 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
         Some(c) => format!("{} ({})", backend.credential.describe(), c.masked()),
         None => backend.credential.describe(),
     };
-    let models = match client.send(list_request(backend, "/v1/models")).await {
+    let request = list_request(backend, "/v1/models");
+    let request_headers = sent_headers(backend, &request.headers, credential.as_ref());
+    let models = match client.send(request).await {
         Ok(upstream) => {
             let status = upstream.response.status().as_u16();
+            let headers = upstream
+                .response
+                .headers()
+                .iter()
+                .map(|(name, value)| (name.to_string(), header_text(value).to_owned()))
+                .collect();
             let body = upstream.response.bytes().await.unwrap_or_default();
             let json = serde_json::from_slice::<serde_json::Value>(&body).ok();
             let mut models = json.as_ref().map(listed_models).unwrap_or_default();
@@ -74,6 +108,7 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
             ModelsProbe::Answered {
                 status,
                 latency: upstream.latency,
+                headers,
                 models,
                 detail,
             }
@@ -82,6 +117,7 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
     };
     Probe {
         credential: Ok(description),
+        request_headers,
         models: Some(models),
     }
 }
@@ -129,6 +165,51 @@ fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> 
         headers: upstream_headers(&base, backend),
         body: Bytes::new(),
     }
+}
+
+/// `headers` plus the credential the send adds on top, as the report shows
+/// them: a value the backend forces may be a secret and is masked like the
+/// credential.
+fn sent_headers(
+    backend: &Backend,
+    headers: &HeaderMap,
+    credential: Option<&Credential>,
+) -> Vec<SentHeader> {
+    let mut sent = BTreeMap::new();
+    for name in headers.keys() {
+        let value = headers
+            .get_all(name)
+            .iter()
+            .map(header_text)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (value, source) = if backend.headers.contains_key(name) {
+            (mask(&value), HeaderSource::Backend)
+        } else if *name == ANTHROPIC_BETA && !backend.anthropic_beta.is_empty() {
+            (value, HeaderSource::Backend)
+        } else {
+            (value, HeaderSource::Default)
+        };
+        sent.insert(name.to_string(), (value, source));
+    }
+    if let Some(credential) = credential {
+        let (name, _) = credential.header_pair();
+        sent.insert(
+            name.to_string(),
+            (credential.masked_value(), HeaderSource::Credential),
+        );
+    }
+    sent.into_iter()
+        .map(|(name, (value, source))| SentHeader {
+            name,
+            value,
+            source,
+        })
+        .collect()
+}
+
+fn header_text(value: &HeaderValue) -> &str {
+    value.to_str().unwrap_or("<binary>")
 }
 
 /// Probes every backend concurrently; results are in the same order as
@@ -229,6 +310,7 @@ mod tests {
                 headers: Default::default(),
                 anthropic_beta: Vec::new(),
                 drop_fields: Vec::new(),
+                proxy: None,
             },
         )
         .unwrap()
@@ -252,6 +334,73 @@ mod tests {
                 }
                 other => panic!("{other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn request_headers_say_where_each_came_from_with_secrets_masked() {
+        let app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get(|| async {
+                (
+                    [("x-served-by", "gw-1")],
+                    axum::Json(serde_json::json!({"data": []})),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let backend = Backend::from_config(
+            "gw",
+            &BackendConfig {
+                kind: BackendKind::Anthropic,
+                url,
+                credential: CredentialConfig::Static {
+                    value: "key-1234567890".into(),
+                    header: CredentialHeader::bearer(),
+                },
+                headers: [
+                    (
+                        "user-agent".to_owned(),
+                        "claude-cli/2.0.0 (external, cli)".to_owned(),
+                    ),
+                    ("anthropic-version".to_owned(), "2023-01-01".to_owned()),
+                ]
+                .into(),
+                anthropic_beta: vec!["oauth-2025-04-20".into()],
+                drop_fields: Vec::new(),
+                proxy: None,
+            },
+        )
+        .unwrap();
+
+        let probe = probe(&client(), &backend).await;
+        let sent: Vec<(&str, &str, HeaderSource)> = probe
+            .request_headers
+            .iter()
+            .map(|h| (h.name.as_str(), h.value.as_str(), h.source))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                ("accept", "application/json", HeaderSource::Default),
+                ("anthropic-beta", "oauth-2025-04-20", HeaderSource::Backend),
+                ("anthropic-version", "2023…1-01", HeaderSource::Backend),
+                (
+                    "authorization",
+                    "Bearer key-…7890",
+                    HeaderSource::Credential
+                ),
+                ("user-agent", "clau…cli)", HeaderSource::Backend),
+            ]
+        );
+        match probe.models {
+            Some(ModelsProbe::Answered { headers, .. }) => assert!(
+                headers.contains(&("x-served-by".to_owned(), "gw-1".to_owned())),
+                "{headers:?}"
+            ),
+            other => panic!("{other:?}"),
         }
     }
 
@@ -348,6 +497,7 @@ mod tests {
                 headers: Default::default(),
                 anthropic_beta: Vec::new(),
                 drop_fields: Vec::new(),
+                proxy: None,
             },
         )
         .unwrap()

@@ -27,7 +27,7 @@ pub async fn probe(
     Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
 ) -> Response {
-    let client = match http_client(&snapshot.config.upstream)
+    let client = match http_client(&snapshot.config.upstream, &snapshot.config.backends)
         .and_then(|builder| Ok(builder.timeout(PROBE_TIMEOUT).build()?))
     {
         Ok(http) => UpstreamClient::new(http, RetryPolicy::never()),
@@ -45,6 +45,7 @@ pub async fn probe(
     let mut listed = HashMap::new();
     let mut reports = Vec::new();
     for (backend, probe) in backends.iter().zip(probes) {
+        let request_headers = &probe.request_headers;
         let credential = match &probe.credential {
             Ok(text) => json!({"ok": true, "text": text}),
             Err(problem) => json!({"ok": false, "text": problem.to_string()}),
@@ -57,6 +58,7 @@ pub async fn probe(
                 latency,
                 models,
                 detail,
+                headers,
             }) => {
                 let rows: Vec<Value> = models
                     .iter()
@@ -79,9 +81,14 @@ pub async fn probe(
                     })
                     .collect();
                 listed.insert(backend.name.clone(), models);
+                let headers: Vec<Value> = headers
+                    .iter()
+                    .map(|(name, value)| json!({"name": name, "value": value}))
+                    .collect();
                 json!({
                     "status": status,
                     "latency_ms": latency.as_millis() as u64,
+                    "headers": headers,
                     "detail": detail,
                     "listed": rows,
                 })
@@ -91,7 +98,14 @@ pub async fn probe(
             "name": backend.name,
             "kind": backend.kind,
             "url": backend.url,
+            "proxy": snapshot
+                .config
+                .backends
+                .get(&backend.name)
+                .and_then(|config| config.proxy.as_deref())
+                .map(crate::config::view::redacted_url),
             "credential": credential,
+            "request": {"method": "GET", "path": "/v1/models", "headers": request_headers},
             "models": models,
         }));
     }

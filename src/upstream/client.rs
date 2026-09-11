@@ -1,5 +1,6 @@
 //! Sends one client request to a backend, with credential refresh and retry.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -7,7 +8,7 @@ use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
 
 use super::{Backend, Decision, RetryPolicy};
-use crate::config::UpstreamConfig;
+use crate::config::{BackendConfig, UpstreamConfig, origin};
 use crate::credential::CredentialError;
 
 #[derive(Debug)]
@@ -105,21 +106,44 @@ pub enum ClientBuildError {
 
 /// How every backend is reached: the configured timeouts, the extra trust
 /// anchors from `ca_certificate`, no redirects, since a redirect would resend
-/// the body and the credential elsewhere, and no proxy, since `http_proxy` in
-/// the environment would do the same to every backend at once — a backend the
-/// operator named by URL is reached at that URL.
-pub fn http_client(config: &UpstreamConfig) -> Result<reqwest::ClientBuilder, ClientBuildError> {
+/// the body and the credential elsewhere, and no proxy but the one a backend
+/// names (ADR-0012), since `http_proxy` in the environment would do the same
+/// to every backend at once. Assumes `backends` passed validation.
+pub fn http_client(
+    config: &UpstreamConfig,
+    backends: &BTreeMap<String, BackendConfig>,
+) -> Result<reqwest::ClientBuilder, ClientBuildError> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
         .read_timeout(config.read_timeout)
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none());
+    let proxies = proxies(backends);
+    if !proxies.is_empty() {
+        builder = builder.proxy(reqwest::Proxy::custom(move |url| {
+            origin(url).and_then(|origin| proxies.get(&origin).cloned())
+        }));
+    }
     if let Some(path) = &config.ca_certificate {
         for certificate in ca_certificates(path)? {
             builder = builder.add_root_certificate(certificate);
         }
     }
     Ok(builder)
+}
+
+/// Proxy by backend origin. A backend URL reqwest cannot parse is never
+/// requested, so it needs no entry.
+fn proxies(backends: &BTreeMap<String, BackendConfig>) -> HashMap<String, reqwest::Url> {
+    backends
+        .values()
+        .filter_map(|backend| {
+            let proxy = backend.proxy.as_deref()?;
+            let origin = origin(&reqwest::Url::parse(&backend.url).ok()?)?;
+            let proxy = reqwest::Url::parse(proxy).expect("validated proxy url");
+            Some((origin, proxy))
+        })
+        .collect()
 }
 
 /// Every certificate in the PEM bundle at `path`; an empty bundle is an
@@ -144,9 +168,12 @@ fn ca_certificates(path: &Path) -> Result<Vec<reqwest::Certificate>, ClientBuild
 }
 
 impl UpstreamClient {
-    pub fn from_config(config: &UpstreamConfig) -> Result<Self, ClientBuildError> {
+    pub fn from_config(
+        config: &UpstreamConfig,
+        backends: &BTreeMap<String, BackendConfig>,
+    ) -> Result<Self, ClientBuildError> {
         Ok(Self::new(
-            http_client(config)?.build()?,
+            http_client(config, backends)?.build()?,
             RetryPolicy::from_config(config),
         ))
     }

@@ -858,3 +858,50 @@ async fn unsigned_thinking_blocks_are_removed_before_an_anthropic_backend() {
     assert_eq!(res.status(), 200);
     assert_eq!(upstream.last().body, raw.as_bytes(), "untouched bytes");
 }
+
+/// A backend entry that names a proxy is reached through it; the backend
+/// beside it still connects directly.
+#[tokio::test]
+async fn a_backend_with_a_proxy_is_reached_through_it() {
+    let direct = MockUpstream::start(echo).await;
+    let proxy = MockUpstream::start(echo).await;
+    // Nothing listens there, so only the proxy can deliver the request.
+    let extra = format!(
+        r#"
+[[models]]
+id = "far"
+backend = "far"
+
+[backends.far]
+url = "http://127.0.0.1:1"
+proxy = "http://alice:p%40ss@{}"
+"#,
+        proxy.addr
+    );
+    let router = TestRouter::start(&config_with_backend(&direct.url(), &extra)).await;
+
+    for model in ["far", "fast"] {
+        let res = router
+            .post("/v1/messages", &messages_body(model))
+            .send()
+            .await
+            .unwrap();
+        let status = res.status();
+        let body = res.text().await.unwrap();
+        assert_eq!(status, 200, "{model}: {body}");
+    }
+    let seen = proxy.received();
+    assert_eq!(
+        seen.len(),
+        1,
+        "only the backend that names the proxy uses it"
+    );
+    assert_eq!(seen[0].path_and_query, "/v1/messages");
+    assert_eq!(seen[0].header("host"), Some("127.0.0.1:1"));
+    assert_eq!(
+        seen[0].header("proxy-authorization"),
+        Some("Basic YWxpY2U6cEBzcw==")
+    );
+    assert_eq!(direct.received().len(), 1);
+    assert_eq!(direct.last().header("proxy-authorization"), None);
+}

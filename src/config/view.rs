@@ -9,8 +9,9 @@ use super::{CommandOutput, Config, CredentialConfig, CredentialHeader, LogFormat
 
 pub const REDACTED: &str = "<redacted>";
 
-/// `server.token`, `static` credential values and every forced header value
-/// are redacted; the rest is shown as loaded, `${ENV}` expanded.
+/// `server.token`, `static` credential values, every forced header value and
+/// the userinfo of a proxy URL are redacted; the rest is shown as loaded,
+/// `${ENV}` expanded.
 pub fn masked(config: &Config) -> Value {
     let backends: Map<String, Value> = config
         .backends
@@ -30,6 +31,7 @@ pub fn masked(config: &Config) -> Value {
                     "headers": headers,
                     "anthropic_beta": backend.anthropic_beta,
                     "drop_fields": backend.drop_fields,
+                    "proxy": backend.proxy.as_deref().map(redacted_url),
                 }),
             )
         })
@@ -79,6 +81,19 @@ pub fn masked(config: &Config) -> Value {
             "retention": duration(config.stats.retention),
         },
     })
+}
+
+/// `url` with its userinfo, which may hold a password, replaced by
+/// [`REDACTED`].
+pub fn redacted_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..end].rsplit_once('@') {
+        Some((_, host)) => format!("{scheme}://{REDACTED}@{host}{}", &rest[end..]),
+        None => url.to_owned(),
+    }
 }
 
 fn duration(value: Duration) -> String {
@@ -198,6 +213,47 @@ backend = "a"
         );
         assert_eq!(view["models"][0]["id"], "m");
         assert_eq!(view["stats"]["retention"], "90d");
+    }
+
+    #[test]
+    fn the_userinfo_of_a_proxy_is_redacted() {
+        let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "https://gw.corp"
+proxy = "http://alice:proxy-secret@proxy.corp:3128"
+
+[backends.b]
+url = "http://b"
+proxy = "http://proxy.corp:3128"
+
+[backends.c]
+url = "http://c"
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+        let view = masked(&Config::parse(text, |_| None).unwrap());
+        assert_eq!(
+            view["backends"]["a"]["proxy"],
+            "http://<redacted>@proxy.corp:3128"
+        );
+        assert_eq!(view["backends"]["b"]["proxy"], "http://proxy.corp:3128");
+        assert_eq!(view["backends"]["c"]["proxy"], Value::Null);
+        let shown = view.to_string();
+        assert!(
+            !shown.contains("alice") && !shown.contains("proxy-secret"),
+            "{shown}"
+        );
+
+        assert_eq!(
+            redacted_url("http://token@proxy.corp"),
+            "http://<redacted>@proxy.corp"
+        );
+        assert_eq!(redacted_url("https://host/a@b"), "https://host/a@b");
     }
 
     #[test]

@@ -57,7 +57,7 @@ impl Snapshot {
         Ok(Self {
             config: config.clone(),
             registry: Registry::from_config(config)?,
-            upstream: UpstreamClient::from_config(&config.upstream)?,
+            upstream: UpstreamClient::from_config(&config.upstream, &config.backends)?,
             client_token: ClientToken::new(&config.server.token),
             max_body_bytes: config.server.max_body_bytes,
             body_log,
@@ -210,6 +210,7 @@ impl AppState {
     fn reload_from(&self, path: &Path, load: &Loader) -> ReloadOutcome {
         let applied = load().and_then(|loaded| {
             let report = self.apply(&loaded.config)?;
+            crate::upstream::network::log(&loaded.config);
             Ok((report, loaded.restart_needed))
         });
         match applied {
