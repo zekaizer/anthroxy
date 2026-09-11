@@ -210,6 +210,7 @@ impl AppState {
     fn reload_from(&self, path: &Path, load: &Loader) -> ReloadOutcome {
         let applied = load().and_then(|loaded| {
             let report = self.apply(&loaded.config)?;
+            crate::upstream::network::log(&loaded.config);
             Ok((report, loaded.restart_needed))
         });
         match applied {

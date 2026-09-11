@@ -50,6 +50,7 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     // do exactly that.
     let reloader = tokio::spawn(reload_on_hangup(hangup(), state.clone()));
     print_banner(&state.snapshot(), &path, addr, style);
+    crate::upstream::network::log(&config);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
     let result = server.serve(shutdown_signal()).await;

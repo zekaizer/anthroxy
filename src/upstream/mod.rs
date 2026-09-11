@@ -3,6 +3,7 @@
 mod backend;
 mod client;
 mod headers;
+pub mod network;
 pub mod probe;
 mod retry;
 
