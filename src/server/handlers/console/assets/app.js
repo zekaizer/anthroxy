@@ -773,6 +773,7 @@ function statsContent(data) {
   const cards = h("div", { class: "cards" },
     card("Requests", fmt.int(total.requests)),
     card("Errors", `${fmt.int(total.errors)} (${fmt.pct(errorRate)})`),
+    card("Fallbacks", fmt.int(total.defaulted)),
     card("Input tokens", fmt.int(total.input_tokens)),
     card("Output tokens", fmt.int(total.output_tokens)),
     card("Cache hit rate", fmt.pct(total.cache_hit_rate)),
@@ -789,6 +790,16 @@ function statsContent(data) {
       : null,
     h("h3", null, "By model"),
     table(headers("Model"), modelRows, { empty: "No request in this range." }),
+    report.fallbacks.length
+      ? [h("h3", null, "Names no route serves"),
+        h("p", { class: "note" }, "Claude Code asked for these names. The default model served them, or nothing did and the request failed with 404. Give a model the name as an alias to serve it on purpose."),
+        table(["Requested", "Served by", ["Requests", "num"], "Last seen"], report.fallbacks.map((f) =>
+          h("tr", null,
+            h("td", { class: "mono wrap-anywhere" }, f.requested),
+            h("td", { class: "mono" }, f.model || h("span", { class: "error-text" }, "nothing (404)")),
+            h("td", { class: "num" }, fmt.int(f.requests)),
+            h("td", { class: "nowrap" }, rel(f.last_seen)))))]
+      : null,
     h("h3", null, "By day (UTC)"),
     table(headers("Date"), dayRows, { empty: "No request in this range." }),
     h("p", { class: "note" },

@@ -20,6 +20,9 @@ pub struct StatsRecord {
     pub requested_model: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// How `requested_model` found its route: `exact`, `alias` or `default`.
+    #[serde(default)]
+    pub matched: Option<String>,
     #[serde(default)]
     pub backend: Option<String>,
     #[serde(default)]
@@ -53,6 +56,7 @@ impl StatsRecord {
             source: view.source,
             requested_model: view.requested_model.clone(),
             model: view.model.clone(),
+            matched: view.matched.map(str::to_owned),
             backend: view.backend.clone(),
             upstream_model: view.upstream_model.clone(),
             stream: view.stream,

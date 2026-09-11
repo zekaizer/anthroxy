@@ -16,6 +16,7 @@ fn record(at: &str, model: Option<&str>) -> StatsRecord {
         source: Source::Client,
         requested_model: model.map(str::to_owned),
         model: model.map(str::to_owned),
+        matched: model.map(|_| "exact".to_owned()),
         backend: model.map(|_| "mock".to_owned()),
         upstream_model: model.map(str::to_owned),
         stream: true,
@@ -354,4 +355,60 @@ fn a_week_is_drawn_in_six_hours_and_everything_in_days() {
             .series
             .is_empty()
     );
+}
+
+#[test]
+fn fallbacks_are_the_names_the_default_model_or_nothing_served() {
+    let mut records = Vec::new();
+    for at in ["2026-09-11T08:00:00Z", "2026-09-11T09:00:00Z"] {
+        let mut r = record(at, Some("fast"));
+        r.requested_model = Some("claude-haiku-4-5-20251001".into());
+        r.matched = Some("default".into());
+        records.push(r);
+    }
+    let mut alias = record("2026-09-11T09:30:00Z", Some("fast"));
+    alias.requested_model = Some("claude-haiku-4-5".into());
+    alias.matched = Some("alias".into());
+    records.push(alias);
+    let mut unknown = record("2026-09-11T10:00:00Z", None);
+    unknown.requested_model = Some("ghost".into());
+    unknown.status = Some(404);
+    unknown.outcome = Outcome::Error;
+    unknown.usage = None;
+    records.push(unknown);
+    // A body without a model never named one.
+    let mut unparsed = record("2026-09-11T10:30:00Z", None);
+    unparsed.status = Some(400);
+    unparsed.outcome = Outcome::Error;
+    records.push(unparsed);
+
+    let report = aggregate(&records, Range::All, ts("2026-09-11T12:00:00Z"));
+    assert_eq!(report.total.defaulted, 2);
+    let fast = report.models.iter().find(|row| row.key == "fast").unwrap();
+    assert_eq!(fast.defaulted, 2);
+    assert_eq!(
+        report.fallbacks,
+        [
+            Fallback {
+                requested: "claude-haiku-4-5-20251001".into(),
+                model: Some("fast".into()),
+                requests: 2,
+                last_seen: ts("2026-09-11T09:00:00Z"),
+            },
+            Fallback {
+                requested: "ghost".into(),
+                model: None,
+                requests: 1,
+                last_seen: ts("2026-09-11T10:00:00Z"),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_line_written_before_matched_existed_reads_as_unknown() {
+    let mut line = serde_json::to_value(record("2026-09-11T08:00:00Z", Some("fast"))).unwrap();
+    line.as_object_mut().unwrap().remove("matched");
+    let read: StatsRecord = serde_json::from_value(line).unwrap();
+    assert_eq!(read.matched, None);
 }
