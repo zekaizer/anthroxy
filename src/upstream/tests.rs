@@ -22,6 +22,7 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
                 .collect(),
             anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
             drop_fields: Vec::new(),
+            proxy: None,
         },
     )
     .unwrap()
@@ -253,13 +254,15 @@ fn ca_certificate_must_be_a_readable_pem_file() {
     };
 
     let missing = dir.path().join("missing.pem");
-    let error = http_client(&with(&missing)).expect_err("a missing file is an error");
+    let error =
+        http_client(&with(&missing), &Default::default()).expect_err("a missing file is an error");
     assert!(error.to_string().contains("missing.pem"), "{error}");
 
     let empty = dir.path().join("empty.pem");
     std::fs::write(&empty, "no certificate here\n").unwrap();
-    let error = http_client(&with(&empty)).expect_err("a file without a certificate is an error");
+    let error = http_client(&with(&empty), &Default::default())
+        .expect_err("a file without a certificate is an error");
     assert!(error.to_string().contains("empty.pem"), "{error}");
 
-    assert!(http_client(&UpstreamConfig::default()).is_ok());
+    assert!(http_client(&UpstreamConfig::default(), &Default::default()).is_ok());
 }

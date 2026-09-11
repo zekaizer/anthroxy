@@ -27,7 +27,7 @@ pub async fn probe(
     Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
 ) -> Response {
-    let client = match http_client(&snapshot.config.upstream)
+    let client = match http_client(&snapshot.config.upstream, &snapshot.config.backends)
         .and_then(|builder| Ok(builder.timeout(PROBE_TIMEOUT).build()?))
     {
         Ok(http) => UpstreamClient::new(http, RetryPolicy::never()),

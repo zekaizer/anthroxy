@@ -67,7 +67,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
     };
 
-    let client = match http_client(&config.upstream) {
+    let client = match http_client(&config.upstream, &config.backends) {
         Ok(client) => client,
         Err(error) => {
             println!("{} {error}", style.err_mark());

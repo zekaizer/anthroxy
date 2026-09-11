@@ -229,6 +229,7 @@ mod tests {
                 headers: Default::default(),
                 anthropic_beta: Vec::new(),
                 drop_fields: Vec::new(),
+                proxy: None,
             },
         )
         .unwrap()
@@ -348,6 +349,7 @@ mod tests {
                 headers: Default::default(),
                 anthropic_beta: Vec::new(),
                 drop_fields: Vec::new(),
+                proxy: None,
             },
         )
         .unwrap()

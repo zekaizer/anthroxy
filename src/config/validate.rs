@@ -1,9 +1,10 @@
 //! Cross-field rules. Every problem is collected so the operator fixes the
 //! file in one pass.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use super::{BackendKind, Config, ConfigError, CredentialConfig};
+use super::view::redacted_url;
+use super::{BackendKind, Config, ConfigError, CredentialConfig, origin};
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut problems = Vec::new();
@@ -48,6 +49,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             ));
         }
         check_url(&format!("backends.{name}.url"), &backend.url, &mut problems);
+        if let Some(proxy) = &backend.proxy {
+            check_proxy(&format!("backends.{name}.proxy"), proxy, &mut problems);
+        }
         match &backend.credential {
             CredentialConfig::Command { command, .. } if command.trim().is_empty() => {
                 problems.push(format!(
@@ -111,6 +115,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             }
         }
     }
+
+    check_proxies_per_origin(config, &mut problems);
 
     let mut seen = HashSet::new();
     for (index, model) in config.models.iter().enumerate() {
@@ -183,6 +189,43 @@ const CONNECTION_HEADERS: [&str; 8] = [
     "upgrade",
 ];
 
+/// Connections to one origin share a pool and the proxy is chosen per origin,
+/// so every backend on an origin must name the same proxy or none. Backends
+/// whose URL or proxy is already reported are left out.
+fn check_proxies_per_origin(config: &Config, problems: &mut Vec<String>) {
+    let mut routes: HashMap<String, (&str, Option<reqwest::Url>)> = HashMap::new();
+    for (name, backend) in &config.backends {
+        let Some(origin) = reqwest::Url::parse(&backend.url)
+            .ok()
+            .as_ref()
+            .and_then(origin)
+        else {
+            continue;
+        };
+        let proxy = match backend.proxy.as_deref().map(reqwest::Url::parse) {
+            None => None,
+            Some(Ok(url)) => Some(url),
+            Some(Err(_)) => continue,
+        };
+        match routes.get(&origin) {
+            None => {
+                routes.insert(origin, (name, proxy));
+            }
+            Some((first, other)) if *other != proxy => {
+                let how = match (other, &proxy) {
+                    (None, _) => "directly",
+                    (Some(_), None) => "through a proxy",
+                    (Some(_), Some(_)) => "through another proxy",
+                };
+                problems.push(format!(
+                    "backends.{name}.proxy: backend `{first}` reaches the same origin {origin} {how}; backends on one origin must name the same proxy or none"
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+}
+
 fn header_safe(text: &str) -> bool {
     http::HeaderValue::from_str(text).is_ok()
 }
@@ -203,5 +246,25 @@ fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
         }
         Ok(_) => {}
         Err(e) => problems.push(format!("{field}: `{url}` is not a valid URL ({e})")),
+    }
+}
+
+/// Connections are opened to this URL, so it is an origin and nothing more.
+/// Its userinfo may be a password and stays out of the message.
+fn check_proxy(field: &str, proxy: &str, problems: &mut Vec<String>) {
+    let shown = redacted_url(proxy);
+    match reqwest::Url::parse(proxy) {
+        Ok(url) if !matches!(url.scheme(), "http" | "https") || !url.has_host() => {
+            problems.push(format!(
+                "{field}: `{shown}` must be an http:// or https:// proxy URL"
+            ));
+        }
+        Ok(url) if url.path() != "/" || url.query().is_some() || url.fragment().is_some() => {
+            problems.push(format!(
+                "{field}: `{shown}` must carry no path, query or fragment"
+            ));
+        }
+        Ok(_) => {}
+        Err(e) => problems.push(format!("{field}: `{shown}` is not a valid URL ({e})")),
     }
 }
