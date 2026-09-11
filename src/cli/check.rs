@@ -168,6 +168,7 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
             latency,
             models,
             detail,
+            ..
         }) => {
             let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
             let count = if ids.is_empty() {

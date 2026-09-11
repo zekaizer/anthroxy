@@ -470,6 +470,76 @@ async fn probe_lists_each_backends_models_and_feeds_the_context_limit() {
 }
 
 #[tokio::test]
+async fn probe_shows_the_request_it_sent_and_the_route_it_took() {
+    let upstream = MockUpstream::start(backend).await;
+    // `far` answers only through the proxy, which the mock plays as well.
+    let extra = format!(
+        r#"
+[backends.far]
+url = "http://127.0.0.1:1"
+proxy = "http://alice:proxy-secret@{}"
+
+[backends.far.headers]
+"user-agent" = "claude-cli/2.0.0 (external, cli)"
+"#,
+        upstream.addr
+    );
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+    let (status, probe) = post_api(&router, "/api/probe", Value::Null).await;
+    assert_eq!(status, 200, "{probe}");
+    let named = |name: &str| {
+        probe["backends"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    let (far, mock) = (named("far"), named("mock"));
+
+    assert_eq!(far["proxy"], format!("http://<redacted>@{}", upstream.addr));
+    assert_eq!(mock["proxy"], Value::Null);
+    assert_eq!(far["models"]["status"], 200, "{far}");
+    assert_eq!(mock["request"]["method"], "GET");
+    assert_eq!(mock["request"]["path"], "/v1/models");
+    let has = |backend: &Value, list: &str, entry: Value| {
+        backend
+            .pointer(list)
+            .and_then(Value::as_array)
+            .is_some_and(|headers| headers.contains(&entry))
+    };
+    assert!(
+        has(
+            &mock,
+            "/request/headers",
+            json!({"name": "authorization", "value": "Bearer back…-key", "source": "credential"})
+        ),
+        "{mock}"
+    );
+    assert!(
+        has(
+            &far,
+            "/request/headers",
+            json!({"name": "user-agent", "value": "clau…cli)", "source": "backend"})
+        ),
+        "{far}"
+    );
+    assert!(
+        has(
+            &mock,
+            "/models/headers",
+            json!({"name": "content-type", "value": "application/json"})
+        ),
+        "{mock}"
+    );
+    let shown = probe.to_string();
+    for secret in ["backend-secret-key", "proxy-secret", "claude-cli/2.0.0"] {
+        assert!(!shown.contains(secret), "{secret} leaked: {shown}");
+    }
+}
+
+#[tokio::test]
 async fn probe_reads_lm_studio_context_from_its_native_list() {
     let upstream = MockUpstream::start(|received| match received.path_and_query.as_str() {
         "/v1/models" => json_response(200, json!({"data": [{"id": "gemma", "object": "model"}]})),

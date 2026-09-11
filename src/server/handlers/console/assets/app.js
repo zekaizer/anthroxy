@@ -1259,11 +1259,21 @@ function probeContent(probe) {
           h("td", { class: "mono" }, m.configured_as.length ? m.configured_as.join(", ") : h("span", { class: "muted" }, "not configured")),
           cell);
       }) : [];
+      const sent = backend.request.headers;
+      const received = models && models.headers ? models.headers : [];
       return h("div", null,
         h("h3", null, backend.name, " ", badge(backend.kind), " ", h("span", { class: "muted mono" }, backend.url)),
         h("dl", { class: "facts" },
           fact("Credential", backend.credential.ok ? backend.credential.text : h("span", { class: "error-text" }, backend.credential.text)),
+          fact("Route", backend.proxy ? ["through proxy ", h("code", null, backend.proxy)] : "direct"),
           fact("GET /v1/models", modelLine)),
+        sent.length ? h("details", null, h("summary", null, `Request headers (${sent.length})`),
+          h("p", { class: "note" }, "Headers the router set; the HTTP client adds host and framing. Backend-forced values and the credential are masked."),
+          table(["Header", "Value", "From"], sent.map((x) =>
+            h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value), h("td", null, badge(x.source)))))) : null,
+        received.length ? h("details", null, h("summary", null, `Response headers (${received.length})`),
+          table(["Header", "Value"], received.map((x) =>
+            h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value))))) : null,
         listed.length ? table(["Upstream model", ["Context", "num"], "Configured as", "Snippet"], listed) : null);
     }),
   ];
