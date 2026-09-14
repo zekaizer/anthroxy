@@ -8,6 +8,7 @@ mod handlers;
 pub mod relay;
 mod request_id;
 mod routes;
+mod shutdown;
 mod state;
 
 use std::net::SocketAddr;
@@ -27,6 +28,10 @@ pub use state::{
 
 /// How often expired body-log entries are swept.
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// How long a stop waits, once past its grace period, for connections to
+/// close and again for records to be written.
+const AFTER_CUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerBuildError {
@@ -92,9 +97,10 @@ impl Server {
     }
 
     /// Serves until `shutdown` resolves, then gives in-flight requests up to
-    /// `grace` to finish. Past it this returns with them still open; they end
-    /// when the runtime is dropped. Body-log pruning runs alongside on
-    /// whichever snapshot is current and stops with the server.
+    /// `grace` to finish. Past it they are cut ([`AppState::cut_in_flight`]).
+    /// Returns once connections closed and the records of every exchange
+    /// were written, each wait bounded by `AFTER_CUT`. Body-log pruning runs
+    /// alongside on whichever snapshot is current and stops with the server.
     pub async fn serve(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
@@ -118,18 +124,31 @@ impl Server {
             }
             tokio::time::sleep(grace).await;
         };
+        tokio::pin!(drained);
         let result = tokio::select! {
-            result = drained => result,
+            result = &mut drained => result,
             () = deadline => {
                 tracing::warn!(
                     in_flight = self.state.activity.in_flight().len(),
                     grace_ms = grace.as_millis() as u64,
-                    "stopping with requests still in flight"
+                    "cutting requests still in flight"
                 );
-                Ok(())
+                self.state.cut_in_flight();
+                tokio::time::timeout(AFTER_CUT, drained)
+                    .await
+                    .unwrap_or_else(|_| {
+                        tracing::warn!("connections still open after the cut");
+                        Ok(())
+                    })
             }
         };
         pruner.abort();
+        if tokio::time::timeout(AFTER_CUT, crate::private_fs::settled())
+            .await
+            .is_err()
+        {
+            tracing::warn!("stopping before every record was written");
+        }
         result
     }
 }

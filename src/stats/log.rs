@@ -8,7 +8,7 @@ use std::time::Duration;
 use jiff::civil::Date;
 
 use super::StatsRecord;
-use crate::private_fs::{append_private, create_dir_private};
+use crate::private_fs::{PendingWrite, append_private, create_dir_private};
 
 #[derive(Clone)]
 pub struct StatsLog {
@@ -44,7 +44,9 @@ impl StatsLog {
     /// Appends off the request path; a failure is logged, never propagated.
     pub fn append(&self, record: StatsRecord) {
         let log = self.clone();
+        let pending = PendingWrite::begin();
         let write = move || {
+            let _pending = pending;
             if let Err(error) = log.append_blocking(&record) {
                 tracing::error!(dir = %log.dir().display(), %error, "cannot write statistics record");
             }

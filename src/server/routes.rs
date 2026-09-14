@@ -8,7 +8,7 @@ use axum::response::Response;
 use axum::routing::{delete, get, post};
 
 use super::handlers::{console, health, models, proxy};
-use super::{AppState, RequestId, RouterError, auth, request_id};
+use super::{AppState, RequestId, RouterError, auth, request_id, shutdown};
 
 /// The console sends small JSON documents only.
 const CONSOLE_BODY_LIMIT: usize = 64 * 1024;
@@ -58,6 +58,10 @@ pub fn build(state: AppState) -> Router {
         .method_not_allowed_fallback(not_found)
         // The proxy enforces `server.max_body_bytes` itself with a shaped 413.
         .layer(DefaultBodyLimit::disable())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            shutdown::cut_on_stop,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             request_id::assign,

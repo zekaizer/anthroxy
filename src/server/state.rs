@@ -134,6 +134,8 @@ pub struct AppState {
     pub activity: Arc<Activity>,
     /// Model lists from the console's last probe, by backend name.
     probed: Arc<Mutex<HashMap<String, Vec<ListedModel>>>>,
+    /// Set once by a stop whose grace period ran out.
+    cut: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppState {
@@ -155,6 +157,22 @@ impl AppState {
             reloads: Arc::new(Mutex::new(VecDeque::from([startup]))),
             activity: Activity::new(),
             probed: Arc::new(Mutex::new(HashMap::new())),
+            cut: tokio::sync::watch::Sender::new(false),
+        }
+    }
+
+    /// Ends every request still in flight, and any that arrives later: a
+    /// handler that has not answered answers 503, a body still streaming
+    /// fails (`server::shutdown`).
+    pub fn cut_in_flight(&self) {
+        self.cut.send_replace(true);
+    }
+
+    /// Resolves once [`cut_in_flight`](Self::cut_in_flight) ran.
+    pub fn cut(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let mut cut = self.cut.subscribe();
+        async move {
+            let _ = cut.wait_for(|cut| *cut).await;
         }
     }
 

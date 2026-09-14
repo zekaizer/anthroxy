@@ -519,6 +519,7 @@ async fn streams_sse_chunks_as_they_arrive() {
 
 /// A stop must not wait on a response that is still streaming: Claude Code
 /// holds some open for minutes, and a service restart would wait with it.
+/// What it cuts is cut before it returns, and recorded.
 #[tokio::test]
 async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
     let upstream = MockUpstream::start(|_| {
@@ -533,8 +534,17 @@ async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
             .unwrap()
     })
     .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (bodies, stats) = (dir.path().join("bodies"), dir.path().join("stats"));
     let config = anthroxy::config::Config::parse(
-        &config_with_backend(&upstream.url(), "\n[stats]\nenabled = false\n"),
+        &config_with_backend(
+            &upstream.url(),
+            &format!(
+                "\n[logging]\nbody_dir = {:?}\n[stats]\ndir = {:?}\n",
+                bodies.display().to_string(),
+                stats.display().to_string()
+            ),
+        ),
         anthroxy::config::process_env,
     )
     .unwrap();
@@ -571,6 +581,91 @@ async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
         .unwrap()
         .unwrap();
     assert!(elapsed >= grace, "the stream got no grace: {elapsed:?}");
+
+    let entry = std::fs::read_dir(&bodies)
+        .unwrap()
+        .next()
+        .expect("the request was recorded")
+        .unwrap()
+        .path();
+    let meta: Value =
+        serde_json::from_slice(&std::fs::read(entry.join("meta.json")).unwrap()).unwrap();
+    assert!(
+        meta["outcome"].is_string(),
+        "the cut stream's record was never finished: {meta}"
+    );
+    assert!(entry.join("response.sse").is_file());
+    let lines = std::fs::read_dir(&stats)
+        .unwrap()
+        .map(|file| std::fs::read_to_string(file.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert_eq!(lines.lines().count(), 1, "{lines}");
+
+    let rest = tokio::time::timeout(Duration::from_secs(1), async {
+        while let Some(Ok(_)) = stream.next().await {}
+    })
+    .await;
+    assert!(rest.is_ok(), "the client's stream was left open");
+}
+
+/// A request still waiting for the backend's headers when the grace period
+/// ends is answered, not dropped: the client can tell to send it again.
+#[tokio::test]
+async fn a_stop_answers_a_request_still_waiting_for_its_backend_with_a_503() {
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backend = format!("http://{}", silent.local_addr().unwrap());
+    let held = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        while let Ok((socket, _)) = silent.accept().await {
+            sockets.push(socket);
+        }
+    });
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(&backend, "\n[stats]\nenabled = false\n"),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config).await.unwrap();
+    let addr = server.local_addr();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let serving = tokio::spawn(server.serve(
+        async move {
+            let _ = stopped.await;
+        },
+        Duration::from_millis(100),
+    ));
+
+    let request = tokio::spawn(
+        reqwest::Client::new()
+            .post(format!("http://{addr}/v1/messages"))
+            .header("x-api-key", TOKEN)
+            .header("content-type", "application/json")
+            .body(messages_body("fast").to_string())
+            .send(),
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    stop.send(()).unwrap();
+
+    let res = tokio::time::timeout(Duration::from_secs(3), request)
+        .await
+        .expect("the waiting request was answered")
+        .unwrap()
+        .unwrap();
+    assert_eq!(res.status(), 503);
+    let body: Value = res.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stopping"),
+        "{body}"
+    );
+    tokio::time::timeout(Duration::from_secs(3), serving)
+        .await
+        .expect("serve returned")
+        .unwrap()
+        .unwrap();
+    held.abort();
 }
 
 #[tokio::test]
