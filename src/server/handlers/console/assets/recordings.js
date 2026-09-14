@@ -766,7 +766,10 @@ function diffView(now, before, diff, ctx) {
       fact("System", systemText),
       fact("Messages", messageText),
       fact("Parameters", diff.params.length ? [badge("changed", "warn"), ` ${diff.params.join(", ")}`] : badge("same", "ok"))),
-    newer.length ? [h("h3", null, "Messages after the repeated ones"), newer.map((m) => messageItem(m, ctx, m.bytes <= OPEN_BYTES))] : null,
+    // Only the first difference unfolds: a session's newest request adds a
+    // whole turn, and unfolding all of it buries the summary above.
+    newer.length ? [h("h3", null, `Messages after the repeated ones (${newer.length})`),
+      newer.map((m, i) => messageItem(m, ctx, i === 0 && m.bytes <= OPEN_BYTES))] : null,
     dropped ? [h("h3", null, "The earlier request's messages from there"),
       before.messages.slice(diff.messages).map((m) => messageItem(m, { ...NO_CONTEXT, needle: ctx.needle }, false))] : null,
   ];
