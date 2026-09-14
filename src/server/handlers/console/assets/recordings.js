@@ -282,7 +282,7 @@ function requestView(exchange) {
     { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, render: (ctx) => compareSection(exchange, doc, ctx) },
   ];
   const total = sum(doc.messages) + sum(doc.system) + sum(doc.tools) + sum(doc.params) || 1;
-  const find = h("input", { type: "text", placeholder: "Find in the request: prompts, reminders, tool calls and results, system text, tools", "aria-label": "Find in the request", value: state.requestFind });
+  const find = h("input", { type: "text", placeholder: "Find in this request", "aria-label": "Find in the request", value: state.requestFind });
   const found = h("span", { class: "muted" });
   const nav = h("nav", { class: "section-nav", "aria-label": "Request sections" });
   const content = h("div", { class: "section-body" });
