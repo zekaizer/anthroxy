@@ -3,6 +3,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::CredentialError;
 use crate::config::CommandOutput;
@@ -22,8 +23,7 @@ pub fn parse(mode: CommandOutput, stdout: &str) -> Result<Output, CredentialErro
             expires_at: None,
         },
         CommandOutput::Json => {
-            let json: JsonOutput =
-                serde_json::from_str(stdout).map_err(|e| CredentialError::Json(e.to_string()))?;
+            let json = json_output(stdout)?;
             Output {
                 secret: json.token,
                 expires_at: json.expires_at.map(ExpiresAt::resolve).transpose()?,
@@ -36,11 +36,33 @@ pub fn parse(mode: CommandOutput, stdout: &str) -> Result<Output, CredentialErro
     Ok(output)
 }
 
-#[derive(Deserialize)]
 struct JsonOutput {
     token: String,
-    #[serde(default)]
     expires_at: Option<ExpiresAt>,
+}
+
+/// The shape is checked by hand rather than by a derived `Deserialize`,
+/// whose messages quote the value they reject: a command printing the bare
+/// token as a JSON string would put it in a log line and a 502.
+fn json_output(stdout: &str) -> Result<JsonOutput, CredentialError> {
+    let wrong = |what: &str| CredentialError::Json(what.to_owned());
+    // Syntax errors carry a position, never the text.
+    let value: Value =
+        serde_json::from_str(stdout).map_err(|e| CredentialError::Json(e.to_string()))?;
+    let Value::Object(mut fields) = value else {
+        return Err(wrong("not an object"));
+    };
+    let Some(Value::String(token)) = fields.remove("token") else {
+        return Err(wrong("`token` is missing or not a string"));
+    };
+    let expires_at = match fields.remove("expires_at") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            ExpiresAt::deserialize(value)
+                .map_err(|_| wrong("`expires_at` is neither a number nor a string"))?,
+        ),
+    };
+    Ok(JsonOutput { token, expires_at })
 }
 
 /// 9999-12-31T23:59:59Z. A timestamp past it cannot be printed as RFC 3339,

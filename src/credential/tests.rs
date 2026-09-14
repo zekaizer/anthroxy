@@ -391,6 +391,25 @@ async fn json_expiry_out_of_range_is_an_error_not_a_panic() {
     }
 }
 
+/// The message reaches a log line, the console and the client's 502; the
+/// value the command printed may be the token itself.
+#[test]
+fn json_output_errors_never_quote_what_the_command_printed() {
+    for stdout in [
+        r#""sk-ant-oat01-secret-9999""#,
+        r#"{"token": ["sk-ant-oat01-secret-9999"]}"#,
+        r#"{"token": "t", "expires_at": {"at": "sk-ant-oat01-secret-9999"}}"#,
+        r#"sk-ant-oat01-secret-9999"#,
+    ] {
+        let error = output::parse(CommandOutput::Json, stdout)
+            .err()
+            .unwrap_or_else(|| panic!("{stdout} parsed"));
+        let text = error.to_string();
+        assert!(matches!(error, CredentialError::Json(_)), "{text}");
+        assert!(!text.contains("secret"), "{text}");
+    }
+}
+
 #[tokio::test]
 async fn json_output_must_be_a_token_object() {
     for cmd in [
