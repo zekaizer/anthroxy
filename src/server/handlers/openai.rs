@@ -14,6 +14,7 @@ use crate::observability::Recorder;
 use crate::openai::ResponseError;
 use crate::server::RouterError;
 use crate::server::buffered::read_all;
+use crate::server::ping::{PING_INTERVAL, Pings};
 use crate::server::relay::Relay;
 use crate::translate;
 use crate::upstream::{UpstreamResponse, is_event_stream};
@@ -65,10 +66,11 @@ pub async fn body(
         let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
         let translator = translate::Translator::new(relay, upstream_model, backend);
         let body = match exchange.take() {
-            Some(exchange) => {
-                Body::from_stream(exchange.track(translator, Some("text/event-stream")))
-            }
-            None => Body::from_stream(translator),
+            Some(exchange) => Body::from_stream(Pings::new(
+                exchange.track(translator, Some("text/event-stream")),
+                PING_INTERVAL,
+            )),
+            None => Body::from_stream(Pings::new(translator, PING_INTERVAL)),
         };
         return Ok((headers, body));
     }

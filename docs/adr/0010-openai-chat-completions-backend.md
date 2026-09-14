@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted; the clause that a body without the text `"thinking"` is not parsed superseded by ADR-0013
+accepted; the clause that a body without the text `"thinking"` is not parsed superseded by ADR-0013; "no `ping`" superseded by ADR-0014
 
 Supersedes the body relay rules of ADR-0003 ("bodies are streamed chunk by chunk, no SSE parsing", "nothing else in the body is read") for backends with `kind = "openai"`. ADR-0003 and ADR-0009 stand unchanged for `kind = "anthropic"`.
 

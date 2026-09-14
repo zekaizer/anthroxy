@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted; body passthrough rule superseded by ADR-0009; body relay rules superseded by ADR-0010 for backends with `kind = "openai"`, and the untouched `thinking` blocks rule by ADR-0010 for unsigned blocks; the single unauthenticated route, the 404 for other paths and the "no SSE parsing" rule superseded by ADR-0011
+accepted; body passthrough rule superseded by ADR-0009; body relay rules superseded by ADR-0010 for backends with `kind = "openai"`, and the untouched `thinking` blocks rule by ADR-0010 for unsigned blocks; the single unauthenticated route, the 404 for other paths and the "no SSE parsing" rule superseded by ADR-0011; verbatim relay of a quiet event stream superseded by ADR-0014
 
 ## Context
 

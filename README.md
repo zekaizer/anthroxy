@@ -16,7 +16,7 @@ What the router does:
 - **Model discovery.** `GET /v1/models` lists the configured models so Claude Code can offer them in `/model` (needs `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`).
 - **Routing by `model`.** Each request goes to the backend that serves the named model; the model name is rewritten to what that backend calls it. Aliases let Claude Code's built-in model ids land on your backends too.
 - **Per-backend credentials.** None, a static key, an environment variable, or a shell command that is re-run periodically (for tokens another program keeps fresh). Claude Code itself only ever sees one static router token.
-- **Verbatim passthrough.** Unknown request fields, beta headers and response bodies are relayed as-is; streaming responses are forwarded chunk by chunk.
+- **Verbatim passthrough.** Unknown request fields, beta headers and response bodies are relayed as-is; streaming responses are forwarded chunk by chunk, with a `ping` event every 15 seconds the backend stays quiet so a slow first token does not make Claude Code give up and retry (ADR-0014).
 - **OpenAI backends.** A backend marked `kind = "openai"` gets each request translated to Chat Completions and its answer translated back, streaming, tool calls, images and reasoning included, so Claude Code uses it like any other model.
 - **Retries and clear errors.** Connection failures are retried with backoff; every failure names the backend and cause in the Anthropic error format, so Claude Code shows it.
 - **Tracing.** Every request has an id (`x-request-id`) that ties together the log lines, the error body and, when enabled, an on-disk record of the exact request and response.

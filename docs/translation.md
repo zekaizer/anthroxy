@@ -43,6 +43,7 @@ A 4xx/5xx from the backend keeps its status; its body becomes an Anthropic error
 - Meaning, not shape. `ir::Usage` is defined the Anthropic way (input excludes cache reads), so the OpenAI decoder does the arithmetic once and the encoder only writes.
 - One response path. Stream and document are the same event sequence, which is also why a document answered to a streaming request needs no special code.
 - No buffering. Events flow per chunk; the first token reaches Claude Code as soon as the backend produces it.
+- Quiet gaps are filled. While the backend produces nothing, a `ping` goes out every 15 seconds, before `message_start` too, since Claude Code abandons a stream that stays silent for three minutes (ADR-0014).
 - A place for the next API. Another wire format is another pair of codecs; the Anthropic side stays as it is.
 
 ## What it costs

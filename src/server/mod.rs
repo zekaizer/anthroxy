@@ -6,6 +6,7 @@ mod auth;
 mod buffered;
 mod error;
 mod handlers;
+mod ping;
 pub mod relay;
 mod request_id;
 mod routes;

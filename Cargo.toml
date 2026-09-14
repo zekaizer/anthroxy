@@ -49,5 +49,5 @@ rcgen = "0.14.10"
 regex-lite = "0.1.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
 tempfile = "3.27.0"
-tokio = { version = "1.53.1", features = ["full"] }
+tokio = { version = "1.53.1", features = ["full", "test-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
