@@ -260,3 +260,51 @@ fn untouched_bodies_are_not_rewritten() {
     );
     assert_eq!(rewrite(b"{}", None, &[], true).unwrap(), None);
 }
+
+#[test]
+fn summary_names_the_last_prompt_without_reminders_or_tool_results() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": [
+            {"type": "text", "text": "<system-reminder>\nContext.\n</system-reminder>"},
+            {"type": "text", "text": "What is in\n  hostname.txt?"}
+        ]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "fixture-host"},
+            {"type": "text", "text": "<system-reminder>Only a reminder.</system-reminder>"}
+        ]},
+        {"role": "system", "content": "Mid-conversation system text."}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()),
+        RequestSummary {
+            messages: 4,
+            prompt: Some("What is in hostname.txt?".to_owned()),
+        }
+    );
+}
+
+#[test]
+fn summary_prompt_is_one_cut_line_and_absent_without_user_text() {
+    let long = format!("{}\n{}", "a".repeat(150), "b".repeat(150));
+    let body = json!({"model": "m", "messages": [{"role": "user", "content": long}]});
+    let prompt = summarize(body.to_string().as_bytes()).prompt.unwrap();
+    assert_eq!(prompt.chars().count(), 201, "{prompt}");
+    assert!(prompt.starts_with(&format!("{} b", "a".repeat(150))) && prompt.ends_with('…'));
+
+    let body = json!({"model": "m", "messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "out"}
+    ]}]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()),
+        RequestSummary {
+            messages: 1,
+            prompt: None
+        }
+    );
+    assert_eq!(summarize(b"not json"), RequestSummary::default());
+    assert_eq!(
+        summarize(br#"{"model": "m", "messages": 3}"#),
+        RequestSummary::default()
+    );
+}

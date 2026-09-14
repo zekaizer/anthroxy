@@ -9,6 +9,7 @@ mod message;
 mod models;
 mod request;
 mod stream;
+mod summary;
 mod usage;
 
 #[cfg(test)]
@@ -20,4 +21,5 @@ pub use message::encode as encode_message;
 pub use models::{ModelList, ModelObject};
 pub use request::{PeekError, RequestPeek, peek, rewrite};
 pub use stream::StreamEncoder;
+pub use summary::{RequestSummary, summarize};
 pub use usage::{Scan, TokenUsage, UsageScanner};
