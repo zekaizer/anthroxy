@@ -24,6 +24,11 @@ function recordings(view, opened) {
   const removeAll = h("button", { type: "button", class: "danger" }, "Delete all");
   let data = null;
 
+  const shown = () => {
+    const needle = filter.value.trim().toLowerCase();
+    return data.entries.filter((e) => !needle || [e.name, e.prompt, e.session, e.model, e.backend, e.status, e.outcome, e.path]
+      .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle)));
+  };
   const draw = () => {
     if (!data) return;
     if (!data.dir) {
@@ -31,9 +36,8 @@ function recordings(view, opened) {
       replace(list, banner(["Body recording is off. Set ", h("code", null, "logging.body_dir"), " or pass ", h("code", null, "--body-dir"), " to record each exchange."], "info"));
       return;
     }
-    const needle = filter.value.trim().toLowerCase();
-    const entries = data.entries.filter((e) => !needle || [e.name, e.prompt, e.session, e.model, e.backend, e.status, e.outcome, e.path]
-      .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle)));
+    const needle = filter.value.trim();
+    const entries = shown();
     replace(list,
       h("p", { class: "note" }, `${data.entries.length} recording(s) in `, h("code", null, data.dir), `, kept for ${data.retention}. They hold whole conversations.`),
       table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], entries.map((e) => {
@@ -69,8 +73,12 @@ function recordings(view, opened) {
     draw();
     if (opened && !openedShown) {
       openedShown = true;
-      const entry = data.entries.find((e) => e.name === opened);
-      inspect(inspector, opened, entry ? entry.files : null);
+      // Newer and older follow the list as filtered, or the whole list when
+      // the filter hides the opened entry.
+      const filtered = shown();
+      const entries = filtered.some((e) => e.name === opened) ? filtered : data.entries;
+      const at = entries.findIndex((e) => e.name === opened);
+      inspect(inspector, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] });
     }
   };
 
@@ -117,8 +125,8 @@ function entryFacts(e, filterBy) {
 // ---------------------------------------------------------------- inspector
 
 /// `files` are the entry's files as listed; without them every known name is
-/// tried.
-async function inspect(target, name, files) {
+/// tried. `neighbors` holds the listed entries just `newer` and `older`.
+async function inspect(target, name, files, neighbors) {
   await guarded(target, async () => {
     const names = files || ["meta.json", "request.json", "response.json", "response.sse", "response.bin"];
     const responseName = names.find((file) => file.startsWith("response."));
@@ -147,9 +155,16 @@ async function inspect(target, name, files) {
       const file = exchange.files[state.recordingPart];
       replace(body, state.recordingView === "raw" ? rawView(exchange, file) : sectionsView(exchange, state.recordingPart));
     };
+    const step = (label, entry) => h("button", {
+      type: "button",
+      class: "small",
+      disabled: !entry,
+      title: entry ? entry.prompt || entry.request_id : null,
+      onclick: () => go("recordings", entry.name),
+    }, label);
     const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Close");
     const title = exchange.meta ? exchange.meta.request_id : name;
-    replace(target, panel(`Recording ${title}`, close,
+    replace(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
       summaryFacts(exchange),
       h("div", { class: "controls" }, partSwitch, viewSwitch),
       body));
