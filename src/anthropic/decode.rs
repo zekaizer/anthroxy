@@ -237,7 +237,8 @@ fn document_text(block: &Value) -> Result<String, DecodeError> {
         .and_then(Value::as_str)
         .unwrap_or("unknown type");
     let data = source.get("data").and_then(Value::as_str).unwrap_or("");
-    let bytes = data.len() / 4 * 3 - data.bytes().rev().take_while(|&b| b == b'=').count();
+    let padding = data.bytes().rev().take_while(|&b| b == b'=').count();
+    let bytes = (data.len() / 4 * 3).saturating_sub(padding);
     let title = block
         .get("title")
         .and_then(Value::as_str)
@@ -653,6 +654,19 @@ mod tests {
                 content: "[document (application/pdf, 9 bytes) omitted: this backend cannot receive documents]".into(),
                 images: vec![],
             }
+        );
+    }
+
+    #[test]
+    fn a_document_with_less_data_than_padding_is_a_note_not_a_panic() {
+        let mut v = base();
+        v["messages"] = json!([{"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "=="}}
+        ]}]);
+        let parts = decode_json(v).unwrap().messages.remove(0).parts;
+        assert_eq!(
+            parts[0],
+            Part::Text("[document (application/pdf, 0 bytes) omitted: this backend cannot receive documents]".into())
         );
     }
 
