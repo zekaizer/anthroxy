@@ -11,6 +11,10 @@ const OPEN_BYTES = 4 * 1024;
 /// Earlier recordings of the same session a request is compared with, nearest
 /// first.
 const COMPARED = 5;
+/// Items holding the Find text that start unfolded, per section.
+const UNFOLDED_MATCHES = 10;
+/// Occurrences of the Find text marked in one text.
+const MARKS = 200;
 
 const PARTS = [["request", "Request"], ["response", "Response"], ["meta", "Meta"]];
 const VIEWS = [["sections", "Sections"], ["raw", "Raw"]];
@@ -337,7 +341,11 @@ function readRequest(body, dialect) {
   const sectioned = new Set(["system", "tools", "messages"]);
   const params = Object.entries(body)
     .filter(([key]) => !sectioned.has(key))
-    .map(([key, value]) => indexed({ key, value }, { [key]: value }));
+    .map(([key, value]) => {
+      const item = indexed({ key, value }, { [key]: value });
+      item.find = `${key.toLowerCase()}\n${item.find}`;
+      return item;
+    });
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const tools = Array.isArray(body.tools) ? body.tools : [];
   if (dialect === "openai") {
@@ -370,8 +378,9 @@ function indexed(item, source) {
   return item;
 }
 
-/// Every key and string or scalar value under `value`, lowercased; encoded
-/// payloads (`data`, `signature`) are left out.
+/// Every string or scalar value under `value`, lowercased. Keys are left out,
+/// since the same few ("type", "text") are in every item, and so are encoded
+/// payloads (`data`, `signature`).
 function findText(value) {
   const parts = [];
   const walk = (v) => {
@@ -380,7 +389,6 @@ function findText(value) {
     else if (Array.isArray(v)) v.forEach(walk);
     else if (v && typeof v === "object") {
       for (const [key, inner] of Object.entries(v)) {
-        parts.push(key);
         if (key !== "data" && key !== "signature") walk(inner);
       }
     }
@@ -505,7 +513,11 @@ function promptSection(doc, prompt, ctx) {
   if (prompt.queued) told.push("sent while the model was working, inside a system reminder");
   else if (reminders) told.push(`sent with ${reminders} system reminder(s)`);
   told.push(after.length ? `followed by ${after.length} message(s) with ${calls} tool call(s)` : "the last message");
-  const opens = (item, fallback) => (ctx.needle ? item.find.includes(ctx.needle) : fallback);
+  let unfolded = 0;
+  const opens = (item, fallback) => {
+    const open = ctx.needle ? item.find.includes(ctx.needle) : fallback;
+    return open && unfolded++ < UNFOLDED_MATCHES;
+  };
   return [
     h("div", { class: "prompt text" }, marked(prompt.text, ctx.needle)),
     h("p", { class: "note" }, `${told.join(", ")}.`),
@@ -516,20 +528,24 @@ function promptSection(doc, prompt, ctx) {
 
 function messagesSection(doc, shown, ctx) {
   return [
-    ctx.needle ? h("p", { class: "note" }, `${shown.length} of ${doc.messages.length} message(s) contain the text.`) : null,
-    shown.map((m) => messageItem(m, ctx, Boolean(ctx.needle))),
+    ctx.needle ? h("p", { class: "note" }, matchNote(shown.length, `of ${doc.messages.length} message(s) contain the text`)) : null,
+    shown.map((m, i) => messageItem(m, ctx, Boolean(ctx.needle) && i < UNFOLDED_MATCHES)),
   ];
+}
+
+function matchNote(count, what) {
+  return `${count} ${what}${count > UNFOLDED_MATCHES ? `; the first ${UNFOLDED_MATCHES} are unfolded` : ""}.`;
 }
 
 function systemSection(doc, shown, ctx) {
   if (!doc.system.length) return h("p", { class: "note" }, "The request has no system prompt.");
   if (!shown.length) return h("p", { class: "note" }, "No system block contains the text.");
-  return shown.map((s) => {
+  return shown.map((s, i) => {
     const text = s.blocks.filter((b) => b.kind === "text").map((b) => b.text).join("\n");
     return lazyDetails({ class: "item" },
       [h("span", { class: "mono muted" }, s.label), s.blocks.some((b) => b.cache) ? badge("cache", "info") : null,
         h("span", { class: "preview" }, marked(firstLine(text), ctx.needle)), h("span", { class: "size" }, fmt.bytes(s.bytes))],
-      () => s.blocks.map((b) => blockView(b, ctx)), Boolean(ctx.needle));
+      () => s.blocks.map((b) => blockView(b, ctx)), Boolean(ctx.needle) && i < UNFOLDED_MATCHES);
   });
 }
 
@@ -545,12 +561,16 @@ function toolsSection(doc, shown, ctx) {
   const ordered = [...groups.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
   // Groups start folded so every MCP server shows in one screen.
   const open = Boolean(ctx.needle) || ordered.length === 1;
-  return ordered.map((group) =>
-    lazyDetails({ class: "item group" },
-      [h("strong", null, group.label), h("span", { class: "kinds" }, `${group.tools.length} tool(s)`),
-        h("span", { class: "preview" }, group.tools.map((t) => shortToolName(t, group.prefix)).join(", ")),
-        h("span", { class: "size" }, fmt.bytes(group.tools.reduce((n, t) => n + t.bytes, 0)))],
-      () => group.tools.map((tool) => toolItem(tool, group.prefix, ctx)), open));
+  let unfolded = 0;
+  return [
+    ctx.needle ? h("p", { class: "note" }, matchNote(shown.length, `of ${doc.tools.length} tool(s) contain the text`)) : null,
+    ordered.map((group) =>
+      lazyDetails({ class: "item group" },
+        [h("strong", null, group.label), h("span", { class: "kinds" }, `${group.tools.length} tool(s)`),
+          h("span", { class: "preview" }, group.tools.map((t) => shortToolName(t, group.prefix)).join(", ")),
+          h("span", { class: "size" }, fmt.bytes(group.tools.reduce((n, t) => n + t.bytes, 0)))],
+        () => group.tools.map((tool) => toolItem(tool, group.prefix, ctx, Boolean(ctx.needle) && unfolded++ < UNFOLDED_MATCHES)), open)),
+  ];
 }
 
 /// MCP tools are named `mcp__<server>__<tool>`.
@@ -564,7 +584,7 @@ function shortToolName(tool, prefix) {
   return prefix && tool.name.startsWith(prefix) ? tool.name.slice(prefix.length) : tool.name;
 }
 
-function toolItem(tool, prefix, ctx) {
+function toolItem(tool, prefix, ctx, open) {
   return lazyDetails({ class: "item" },
     [h("strong", { class: "mono", title: tool.name }, marked(shortToolName(tool, prefix), ctx.needle)),
       h("span", { class: "preview" }, marked(firstLine(tool.description), ctx.needle)),
@@ -573,7 +593,7 @@ function toolItem(tool, prefix, ctx) {
       tool.description ? h("div", { class: "text" }, marked(tool.description, ctx.needle)) : null,
       tool.schema !== undefined ? [h("h4", null, "Input schema"), h("pre", null, marked(JSON.stringify(tool.schema, null, 2), ctx.needle))] : null,
       tool.extra ? [h("h4", null, "Other fields"), h("pre", null, marked(JSON.stringify(tool.extra, null, 2), ctx.needle))] : null,
-    ], Boolean(ctx.needle));
+    ], open);
 }
 
 function paramsSection(shown, ctx) {
@@ -828,7 +848,7 @@ function marked(text, needle) {
   if (lower.length !== text.length) return text;
   const out = [];
   let at = 0;
-  for (let i = lower.indexOf(needle); i >= 0; i = lower.indexOf(needle, at)) {
+  for (let i = lower.indexOf(needle); i >= 0 && out.length < 2 * MARKS; i = lower.indexOf(needle, at)) {
     if (i > at) out.push(text.slice(at, i));
     out.push(h("mark", null, text.slice(i, i + needle.length)));
     at = i + needle.length;
