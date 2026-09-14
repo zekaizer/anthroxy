@@ -17,7 +17,7 @@ const utf8 = new TextEncoder();
 // ---------------------------------------------------------------- list
 
 function recordings(view, opened) {
-  const filter = h("input", { type: "text", placeholder: "Filter by model, backend, id, status or outcome", value: state.recordingsFilter });
+  const filter = h("input", { type: "text", placeholder: "Filter by prompt, session, model, backend, id, status or outcome", value: state.recordingsFilter });
   const list = h("div");
   const inspector = h("div");
   const refresh = h("button", { type: "button" }, "Refresh");
@@ -32,11 +32,11 @@ function recordings(view, opened) {
       return;
     }
     const needle = filter.value.trim().toLowerCase();
-    const entries = data.entries.filter((e) => !needle || [e.name, e.model, e.backend, e.status, e.outcome, e.path]
+    const entries = data.entries.filter((e) => !needle || [e.name, e.prompt, e.session, e.model, e.backend, e.status, e.outcome, e.path]
       .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle)));
     replace(list,
       h("p", { class: "note" }, `${data.entries.length} recording(s) in `, h("code", null, data.dir), `, kept for ${data.retention}. They hold whole conversations.`),
-      table(["Time", "Request", "Model", "Status", "Outcome", ["Size", "num"], ""], entries.map((e) => {
+      table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], entries.map((e) => {
         const remove = h("button", { type: "button", class: "small danger" }, "Delete");
         remove.addEventListener("click", async (event) => {
           event.stopPropagation();
@@ -52,8 +52,10 @@ function recordings(view, opened) {
         });
         return h("tr", { class: `clickable ${e.name === opened ? "selected" : ""}`, onclick: () => go("recordings", e.name) },
           h("td", { class: "nowrap" }, fmt.time(e.at)),
-          h("td", { class: "mono" }, e.request_id, h("div", { class: "sub" }, e.path || "")),
-          h("td", { class: "mono wrap-anywhere" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
+          h("td", { class: "prompt-cell" },
+            e.prompt ? h("div", { class: "clamp" }, e.prompt) : h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own"),
+            h("div", { class: "sub" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; draw(); }))),
+          h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
           h("td", null, statusBadge(e.status)),
           h("td", { class: "wrap-anywhere" }, e.outcome || h("span", { class: "muted" }, "in progress")),
           h("td", { class: "num" }, fmt.bytes(e.bytes)),
@@ -92,6 +94,24 @@ function recordings(view, opened) {
     inspector,
     panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list));
   guarded(list, load);
+}
+
+/// Message count, session and request id under an entry's prompt; the
+/// session filters the list to its entries.
+function entryFacts(e, filterBy) {
+  const facts = [];
+  if (e.messages !== null && e.messages !== undefined) facts.push(`${e.messages} message(s)`);
+  if (e.session) {
+    facts.push(h("button", {
+      type: "button",
+      class: "link small mono",
+      title: `Show only session ${e.session}`,
+      onclick: (event) => { event.stopPropagation(); filterBy(e.session); },
+    }, `session ${e.session.slice(0, 8)}`));
+  }
+  if (e.path && !/^\/v1\/(messages|chat\/completions)(\?|$)/.test(e.path)) facts.push(h("span", { class: "mono" }, e.path));
+  facts.push(h("span", { class: "mono" }, e.request_id));
+  return facts.flatMap((fact, i) => (i ? [" · ", fact] : [fact]));
 }
 
 // ---------------------------------------------------------------- inspector

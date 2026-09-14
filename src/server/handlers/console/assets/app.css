@@ -284,6 +284,8 @@ details > summary { cursor: pointer; color: var(--muted); }
 .section-nav .bar { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .section-nav .bar span { display: block; height: 100%; background: var(--accent); }
 .section-body { min-width: 0; }
+td.prompt-cell { min-width: 16rem; }
+.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .prompt { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; padding: 0.5rem 0.75rem; max-height: 40vh; overflow: auto; }
 .section-body > .note:first-child { margin-top: 0; }
 
