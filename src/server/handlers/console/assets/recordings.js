@@ -15,6 +15,9 @@ const COMPARED = 5;
 const UNFOLDED_MATCHES = 10;
 /// Occurrences of the Find text marked in one text.
 const MARKS = 200;
+/// Label the router writes before images it moves out of a tool result for a
+/// Chat Completions backend.
+const ROUTER_LABEL = /^Images? from tool call \S+:$/;
 
 const PARTS = [["request", "Request"], ["response", "Response"], ["meta", "Meta"]];
 const VIEWS = [["sections", "Sections"], ["raw", "Raw"]];
@@ -430,8 +433,12 @@ function anthropicBlock(b) {
 function openaiContent(content) {
   if (typeof content === "string") return [{ kind: "text", text: content }];
   if (!Array.isArray(content)) return [];
+  const images = content.some((part) => part && part.type === "image_url");
   return content.map((part) => {
-    if (part && part.type === "text") return { kind: "text", text: String(part.text ?? "") };
+    if (part && part.type === "text") {
+      const text = String(part.text ?? "");
+      return images && ROUTER_LABEL.test(text) ? { kind: "router_label", text } : { kind: "text", text };
+    }
     if (part && part.type === "image_url") return { kind: "image", url: part.image_url && part.image_url.url };
     return { kind: "other", type: String((part && part.type) || typeof part), raw: part };
   });
@@ -791,6 +798,8 @@ function blockView(b, ctx) {
         () => h("div", { class: "text" }, marked(b.text, needle)), contains(b.text, needle));
     case "redacted_thinking":
       return h("div", { class: "block" }, badge("redacted thinking"), cache);
+    case "router_label":
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("added by the router"), h("span", { class: "muted" }, b.text)));
     case "tool_use": {
       const result = ctx.reveal ? ctx.results.get(b.id) : undefined;
       return h("div", { class: "block tool-use" },
@@ -973,7 +982,9 @@ function foldOpenaiStream(frames) {
   const out = { blocks: [], stop: null, usage: null, model: null, error: null, events: new Map(), malformed: 0 };
   let reasoning = "";
   let content = "";
-  const calls = [];
+  // By index, and started once named, as the router's own decoder takes them.
+  const calls = new Map();
+  let last = null;
   for (const frame of frames) {
     if (frame.data.trim() === "[DONE]") {
       out.events.set("[DONE]", 1);
@@ -993,18 +1004,26 @@ function foldOpenaiStream(frames) {
       reasoning += delta.reasoning_content || delta.reasoning || "";
       content += delta.content || "";
       for (const call of delta.tool_calls || []) {
-        const slot = call.index ?? calls.length;
-        calls[slot] = calls[slot] || { id: null, function: { name: "", arguments: "" } };
-        if (call.id) calls[slot].id = call.id;
-        if (call.function && call.function.name) calls[slot].function.name += call.function.name;
-        if (call.function && call.function.arguments) calls[slot].function.arguments += call.function.arguments;
+        const fn = call.function || {};
+        const id = typeof call.id === "string" ? call.id : null;
+        const name = typeof fn.name === "string" ? fn.name : null;
+        let slot = Number.isInteger(call.index) ? call.index : null;
+        // Unnumbered: a delta with neither id nor name continues the latest
+        // call; anything else is a new one after it.
+        if (slot === null) slot = last !== null && id === null && name === null ? last : calls.size ? Math.max(...calls.keys()) + 1 : 0;
+        last = slot;
+        if (!calls.has(slot)) calls.set(slot, { id: null, function: { name: null, arguments: "" } });
+        const entry = calls.get(slot);
+        if (entry.id === null) entry.id = id;
+        if (entry.function.name === null) entry.function.name = name;
+        if (typeof fn.arguments === "string") entry.function.arguments += fn.arguments;
       }
       if (choice.finish_reason) out.stop = choice.finish_reason;
     }
   }
   if (reasoning) out.blocks.push({ kind: "thinking", text: reasoning });
   if (content) out.blocks.push({ kind: "text", text: content });
-  for (const call of calls) if (call) out.blocks.push(openaiCall(call));
+  for (const slot of [...calls.keys()].sort((a, b) => a - b)) out.blocks.push(openaiCall(calls.get(slot)));
   return out;
 }
 
