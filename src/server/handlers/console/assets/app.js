@@ -642,7 +642,9 @@ function requests(view, selected) {
           h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
             v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
           h("td", { class: "num" }, v.usage ? fmt.int(v.usage.cache_read) : "–"),
-          h("td", null, outcomeBadge(v), v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null))),
+          h("td", null, outcomeBadge(v),
+            v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
+            v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null))),
       { empty: "No finished request since the router started." }));
   };
 
