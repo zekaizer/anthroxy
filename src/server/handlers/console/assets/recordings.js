@@ -8,6 +8,9 @@
 const SHOWN_BYTES = 2 * 1024 * 1024;
 /// Messages after the last prompt up to this size start unfolded.
 const OPEN_BYTES = 4 * 1024;
+/// Earlier recordings of the same session a request is compared with, nearest
+/// first.
+const COMPARED = 5;
 
 const PARTS = [["request", "Request"], ["response", "Response"], ["meta", "Meta"]];
 const VIEWS = [["sections", "Sections"], ["raw", "Raw"]];
@@ -80,7 +83,7 @@ function recordings(view, opened) {
       const filtered = shown();
       const entries = filtered.some((e) => e.name === opened) ? filtered : data.entries;
       const at = entries.findIndex((e) => e.name === opened);
-      inspect(inspector, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] });
+      inspect(inspector, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] }, data.entries);
     }
   };
 
@@ -127,8 +130,9 @@ function entryFacts(e, filterBy) {
 // ---------------------------------------------------------------- inspector
 
 /// `files` are the entry's files as listed; without them every known name is
-/// tried. `neighbors` holds the listed entries just `newer` and `older`.
-async function inspect(target, name, files, neighbors) {
+/// tried. `neighbors` holds the listed entries just `newer` and `older`;
+/// `listed` is the whole list, where earlier requests of the session are found.
+async function inspect(target, name, files, neighbors, listed) {
   await guarded(target, async () => {
     const names = files || ["meta.json", "request.json", "response.json", "response.sse", "response.bin"];
     const responseName = names.find((file) => file.startsWith("response."));
@@ -144,7 +148,11 @@ async function inspect(target, name, files, neighbors) {
       parsed: {},
     };
     if (exchange.meta instanceof Error) exchange.meta = null;
-    exchange.dialect = exchange.meta && String(exchange.meta.path || "").startsWith("/v1/chat/completions") ? "openai" : "anthropic";
+    exchange.dialect = dialectOf(exchange.meta && exchange.meta.path);
+    const session = exchange.meta && exchange.meta.request_headers && exchange.meta.request_headers["x-claude-code-session-id"];
+    exchange.earlier = session
+      ? listed.filter((e) => e.session === session && e.name < name && e.path === exchange.meta.path).slice(0, COMPARED)
+      : [];
 
     const partSwitch = h("span", { class: "segmented", role: "group", "aria-label": "File" });
     const viewSwitch = h("span", { class: "segmented", role: "group", "aria-label": "View" });
@@ -173,6 +181,11 @@ async function inspect(target, name, files, neighbors) {
     draw();
     target.scrollIntoView({ block: "nearest" });
   });
+}
+
+/// The request format an upstream path speaks.
+function dialectOf(path) {
+  return String(path || "").startsWith("/v1/chat/completions") ? "openai" : "anthropic";
 }
 
 /// A recorded file as `{ name, text }`, or null when the entry has none.
@@ -266,8 +279,9 @@ function requestView(exchange) {
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
     { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
     { id: "params", label: "Parameters", count: doc.params.length, items: doc.params, render: (ctx) => paramsSection(matching(doc.params, ctx.needle), ctx) },
+    { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, render: (ctx) => compareSection(exchange, doc, ctx) },
   ];
-  const total = sections.slice(1).reduce((all, s) => all + sum(s.items), 0) || 1;
+  const total = sum(doc.messages) + sum(doc.system) + sum(doc.tools) + sum(doc.params) || 1;
   const find = h("input", { type: "text", placeholder: "Find in the request: prompts, reminders, tool calls and results, system text, tools", "aria-label": "Find in the request", value: state.requestFind });
   const found = h("span", { class: "muted" });
   const nav = h("nav", { class: "section-nav", "aria-label": "Request sections" });
@@ -285,8 +299,7 @@ function requestView(exchange) {
       return h("button", { type: "button", class: hits === 0 ? "empty" : null, "aria-current": s.id === id ? "true" : null, onclick: () => show(s.id) },
         h("span", { class: "label" }, s.label),
         h("span", { class: "count" }, hits === null ? String(s.count) : `${hits} found`),
-        h("span", { class: "size" }, fmt.bytes(sum(s.items))),
-        h("span", { class: "bar" }, fill));
+        s.sized === false ? null : [h("span", { class: "size" }, fmt.bytes(sum(s.items))), h("span", { class: "bar" }, fill)]);
     }));
     replace(content, sections.find((s) => s.id === id).render(ctx));
   };
@@ -351,6 +364,7 @@ function readRequest(body, dialect) {
 }
 
 function indexed(item, source) {
+  item.source = source;
   item.bytes = byteSize(source);
   item.find = findText(source);
   return item;
@@ -568,6 +582,134 @@ function paramsSection(shown, ctx) {
       h("td", { class: "mono nowrap" }, marked(p.key, ctx.needle)),
       h("td", { class: "mono wrap-anywhere" }, jsonValue(p.value, ctx.needle)))),
   { empty: ctx.needle ? "No field contains the text." : "The request has no other fields." });
+}
+
+// ---------------------------------------------------------------- compare
+
+/// An earlier request of the same session set against this one in the order
+/// a prompt cache reads them: tools, system, messages. The earlier request
+/// that shares the longest prefix is chosen first.
+function compareSection(exchange, doc, ctx) {
+  const box = h("div");
+  if (!exchange.earlier.length) {
+    replace(box, h("p", { class: "note" }, "No earlier recording of this Claude Code session to compare with."));
+    return box;
+  }
+  replace(box, h("p", { class: "note" }, "Reading the session's earlier requests…"));
+  if (!exchange.parsed.earlier) exchange.parsed.earlier = earlierRequests(exchange, doc);
+  guarded(box, async () => {
+    const earlier = await exchange.parsed.earlier;
+    if (!earlier.length) {
+      replace(box, h("p", { class: "note" }, "The session's earlier recordings could not be read."));
+      return;
+    }
+    const best = earlier.reduce((a, b) => (b.diff.shared > a.diff.shared ? b : a));
+    const picker = h("select", { "aria-label": "Earlier request" });
+    for (const [i, e] of earlier.entries()) {
+      const option = h("option", { value: String(i) },
+        `${fmt.clock(e.entry.at)}, ${e.entry.messages ?? "?"} message(s), shares ${fmt.pct(e.diff.shared / e.diff.total)}: ${e.entry.prompt || e.entry.request_id}`);
+      option.selected = e === best;
+      picker.append(option);
+    }
+    const open = h("button", { type: "button", class: "small" }, "Open");
+    const view = h("div");
+    const draw = () => {
+      const chosen = earlier[Number(picker.value)];
+      open.onclick = () => go("recordings", chosen.entry.name);
+      replace(view, diffView(doc, chosen.doc, chosen.diff, ctx));
+    };
+    picker.addEventListener("change", draw);
+    replace(box, h("div", { class: "controls" }, h("label", null, "Against ", picker), open), view);
+    draw();
+  });
+  return box;
+}
+
+async function earlierRequests(exchange, doc) {
+  const read = await Promise.all(exchange.earlier.map(async (entry) => {
+    try {
+      const file = await recordedFile(entry.name, "request.json");
+      if (!file) return null;
+      const before = readRequest(JSON.parse(file.text), dialectOf(entry.path));
+      return { entry, doc: before, diff: requestDiff(doc, before) };
+    } catch (error) {
+      if (error instanceof SignedOut) throw error;
+      return null;
+    }
+  }));
+  return read.filter(Boolean);
+}
+
+/// Where `now` stops repeating `before`. Items compare as JSON without
+/// `cache_control`, which Claude Code moves to the newest message each turn.
+function requestDiff(now, before) {
+  const key = (item) => JSON.stringify(item.source, (name, value) => (name === "cache_control" ? undefined : value));
+  const sum = (items) => items.reduce((n, item) => n + item.bytes, 0);
+  const prefix = (a, b) => {
+    let n = 0;
+    while (n < a.length && n < b.length && key(a[n]) === key(b[n])) n++;
+    return n;
+  };
+  const names = (tools) => new Map(tools.map((t) => [t.name, key(t)]));
+  const nowTools = names(now.tools);
+  const beforeTools = names(before.tools);
+  const tools = {
+    same: now.tools.length === before.tools.length && prefix(now.tools, before.tools) === now.tools.length,
+    added: [...nowTools.keys()].filter((name) => !beforeTools.has(name)),
+    removed: [...beforeTools.keys()].filter((name) => !nowTools.has(name)),
+    changed: [...nowTools].filter(([name, k]) => beforeTools.has(name) && beforeTools.get(name) !== k).map(([name]) => name),
+  };
+  const system = prefix(now.system, before.system);
+  const systemSame = system === now.system.length && system === before.system.length;
+  const messages = prefix(now.messages, before.messages);
+  const params = [...new Set([...now.params, ...before.params].map((p) => p.key))].filter((name) => {
+    const a = now.params.find((p) => p.key === name);
+    const b = before.params.find((p) => p.key === name);
+    return !a || !b || key(a) !== key(b);
+  });
+  let shared = 0;
+  let breaks;
+  if (!tools.same) {
+    breaks = "the tools";
+  } else {
+    shared += sum(now.tools) + sum(now.system.slice(0, system));
+    if (!systemSame) {
+      breaks = system < now.system.length ? now.system[system].label : "the system blocks the earlier request had after them";
+    } else {
+      shared += sum(now.messages.slice(0, messages));
+      if (messages < before.messages.length) breaks = `message #${messages < now.messages.length ? now.messages[messages].index : before.messages[messages].index}`;
+    }
+  }
+  return { tools, system, systemSame, messages, params, shared, total: sum(now.tools) + sum(now.system) + sum(now.messages), breaks };
+}
+
+function diffView(now, before, diff, ctx) {
+  const changes = (label, list) => (list.length ? `${label} ${list.join(", ")}` : null);
+  const toolText = diff.tools.same
+    ? badge("same", "ok")
+    : [badge("changed", "warn"), " ", [changes("added", diff.tools.added), changes("removed", diff.tools.removed), changes("changed", diff.tools.changed)].filter(Boolean).join("; ") || "reordered"];
+  const systemText = diff.systemSame
+    ? [badge("same", "ok"), ` ${now.system.length} block(s)`]
+    : [badge("changed", "warn"), ` the first ${diff.system} of ${now.system.length} block(s) repeat; the earlier request had ${before.system.length}`];
+  const repeated = diff.messages === 0 ? "none repeat"
+    : diff.messages === 1 ? `#${now.messages[0].index} repeats`
+    : `#${now.messages[0].index}–#${now.messages[diff.messages - 1].index} repeat`;
+  const newer = now.messages.slice(diff.messages);
+  const dropped = before.messages.length - diff.messages;
+  const messageText = [badge(dropped ? "changed" : "extended", dropped ? "warn" : "ok"),
+    ` ${repeated}, ${newer.length} new`, dropped ? `, ${dropped} of the earlier request's differ or are gone` : ""];
+  return [
+    h("dl", { class: "facts" },
+      fact("Shared prefix", [`${fmt.bytes(diff.shared)} of ${fmt.bytes(diff.total)} (${fmt.pct(diff.shared / (diff.total || 1))})`,
+        diff.breaks ? `, first difference in ${diff.breaks}` : ", the earlier request is a prefix of this one"]),
+      fact("Tools", toolText),
+      fact("System", systemText),
+      fact("Messages", messageText),
+      fact("Parameters", diff.params.length ? [badge("changed", "warn"), ` ${diff.params.join(", ")}`] : badge("same", "ok"))),
+    newer.length ? [h("h3", null, "Messages after the repeated ones"), newer.map((m) => messageItem(m, ctx, m.bytes <= OPEN_BYTES))] : null,
+    dropped ? [h("h3", null, "The earlier request's messages from there"),
+      before.messages.slice(diff.messages).map((m) => messageItem(m, { ...NO_CONTEXT, needle: ctx.needle }, false))] : null,
+  ];
 }
 
 // ---------------------------------------------------------------- messages

@@ -208,6 +208,8 @@ td .sub { color: var(--muted); font-size: 12px; }
 
 .controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem; }
 .controls label { display: inline-flex; gap: 0.3rem; align-items: center; }
+.controls label:has(select) { flex: 1 1 20rem; min-width: 0; }
+.controls select { flex: 1; min-width: 0; max-width: 100%; }
 .controls input[type="text"] { flex: 1 1 18rem; max-width: 34rem; }
 .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .segmented button { border: none; border-radius: 0; border-right: 1px solid var(--line); }
