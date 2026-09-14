@@ -22,6 +22,7 @@ use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
 use crate::server::buffered::read_all;
 use crate::server::handlers::openai;
+use crate::server::ping::{PING_INTERVAL, Pings};
 use crate::server::relay::{Relay, RelayOutcome};
 use crate::server::{AppState, RequestId, RouterError, Snapshot};
 use crate::stats::StatsRecord;
@@ -29,7 +30,7 @@ use crate::text::short;
 use crate::translate;
 use crate::upstream::{
     UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
-    header_value, response_headers, upstream_headers,
+    header_value, is_event_stream, response_headers, upstream_headers,
 };
 
 pub async fn proxy(
@@ -285,12 +286,18 @@ async fn handle(
         match backend.kind {
             // ADR-0003: relayed as it arrives.
             BackendKind::Anthropic => {
+                let events = is_event_stream(upstream.response.headers());
                 let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
-                match exchange.take() {
-                    Some(exchange) => {
+                match (exchange.take(), events) {
+                    (Some(exchange), true) => Body::from_stream(Pings::new(
+                        exchange.track(relay, content_type.as_deref()),
+                        PING_INTERVAL,
+                    )),
+                    (Some(exchange), false) => {
                         Body::from_stream(exchange.track(relay, content_type.as_deref()))
                     }
-                    None => Body::from_stream(relay),
+                    (None, true) => Body::from_stream(Pings::new(relay, PING_INTERVAL)),
+                    (None, false) => Body::from_stream(relay),
                 }
             }
             BackendKind::OpenAi => {

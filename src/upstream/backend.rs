@@ -11,7 +11,7 @@ pub struct Backend {
     /// Origin without trailing slash.
     pub url: String,
     pub credential: Box<dyn CredentialSource>,
-    /// Headers forced onto every upstream request.
+    /// Headers forced onto every upstream request, values marked sensitive.
     pub headers: HeaderMap,
     /// Beta flags merged into `anthropic-beta`.
     pub anthropic_beta: Vec<String>,
@@ -38,7 +38,8 @@ impl Backend {
         let mut headers = HeaderMap::new();
         for (key, value) in &config.headers {
             let key = HeaderName::from_bytes(key.as_bytes()).expect("validated header name");
-            let value = HeaderValue::from_str(value).expect("validated header value");
+            let mut value = HeaderValue::from_str(value).expect("validated header value");
+            value.set_sensitive(true);
             headers.insert(key, value);
         }
         Ok(Self {

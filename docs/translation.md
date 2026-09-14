@@ -43,6 +43,7 @@ A 4xx/5xx from the backend keeps its status; its body becomes an Anthropic error
 - Meaning, not shape. `ir::Usage` is defined the Anthropic way (input excludes cache reads), so the OpenAI decoder does the arithmetic once and the encoder only writes.
 - One response path. Stream and document are the same event sequence, which is also why a document answered to a streaming request needs no special code.
 - No buffering. Events flow per chunk; the first token reaches Claude Code as soon as the backend produces it.
+- Quiet gaps are filled. While the backend produces nothing, a `ping` goes out every 15 seconds, before `message_start` too, since Claude Code abandons a stream that stays silent for three minutes (ADR-0014).
 - A place for the next API. Another wire format is another pair of codecs; the Anthropic side stays as it is.
 
 ## What it costs
@@ -50,3 +51,4 @@ A 4xx/5xx from the backend keeps its status; its body becomes an Anthropic error
 - Every request to an `openai` backend is parsed and re-serialized; the byte-for-byte relay of ADR-0003 is kept only for `anthropic` backends.
 - The router lags the Anthropic API for this kind: a new block type or parameter is a 400 until a mapping exists.
 - The thinking blocks the router emits carry no signature. They are stripped again before any `anthropic` backend sees them, so switching models back costs no failed request.
+- Tool call ids are the backend's own and reach Claude Code unchanged. Some servers use characters the Anthropic API rejects (vLLM names a Kimi model's calls `functions.<name>:<n>`), so a request to an `anthropic` backend has those characters replaced with `_` (ADR-0013).

@@ -31,14 +31,14 @@ cargo fmt
   - `routing/` — model id/alias → backend + upstream model.
   - `credential/` — `CredentialSource` trait; fixed and command-backed sources.
   - `upstream/` — backend registry, header translation, retry policy, HTTP client, probe.
-  - `server/` — axum app: request id span, client auth, handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"` backends, `console/` for the web console's `/api/` routes with its page under `console/assets/`), relay stream, error mapping.
+  - `server/` — axum app: accepting connections, request id span, client auth, handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"` backends, `console/` for the web console's `/api/` routes with its page under `console/assets/`), relay stream, pings on quiet event streams, error mapping, cutting what a stop leaves in flight.
   - `activity/` — in-memory record of exchanges in flight and recently finished, the unmatched model-name tally, hints read from upstream error bodies.
   - `stats/` — persistent per-exchange JSONL statistics: line format, daily files, aggregation.
   - `observability/` — tracing subscriber, per-request body capture (fed by the relay stream), recording listing and deletion.
   - `service/` — systemd user unit.
   - `cli/` — clap grammar and one file per subcommand.
   - `text.rs` — escaping and cutting for anything the router did not choose that reaches a message or a log line.
-  - `private_fs.rs` — owner-only directory creation, writes and appends for files that hold what a user sent or did.
+  - `private_fs.rs` — owner-only directory creation, writes and appends for files that hold what a user sent or did; the count of writes still queued, which a stop waits for.
 - `tests/` — black-box tests: `proxy.rs`/`body_log.rs`/`openai.rs`/`activity.rs`/`console.rs`/`reload.rs` against a mock backend in `tests/support/`, `cli.rs` against the binary.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed docs.

@@ -9,6 +9,7 @@ mod output;
 #[cfg(test)]
 mod tests;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -78,14 +79,14 @@ pub fn mask(secret: &str) -> String {
     format!("{head}…{tail}")
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum CredentialError {
     #[error("environment variable `{0}` is not set")]
     MissingEnv(String),
     #[error("credential contains characters not allowed in an HTTP header")]
     NotHeaderSafe,
     #[error("cannot start credential command: {0}")]
-    Spawn(#[source] std::io::Error),
+    Spawn(#[source] Arc<std::io::Error>),
     #[error("credential command exceeded {}", humantime::format_duration(*.0))]
     Timeout(Duration),
     #[error("credential command failed with {status}{}", stderr_suffix(.stderr))]
@@ -145,8 +146,10 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
     /// Current credential; `None` means the backend takes no auth header.
     async fn credential(&self) -> Result<Option<Credential>, CredentialError>;
 
-    /// Forgets any cached value so the next call re-acquires it.
-    async fn invalidate(&self);
+    /// Forgets the cached value if it is still `rejected`, so the next call
+    /// re-acquires it. A value re-acquired since `rejected` was handed out
+    /// stays: requests that were rejected together refresh once.
+    async fn invalidate(&self, rejected: &Credential);
 
     /// Whether `invalidate` can yield a different credential. Callers skip the
     /// 401-refresh cycle when it cannot.

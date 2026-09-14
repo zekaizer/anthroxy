@@ -1,13 +1,16 @@
 //! HTTP ingress: authentication, model discovery and the proxy handler.
 
+mod accept;
 mod annotate;
 mod auth;
 mod buffered;
 mod error;
 mod handlers;
+mod ping;
 pub mod relay;
 mod request_id;
 mod routes;
+mod shutdown;
 mod state;
 
 use std::net::SocketAddr;
@@ -27,6 +30,10 @@ pub use state::{
 
 /// How often expired body-log entries are swept.
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// How long a stop waits, once past its grace period, for connections to
+/// close and again for records to be written.
+const AFTER_CUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerBuildError {
@@ -54,11 +61,16 @@ pub enum ServerBuildError {
     },
 }
 
+/// How long a connection may take to send a request head, idle time before
+/// it included. hyper's own default, which `axum::serve` leaves inactive.
+const HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A router bound to `server.listen`, ready to serve.
 pub struct Server {
     listener: TcpListener,
     app: Router,
     state: AppState,
+    head_timeout: std::time::Duration,
 }
 
 impl Server {
@@ -77,7 +89,14 @@ impl Server {
             listener,
             app: routes::build(state.clone()),
             state,
+            head_timeout: HEAD_TIMEOUT,
         })
+    }
+
+    /// Replaces the 30 seconds a connection has to send each request head.
+    pub fn with_head_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.head_timeout = timeout;
+        self
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -91,22 +110,48 @@ impl Server {
         self.state.clone()
     }
 
-    /// Serves until `shutdown` resolves, then lets in-flight requests finish.
-    /// Body-log pruning runs alongside on whichever snapshot is current and
-    /// stops with the server.
+    /// Serves until `shutdown` resolves, then gives in-flight requests up to
+    /// `grace` to finish. Past it they are cut ([`AppState::cut_in_flight`]).
+    /// Returns once connections closed and the records of every exchange
+    /// were written, each wait bounded by `AFTER_CUT`. Body-log pruning runs
+    /// alongside on whichever snapshot is current and stops with the server.
     pub async fn serve(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-    ) -> std::io::Result<()> {
+        grace: std::time::Duration,
+    ) {
         let pruner = tokio::spawn(prune_loop(self.state.clone()));
-        let result = axum::serve(
-            self.listener,
-            self.app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown)
-        .await;
+        let (stopping, stopped) = tokio::sync::oneshot::channel::<()>();
+        let drained = accept::serve(self.listener, self.app, self.head_timeout, async move {
+            shutdown.await;
+            let _ = stopping.send(());
+        });
+        let deadline = async move {
+            let _ = stopped.await;
+            tokio::time::sleep(grace).await;
+        };
+        tokio::pin!(drained);
+        tokio::select! {
+            () = &mut drained => {}
+            () = deadline => {
+                tracing::warn!(
+                    in_flight = self.state.activity.in_flight().len(),
+                    grace_ms = grace.as_millis() as u64,
+                    "cutting requests still in flight"
+                );
+                self.state.cut_in_flight();
+                if tokio::time::timeout(AFTER_CUT, drained).await.is_err() {
+                    tracing::warn!("connections still open after the cut");
+                }
+            }
+        }
         pruner.abort();
-        result
+        if tokio::time::timeout(AFTER_CUT, crate::private_fs::settled())
+            .await
+            .is_err()
+        {
+            tracing::warn!("stopping before every record was written");
+        }
     }
 }
 

@@ -517,6 +517,196 @@ async fn streams_sse_chunks_as_they_arrive() {
     );
 }
 
+/// A stop must not wait on a response that is still streaming: Claude Code
+/// holds some open for minutes, and a service restart would wait with it.
+/// What it cuts is cut before it returns, and recorded.
+#[tokio::test]
+async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
+    let upstream = MockUpstream::start(|_| {
+        let events = futures_util::stream::iter(0..).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, std::io::Error>(format!("event: ping\ndata: {{\"n\":{i}}}\n\n"))
+        });
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(events))
+            .unwrap()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (bodies, stats) = (dir.path().join("bodies"), dir.path().join("stats"));
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(
+            &upstream.url(),
+            &format!(
+                "\n[logging]\nbody_dir = {:?}\n[stats]\ndir = {:?}\n",
+                bodies.display().to_string(),
+                stats.display().to_string()
+            ),
+        ),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config).await.unwrap();
+    let addr = server.local_addr();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let grace = Duration::from_millis(300);
+    let serving = tokio::spawn(server.serve(
+        async move {
+            let _ = stopped.await;
+        },
+        grace,
+    ));
+
+    let mut body = messages_body("fast");
+    body["stream"] = Value::Bool(true);
+    let res = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-api-key", TOKEN)
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    let mut stream = res.bytes_stream();
+    stream.next().await.unwrap().unwrap();
+
+    let stopping = Instant::now();
+    stop.send(()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    let elapsed = stopping.elapsed();
+    result
+        .expect("serve kept waiting on the open stream")
+        .unwrap();
+    assert!(elapsed >= grace, "the stream got no grace: {elapsed:?}");
+
+    let entry = std::fs::read_dir(&bodies)
+        .unwrap()
+        .next()
+        .expect("the request was recorded")
+        .unwrap()
+        .path();
+    let meta: Value =
+        serde_json::from_slice(&std::fs::read(entry.join("meta.json")).unwrap()).unwrap();
+    assert!(
+        meta["outcome"].is_string(),
+        "the cut stream's record was never finished: {meta}"
+    );
+    assert!(entry.join("response.sse").is_file());
+    let lines = std::fs::read_dir(&stats)
+        .unwrap()
+        .map(|file| std::fs::read_to_string(file.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert_eq!(lines.lines().count(), 1, "{lines}");
+
+    let rest = tokio::time::timeout(Duration::from_secs(1), async {
+        while let Some(Ok(_)) = stream.next().await {}
+    })
+    .await;
+    assert!(rest.is_ok(), "the client's stream was left open");
+}
+
+/// The token is checked only once a request head arrived, so a connection
+/// that never finishes one must not hold a file descriptor for good: enough
+/// of them and the router accepts nothing.
+#[tokio::test]
+async fn a_connection_that_sends_no_complete_request_head_is_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let upstream = MockUpstream::start(echo).await;
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(&upstream.url(), "\n[stats]\nenabled = false\n"),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config)
+        .await
+        .unwrap()
+        .with_head_timeout(Duration::from_millis(300));
+    let addr = server.local_addr();
+    tokio::spawn(server.serve(std::future::pending(), Duration::ZERO));
+
+    let silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut partial = tokio::net::TcpStream::connect(addr).await.unwrap();
+    partial
+        .write_all(b"POST /v1/messages HTTP/1.1\r\nhost: x\r\n")
+        .await
+        .unwrap();
+    for (name, mut stream) in [("silent", silent), ("partial", partial)] {
+        let mut buf = Vec::new();
+        let closed =
+            tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
+        assert!(closed.is_ok(), "the {name} connection was left open");
+    }
+
+    let res = reqwest::Client::new()
+        .get(format!("http://{addr}/healthz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "a prompt request is still served");
+}
+
+/// A request still waiting for the backend's headers when the grace period
+/// ends is answered, not dropped: the client can tell to send it again.
+#[tokio::test]
+async fn a_stop_answers_a_request_still_waiting_for_its_backend_with_a_503() {
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backend = format!("http://{}", silent.local_addr().unwrap());
+    let held = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        while let Ok((socket, _)) = silent.accept().await {
+            sockets.push(socket);
+        }
+    });
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(&backend, "\n[stats]\nenabled = false\n"),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config).await.unwrap();
+    let addr = server.local_addr();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let serving = tokio::spawn(server.serve(
+        async move {
+            let _ = stopped.await;
+        },
+        Duration::from_millis(100),
+    ));
+
+    let request = tokio::spawn(
+        reqwest::Client::new()
+            .post(format!("http://{addr}/v1/messages"))
+            .header("x-api-key", TOKEN)
+            .header("content-type", "application/json")
+            .body(messages_body("fast").to_string())
+            .send(),
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    stop.send(()).unwrap();
+
+    let res = tokio::time::timeout(Duration::from_secs(3), request)
+        .await
+        .expect("the waiting request was answered")
+        .unwrap()
+        .unwrap();
+    assert_eq!(res.status(), 503);
+    let body: Value = res.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stopping"),
+        "{body}"
+    );
+    tokio::time::timeout(Duration::from_secs(3), serving)
+        .await
+        .expect("serve returned")
+        .unwrap();
+    held.abort();
+}
+
 #[tokio::test]
 async fn retries_connection_failures_then_reports_backend() {
     // Nothing listens here.
@@ -737,6 +927,38 @@ async fn upstream_error_body_that_breaks_off_is_a_502() {
     );
 }
 
+/// Error bodies are read whole to be annotated; one that never ends must not
+/// grow the router's memory until the read timeout.
+#[tokio::test]
+async fn an_upstream_error_body_without_end_is_cut_off_with_a_502() {
+    let upstream = MockUpstream::start(|_| {
+        let chunks = futures_util::stream::repeat_with(|| {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![b'x'; 64 * 1024]))
+        });
+        Response::builder()
+            .status(500)
+            .header("content-type", "text/plain")
+            .body(Body::from_stream(chunks))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .expect("the router answered before the client gave up");
+    assert_eq!(res.status(), 502);
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("mock") && message.contains("bytes"),
+        "{message}"
+    );
+}
+
 /// The router refuses to follow a redirect, so it must not hand one to the
 /// client either: Claude Code would follow it, with the conversation and the
 /// router token, to an address the configuration never named.
@@ -857,6 +1079,33 @@ async fn unsigned_thinking_blocks_are_removed_before_an_anthropic_backend() {
         .unwrap();
     assert_eq!(res.status(), 200);
     assert_eq!(upstream.last().body, raw.as_bytes(), "untouched bytes");
+}
+
+/// ADR-0013: vLLM names a Kimi model's tool calls `functions.<name>:<n>`,
+/// which the Anthropic API rejects in the history of a switched session.
+#[tokio::test]
+async fn tool_call_ids_an_anthropic_backend_rejects_are_rewritten() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("smart");
+    body["messages"] = json!([
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {"command": "ls"}}
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "a.txt"}
+        ]}
+    ]);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    assert_eq!(sent["messages"][1]["content"][0]["id"], "functions_Bash_0");
+    assert_eq!(
+        sent["messages"][2]["content"][0]["tool_use_id"],
+        "functions_Bash_0"
+    );
+    assert_eq!(sent["future_field"], json!({"nested": [1, 2, 3]}));
 }
 
 /// A backend entry that names a proxy is reached through it; the backend

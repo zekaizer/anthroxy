@@ -77,6 +77,8 @@ dependencies = [
  "http-body-util",
  "humantime",
  "humantime-serde",
+ "hyper",
+ "hyper-util",
  "jiff",
  "owo-colors",
  "predicates",

@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted
+accepted; never using a cached value past its refresh window superseded by ADR-0015 for values with a reported `expires_at`
 
 ## Context
 

@@ -38,6 +38,9 @@ pub enum RouterError {
     /// A 2xx body the router cannot turn into a Messages response.
     #[error("backend `{backend}` returned a response the router cannot translate: {detail}")]
     BadUpstreamResponse { backend: String, detail: String },
+    /// A stop ran out of grace with this request in flight.
+    #[error("the router is stopping; send the request again")]
+    Stopping,
 }
 
 impl RouterError {
@@ -62,9 +65,9 @@ impl RouterError {
             RouterError::UnknownModel { .. }
             | RouterError::NoRoute { .. }
             | RouterError::NotOnOpenAi { .. } => ErrorType::NotFoundError,
-            RouterError::Upstream(_) | RouterError::BadUpstreamResponse { .. } => {
-                ErrorType::ApiError
-            }
+            RouterError::Upstream(_)
+            | RouterError::BadUpstreamResponse { .. }
+            | RouterError::Stopping => ErrorType::ApiError,
         }
     }
 
@@ -75,6 +78,7 @@ impl RouterError {
             RouterError::Upstream(_) | RouterError::BadUpstreamResponse { .. } => {
                 StatusCode::BAD_GATEWAY
             }
+            RouterError::Stopping => StatusCode::SERVICE_UNAVAILABLE,
             other => other.error_type().status(),
         }
     }
@@ -86,7 +90,8 @@ impl RouterError {
                 UpstreamError::Credential { backend, .. }
                 | UpstreamError::Transport { backend, .. }
                 | UpstreamError::Redirected { backend, .. }
-                | UpstreamError::Body { backend, .. },
+                | UpstreamError::Body { backend, .. }
+                | UpstreamError::BodyTooLarge { backend, .. },
             )
             | RouterError::Translate { backend, .. }
             | RouterError::NotOnOpenAi { backend, .. }

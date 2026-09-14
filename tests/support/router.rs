@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anthroxy::config::{Config, process_env};
 use anthroxy::server::{AppState, Server};
@@ -31,7 +32,9 @@ impl TestRouter {
         let addr = server.local_addr();
         let reload = server.state();
         let task = tokio::spawn(async move {
-            server.serve(std::future::pending::<()>()).await.unwrap();
+            server
+                .serve(std::future::pending::<()>(), Duration::ZERO)
+                .await;
         });
         Self {
             addr,

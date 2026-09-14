@@ -11,7 +11,7 @@ use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 
-use crate::private_fs::{create_dir_private, write_private};
+use crate::private_fs::{PendingWrite, create_dir_private, write_private};
 use crate::server::relay::RelayOutcome;
 
 #[derive(Debug, Clone)]
@@ -319,7 +319,9 @@ fn write_files(
     after: Option<tokio::task::JoinHandle<()>>,
 ) -> tokio::task::JoinHandle<()> {
     let span = tracing::Span::current();
+    let pending = PendingWrite::begin();
     let write = move || {
+        let _pending = pending;
         let _guard = span.enter();
         if let Err(error) = create_dir_private(&dir) {
             tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");

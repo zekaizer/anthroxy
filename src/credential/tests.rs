@@ -170,13 +170,35 @@ async fn command_output_is_trimmed_and_cached() {
         "second call served from cache"
     );
 
-    source.invalidate().await;
+    source.invalidate(&bearer("tok-abcdefgh")).await;
     source.credential().await.unwrap();
     assert_eq!(
         std::fs::read_to_string(&counter).unwrap().lines().count(),
         2,
         "invalidate forces a re-run"
     );
+}
+
+/// Requests sent with one value and rejected together each report it; only
+/// the first report may cost a run.
+#[tokio::test]
+async fn invalidating_a_value_already_replaced_keeps_the_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let cmd = format!(
+        "echo run >> {c} && echo tok-$(wc -l < {c} | tr -d ' ')",
+        c = counter.display()
+    );
+    let source = command(&cmd, Duration::from_secs(60), Duration::from_secs(5));
+
+    let rejected = source.credential().await.unwrap().unwrap();
+    assert_eq!(rejected, bearer("tok-1"));
+    source.invalidate(&rejected).await;
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok-2")));
+
+    source.invalidate(&rejected).await;
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok-2")));
+    assert_eq!(runs(&counter), 2, "a stale rejection re-ran the command");
 }
 
 #[tokio::test]
@@ -254,6 +276,115 @@ async fn command_failure_is_not_cached() {
     assert!(source.credential().await.is_err());
     std::fs::write(&flag, "").unwrap();
     assert_eq!(source.credential().await.unwrap(), Some(bearer("tok")));
+}
+
+/// Requests queued behind a failing run would otherwise each run the command
+/// in turn, the last one waiting for all of them.
+#[tokio::test]
+async fn requests_waiting_on_a_failed_run_share_its_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let cmd = format!(
+        "echo run >> {}; sleep 0.3; echo down >&2; exit 1",
+        counter.display()
+    );
+    let source = command(&cmd, Duration::from_secs(60), Duration::from_secs(5));
+
+    let started = std::time::Instant::now();
+    let (a, b, c) = tokio::join!(
+        source.credential(),
+        source.credential(),
+        source.credential()
+    );
+    for result in [a, b, c] {
+        let error = result.expect_err("every waiter sees the failure");
+        assert!(error.to_string().contains("down"), "{error}");
+    }
+    assert_eq!(runs(&counter), 1);
+    assert!(started.elapsed() < Duration::from_millis(900));
+
+    assert!(source.credential().await.is_err());
+    assert_eq!(runs(&counter), 2, "a request after the failure runs again");
+}
+
+/// A command that appends to `counter`, then prints `json` while `flag`
+/// exists and fails otherwise.
+fn flaky(counter: &std::path::Path, flag: &std::path::Path, json: &str) -> String {
+    format!(
+        "echo run >> {c}; test -f {f} || {{ echo down >&2; exit 1; }}; printf '{json}'",
+        c = counter.display(),
+        f = flag.display()
+    )
+}
+
+/// ADR-0015: a value whose reported expiry is far off outlives a failed
+/// refresh, and the command is not run again on every request meanwhile.
+#[tokio::test]
+async fn a_failed_refresh_keeps_serving_a_value_that_has_not_expired() {
+    let dir = tempfile::tempdir().unwrap();
+    let (counter, flag) = (dir.path().join("runs"), dir.path().join("up"));
+    std::fs::write(&flag, "").unwrap();
+    let cmd = flaky(
+        &counter,
+        &flag,
+        r#"{"token": "tok-1234567890", "expires_at": 4102444800}"#,
+    );
+    let source = json_command(&cmd, Duration::ZERO);
+    let token = source.credential().await.unwrap().unwrap();
+
+    std::fs::remove_file(&flag).unwrap();
+    assert_eq!(source.credential().await.unwrap(), Some(token.clone()));
+    assert_eq!(runs(&counter), 2, "the refresh was attempted");
+    assert_eq!(source.credential().await.unwrap(), Some(token.clone()));
+    assert_eq!(runs(&counter), 2, "no run again right after a failure");
+    let status = source.status();
+    assert_eq!(status.masked.as_deref(), Some("tok-…7890"));
+    assert!(
+        status.refreshes[1]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("down")
+    );
+
+    source.invalidate(&token).await;
+    assert!(
+        source.credential().await.is_err(),
+        "a value the backend rejected is not served again"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_refresh_serves_nothing_near_expiry_or_without_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let near = SystemTime::now() + EXPIRY_MARGIN / 2;
+    for (name, output, json) in [
+        (
+            "near-expiry",
+            CommandOutput::Json,
+            format!(
+                r#"{{"token": "tok-1234567890", "expires_at": {}}}"#,
+                unix_secs(near)
+            ),
+        ),
+        ("text", CommandOutput::Text, "tok-1234567890".to_owned()),
+    ] {
+        let (counter, flag) = (
+            dir.path().join(format!("{name}-runs")),
+            dir.path().join(format!("{name}-up")),
+        );
+        std::fs::write(&flag, "").unwrap();
+        let source = CommandCredential::new(
+            flaky(&counter, &flag, &json),
+            output,
+            CredentialHeader::bearer(),
+            Duration::ZERO,
+            Duration::from_secs(5),
+        );
+        source.credential().await.unwrap();
+        std::fs::remove_file(&flag).unwrap();
+        assert!(source.credential().await.is_err(), "{name}");
+    }
 }
 
 #[tokio::test]
@@ -337,6 +468,25 @@ async fn json_expiry_out_of_range_is_an_error_not_a_panic() {
             matches!(err, CredentialError::Json(_)),
             "{expires_at}: {err}"
         );
+    }
+}
+
+/// The message reaches a log line, the console and the client's 502; the
+/// value the command printed may be the token itself.
+#[test]
+fn json_output_errors_never_quote_what_the_command_printed() {
+    for stdout in [
+        r#""sk-ant-oat01-secret-9999""#,
+        r#"{"token": ["sk-ant-oat01-secret-9999"]}"#,
+        r#"{"token": "t", "expires_at": {"at": "sk-ant-oat01-secret-9999"}}"#,
+        r#"sk-ant-oat01-secret-9999"#,
+    ] {
+        let error = output::parse(CommandOutput::Json, stdout)
+            .err()
+            .unwrap_or_else(|| panic!("{stdout} parsed"));
+        let text = error.to_string();
+        assert!(matches!(error, CredentialError::Json(_)), "{text}");
+        assert!(!text.contains("secret"), "{text}");
     }
 }
 
@@ -443,7 +593,7 @@ async fn command_status_reports_the_cached_value_and_each_run() {
     assert_eq!(before.masked, None);
     assert!(before.refreshes.is_empty());
 
-    source.credential().await.unwrap();
+    let served = source.credential().await.unwrap().unwrap();
     source.credential().await.unwrap();
     let status = source.status();
     assert_eq!(status.masked.as_deref(), Some("tok-…7890"));
@@ -465,7 +615,7 @@ async fn command_status_reports_the_cached_value_and_each_run() {
     assert_eq!(status.refreshes[0].masked.as_deref(), Some("tok-…7890"));
     assert_eq!(status.refreshes[0].error, None);
 
-    source.invalidate().await;
+    source.invalidate(&served).await;
     let status = source.status();
     assert_eq!(status.masked, None, "nothing is cached after invalidate");
     assert_eq!(status.refresh_at, None);

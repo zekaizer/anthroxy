@@ -25,6 +25,8 @@ http = "1.5.0"
 http-body-util = "0.1.5"
 humantime = "2.4.0"
 humantime-serde = "1.1.1"
+hyper = { version = "1.8.1", features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", features = ["tokio", "server", "service"] }
 jiff = { version = "0.2.35", features = ["serde"] }
 owo-colors = "4.4.0"
 rand = "0.10.2"
@@ -47,5 +49,5 @@ rcgen = "0.14.10"
 regex-lite = "0.1.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
 tempfile = "3.27.0"
-tokio = { version = "1.53.1", features = ["full"] }
+tokio = { version = "1.53.1", features = ["full", "test-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
