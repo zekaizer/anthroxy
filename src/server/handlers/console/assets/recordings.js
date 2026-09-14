@@ -12,6 +12,8 @@ const OPEN_BYTES = 4 * 1024;
 const PARTS = [["request", "Request"], ["response", "Response"], ["meta", "Meta"]];
 const VIEWS = [["sections", "Sections"], ["raw", "Raw"]];
 const REMINDER = /<system-reminder>([\s\S]*?)<\/system-reminder>/g;
+/// How a reminder carrying a message the user sent mid-turn begins.
+const QUEUED = "The user sent a new message while you were working:";
 const utf8 = new TextEncoder();
 
 // ---------------------------------------------------------------- list
@@ -259,7 +261,7 @@ function requestView(exchange) {
   const sum = (items) => items.reduce((total, item) => total + item.bytes, 0);
   const matching = (items, needle) => (needle ? items.filter((item) => item.find.includes(needle)) : items);
   const sections = [
-    { id: "prompt", label: "Last prompt", count: prompt < 0 ? "none" : `#${doc.messages[prompt].index}`, items: prompt < 0 ? [] : doc.messages.slice(prompt), render: (ctx) => promptSection(doc, prompt, ctx) },
+    { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], render: (ctx) => promptSection(doc, prompt, ctx) },
     { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
     { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
@@ -432,14 +434,38 @@ function openaiCall(call) {
   return { kind: "tool_use", id: call.id, name: fn.name, input: input instanceof Error ? fn.arguments : input };
 }
 
-/// The position in `messages` of the last user message with text of its own,
-/// beyond system reminders and tool results; -1 when there is none.
+/// The user's last prompt as `{ position, text, queued }`: `position` in
+/// `messages` of the last user message with text of its own beside system
+/// reminders, or with a reminder through which Claude Code delivers a message
+/// the user sent while the model was working (`queued`); null when there is
+/// neither.
 function lastPrompt(messages) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== "user") continue;
-    if (messages[i].blocks.some((b) => b.kind === "text" && b.text.replace(REMINDER, "").trim())) return i;
+  for (let position = messages.length - 1; position >= 0; position--) {
+    if (messages[position].role !== "user") continue;
+    let text = "";
+    let queued = false;
+    for (const b of messages[position].blocks) {
+      if (b.kind !== "text") continue;
+      let at = 0;
+      for (const match of [...b.text.matchAll(REMINDER), null]) {
+        const own = b.text.slice(at, match ? match.index : undefined);
+        if (own.trim()) {
+          if (queued) text = "";
+          queued = false;
+          text += `${own.trim()}\n\n`;
+        }
+        if (!match) break;
+        const inner = match[1].trim();
+        if (inner.startsWith(QUEUED) && inner.slice(QUEUED.length).trim()) {
+          text = inner.slice(QUEUED.length).trim();
+          queued = true;
+        }
+        at = match.index + match[0].length;
+      }
+    }
+    if (text.trim()) return { position, text: text.trim(), queued };
   }
-  return -1;
+  return null;
 }
 
 /// Where each tool call and its result sit, so either can lead to the other.
@@ -455,25 +481,21 @@ function toolLinks(doc) {
   return { calls, results };
 }
 
-function promptSection(doc, position, ctx) {
-  if (position < 0) return h("p", { class: "note" }, "No user message carries text of its own.");
-  const m = doc.messages[position];
-  const after = doc.messages.slice(position + 1);
+function promptSection(doc, prompt, ctx) {
+  if (!prompt) return h("p", { class: "note" }, "No user message carries a prompt.");
+  const m = doc.messages[prompt.position];
+  const after = doc.messages.slice(prompt.position + 1);
   const calls = after.reduce((n, next) => n + next.blocks.filter((b) => b.kind === "tool_use").length, 0);
   const reminders = m.blocks.reduce((n, b) => n + (b.kind === "text" ? (b.text.match(REMINDER) || []).length : 0), 0);
-  const own = m.blocks
-    .filter((b) => b.kind === "text")
-    .map((b) => b.text.replace(REMINDER, "").trim())
-    .filter(Boolean)
-    .join("\n\n");
   const told = [`Message #${m.index} of ${doc.messages.length}`];
-  if (reminders) told.push(`sent with ${reminders} system reminder(s)`);
+  if (prompt.queued) told.push("sent while the model was working, inside a system reminder");
+  else if (reminders) told.push(`sent with ${reminders} system reminder(s)`);
   told.push(after.length ? `followed by ${after.length} message(s) with ${calls} tool call(s)` : "the last message");
   const opens = (item, fallback) => (ctx.needle ? item.find.includes(ctx.needle) : fallback);
   return [
-    h("div", { class: "prompt text" }, marked(own, ctx.needle)),
+    h("div", { class: "prompt text" }, marked(prompt.text, ctx.needle)),
     h("p", { class: "note" }, `${told.join(", ")}.`),
-    messageItem(m, ctx, opens(m, false)),
+    messageItem(m, ctx, opens(m, prompt.queued && m.bytes <= OPEN_BYTES)),
     after.map((next) => messageItem(next, ctx, opens(next, next.bytes <= OPEN_BYTES))),
   ];
 }

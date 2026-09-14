@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 pub struct RequestSummary {
     /// `messages` in the body.
     pub messages: usize,
-    /// The last user message's own text, without system reminders, on one
-    /// line and cut; `None` when no user message has text of its own.
+    /// The user's last prompt, on one line and cut: a user message's own text
+    /// without system reminders, or a message the user sent while the model
+    /// was working; `None` when there is neither.
     pub prompt: Option<String>,
 }
 
@@ -18,6 +19,8 @@ const PROMPT_CHARS: usize = 200;
 
 const REMINDER_OPEN: &str = "<system-reminder>";
 const REMINDER_CLOSE: &str = "</system-reminder>";
+/// How a reminder carrying a message the user sent mid-turn begins.
+const QUEUED: &str = "The user sent a new message while you were working:";
 
 #[derive(Deserialize)]
 struct Body {
@@ -62,7 +65,7 @@ pub fn summarize(body: &[u8]) -> RequestSummary {
         .iter()
         .rev()
         .filter(|m| m.role == "user")
-        .find_map(|m| own_text(&m.content))
+        .find_map(|m| prompt_in(&m.content))
         .map(|text| one_line(&text));
     RequestSummary {
         messages: body.messages.len(),
@@ -70,9 +73,11 @@ pub fn summarize(body: &[u8]) -> RequestSummary {
     }
 }
 
-/// The text a user message carries besides system reminders; tool results
-/// and other blocks carry none.
-fn own_text(content: &Content) -> Option<String> {
+/// The prompt a user message carries: its own text beside system reminders,
+/// or the text of a later reminder through which Claude Code delivers a
+/// message the user sent while the model was working. Tool results and other
+/// blocks carry none.
+fn prompt_in(content: &Content) -> Option<String> {
     let texts: Vec<&str> = match content {
         Content::Text(text) => vec![text],
         Content::Blocks(blocks) => blocks
@@ -82,29 +87,46 @@ fn own_text(content: &Content) -> Option<String> {
             .collect(),
         Content::None | Content::Other(_) => Vec::new(),
     };
-    let own = texts
-        .into_iter()
-        .map(without_reminders)
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!own.trim().is_empty()).then_some(own)
-}
-
-fn without_reminders(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find(REMINDER_OPEN) {
-        out.push_str(&rest[..start]);
-        match rest[start..].find(REMINDER_CLOSE) {
-            Some(end) => rest = &rest[start + end + REMINDER_CLOSE.len()..],
-            None => {
-                rest = "";
+    let mut prompt = String::new();
+    let mut queued = false;
+    for text in texts {
+        let mut rest = text;
+        loop {
+            let (own, reminder, next) = match rest.find(REMINDER_OPEN) {
+                Some(start) => {
+                    let inner = &rest[start + REMINDER_OPEN.len()..];
+                    match inner.find(REMINDER_CLOSE) {
+                        Some(end) => (
+                            &rest[..start],
+                            Some(&inner[..end]),
+                            &inner[end + REMINDER_CLOSE.len()..],
+                        ),
+                        None => (&rest[..start], None, ""),
+                    }
+                }
+                None => (rest, None, ""),
+            };
+            if !own.trim().is_empty() {
+                if queued {
+                    prompt.clear();
+                    queued = false;
+                }
+                prompt.push_str(own);
+                prompt.push('\n');
+            }
+            if let Some(sent) = reminder.and_then(|r| r.trim_start().strip_prefix(QUEUED))
+                && !sent.trim().is_empty()
+            {
+                prompt = sent.to_owned();
+                queued = true;
+            }
+            if next.is_empty() {
                 break;
             }
+            rest = next;
         }
     }
-    out.push_str(rest);
-    out
+    (!prompt.trim().is_empty()).then_some(prompt)
 }
 
 fn one_line(text: &str) -> String {
