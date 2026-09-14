@@ -324,3 +324,35 @@ fn summary_takes_a_message_sent_while_the_model_worked_as_the_prompt() {
         Some("Also run the tests.")
     );
 }
+
+#[test]
+fn summary_keeps_text_after_a_reminder_tag_that_never_closes() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "why does <system-reminder> show up in my log?"}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()).prompt.as_deref(),
+        Some("why does <system-reminder> show up in my log?")
+    );
+}
+
+#[test]
+fn summary_reads_past_messages_and_blocks_it_cannot_make_sense_of() {
+    let body = json!({"model": "m", "messages": [
+        null,
+        {"role": null, "content": "no role"},
+        {"role": "user", "content": [
+            {"type": null, "text": "no type"},
+            {"type": "text", "text": null},
+            {"type": "text", "text": "the prompt"}
+        ]},
+        7
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()),
+        RequestSummary {
+            messages: 4,
+            prompt: Some("the prompt".to_owned()),
+        }
+    );
+}

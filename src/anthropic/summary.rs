@@ -1,7 +1,7 @@
 //! What a Messages request asks, in a line: the body log lists entries by it.
 
-use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// A request as the recordings list names it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -24,38 +24,12 @@ const QUEUED: &str = "The user sent a new message while you were working:";
 
 #[derive(Deserialize)]
 struct Body {
-    messages: Vec<Message>,
+    messages: Vec<Value>,
 }
 
-#[derive(Deserialize)]
-struct Message {
-    #[serde(default)]
-    role: String,
-    #[serde(default)]
-    content: Content,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(untagged)]
-enum Content {
-    Text(String),
-    Blocks(Vec<Block>),
-    #[default]
-    #[serde(skip)]
-    None,
-    Other(IgnoredAny),
-}
-
-#[derive(Deserialize)]
-struct Block {
-    #[serde(rename = "type", default)]
-    kind: String,
-    #[serde(default)]
-    text: Option<String>,
-}
-
-/// Summarises a Messages request body; a body that does not read as one
-/// summarises as empty.
+/// Summarises a Messages request body; a body without a `messages` array
+/// summarises as empty, and a message or block of the wrong shape carries no
+/// prompt.
 pub fn summarize(body: &[u8]) -> RequestSummary {
     let Ok(body) = serde_json::from_slice::<Body>(body) else {
         return RequestSummary::default();
@@ -64,8 +38,8 @@ pub fn summarize(body: &[u8]) -> RequestSummary {
         .messages
         .iter()
         .rev()
-        .filter(|m| m.role == "user")
-        .find_map(|m| prompt_in(&m.content))
+        .filter(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+        .find_map(|m| prompt_in(m.get("content")))
         .map(|text| one_line(&text));
     RequestSummary {
         messages: body.messages.len(),
@@ -77,15 +51,15 @@ pub fn summarize(body: &[u8]) -> RequestSummary {
 /// or the text of a later reminder through which Claude Code delivers a
 /// message the user sent while the model was working. Tool results and other
 /// blocks carry none.
-fn prompt_in(content: &Content) -> Option<String> {
+fn prompt_in(content: Option<&Value>) -> Option<String> {
     let texts: Vec<&str> = match content {
-        Content::Text(text) => vec![text],
-        Content::Blocks(blocks) => blocks
+        Some(Value::String(text)) => vec![text],
+        Some(Value::Array(blocks)) => blocks
             .iter()
-            .filter(|b| b.kind == "text")
-            .filter_map(|b| b.text.as_deref())
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
             .collect(),
-        Content::None | Content::Other(_) => Vec::new(),
+        _ => Vec::new(),
     };
     let mut prompt = String::new();
     let mut queued = false;
@@ -101,7 +75,8 @@ fn prompt_in(content: &Content) -> Option<String> {
                             Some(&inner[..end]),
                             &inner[end + REMINDER_CLOSE.len()..],
                         ),
-                        None => (&rest[..start], None, ""),
+                        // An unclosed tag is text like any other.
+                        None => (rest, None, ""),
                     }
                 }
                 None => (rest, None, ""),
