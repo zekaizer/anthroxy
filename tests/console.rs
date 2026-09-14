@@ -88,6 +88,7 @@ async fn the_page_is_served_without_a_token_under_a_strict_policy() {
     for (path, content_type) in [
         ("/ui/", "text/html"),
         ("/ui/app.js", "text/javascript"),
+        ("/ui/recordings.js", "text/javascript"),
         ("/ui/app.css", "text/css"),
     ] {
         let res = http.get(router.url(path)).send().await.unwrap();
@@ -117,7 +118,7 @@ async fn the_page_is_served_without_a_token_under_a_strict_policy() {
         .await
         .unwrap();
     assert!(
-        page.contains("app.js") && page.contains("app.css"),
+        page.contains("app.js") && page.contains("recordings.js") && page.contains("app.css"),
         "{page}"
     );
 }

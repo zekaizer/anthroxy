@@ -20,7 +20,7 @@ use serde::Serialize;
 use crate::anthropic::{ErrorResponse, ErrorType};
 use crate::server::RequestId;
 
-pub use assets::{index, root, script, style};
+pub use assets::{index, recordings_script, root, script, style};
 pub use env::env;
 pub use probe::probe;
 pub use recordings::{
