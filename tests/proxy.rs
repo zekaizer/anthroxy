@@ -578,7 +578,6 @@ async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
     let elapsed = stopping.elapsed();
     result
         .expect("serve kept waiting on the open stream")
-        .unwrap()
         .unwrap();
     assert!(elapsed >= grace, "the stream got no grace: {elapsed:?}");
 
@@ -606,6 +605,47 @@ async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
     })
     .await;
     assert!(rest.is_ok(), "the client's stream was left open");
+}
+
+/// The token is checked only once a request head arrived, so a connection
+/// that never finishes one must not hold a file descriptor for good: enough
+/// of them and the router accepts nothing.
+#[tokio::test]
+async fn a_connection_that_sends_no_complete_request_head_is_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let upstream = MockUpstream::start(echo).await;
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(&upstream.url(), "\n[stats]\nenabled = false\n"),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config)
+        .await
+        .unwrap()
+        .with_head_timeout(Duration::from_millis(300));
+    let addr = server.local_addr();
+    tokio::spawn(server.serve(std::future::pending(), Duration::ZERO));
+
+    let silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut partial = tokio::net::TcpStream::connect(addr).await.unwrap();
+    partial
+        .write_all(b"POST /v1/messages HTTP/1.1\r\nhost: x\r\n")
+        .await
+        .unwrap();
+    for (name, mut stream) in [("silent", silent), ("partial", partial)] {
+        let mut buf = Vec::new();
+        let closed =
+            tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
+        assert!(closed.is_ok(), "the {name} connection was left open");
+    }
+
+    let res = reqwest::Client::new()
+        .get(format!("http://{addr}/healthz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "a prompt request is still served");
 }
 
 /// A request still waiting for the backend's headers when the grace period
@@ -663,7 +703,6 @@ async fn a_stop_answers_a_request_still_waiting_for_its_backend_with_a_503() {
     tokio::time::timeout(Duration::from_secs(3), serving)
         .await
         .expect("serve returned")
-        .unwrap()
         .unwrap();
     held.abort();
 }

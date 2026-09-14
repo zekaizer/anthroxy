@@ -31,7 +31,7 @@ cargo fmt
   - `routing/` — model id/alias → backend + upstream model.
   - `credential/` — `CredentialSource` trait; fixed and command-backed sources.
   - `upstream/` — backend registry, header translation, retry policy, HTTP client, probe.
-  - `server/` — axum app: request id span, client auth, handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"` backends, `console/` for the web console's `/api/` routes with its page under `console/assets/`), relay stream, error mapping, cutting what a stop leaves in flight.
+  - `server/` — axum app: accepting connections, request id span, client auth, handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"` backends, `console/` for the web console's `/api/` routes with its page under `console/assets/`), relay stream, error mapping, cutting what a stop leaves in flight.
   - `activity/` — in-memory record of exchanges in flight and recently finished, the unmatched model-name tally, hints read from upstream error bodies.
   - `stats/` — persistent per-exchange JSONL statistics: line format, daily files, aggregation.
   - `observability/` — tracing subscriber, per-request body capture (fed by the relay stream), recording listing and deletion.

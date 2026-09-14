@@ -34,8 +34,7 @@ impl TestRouter {
         let task = tokio::spawn(async move {
             server
                 .serve(std::future::pending::<()>(), Duration::ZERO)
-                .await
-                .unwrap();
+                .await;
         });
         Self {
             addr,

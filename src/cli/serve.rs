@@ -58,9 +58,8 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     crate::upstream::network::log(&config);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
-    let result = server.serve(shutdown_signal(), SHUTDOWN_GRACE).await;
+    server.serve(shutdown_signal(), SHUTDOWN_GRACE).await;
     reloader.abort();
-    result?;
     tracing::info!("anthroxy stopped");
     Ok(())
 }

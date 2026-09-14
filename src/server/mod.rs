@@ -1,5 +1,6 @@
 //! HTTP ingress: authentication, model discovery and the proxy handler.
 
+mod accept;
 mod annotate;
 mod auth;
 mod buffered;
@@ -59,11 +60,16 @@ pub enum ServerBuildError {
     },
 }
 
+/// How long a connection may take to send a request head, idle time before
+/// it included. hyper's own default, which `axum::serve` leaves inactive.
+const HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A router bound to `server.listen`, ready to serve.
 pub struct Server {
     listener: TcpListener,
     app: Router,
     state: AppState,
+    head_timeout: std::time::Duration,
 }
 
 impl Server {
@@ -82,7 +88,14 @@ impl Server {
             listener,
             app: routes::build(state.clone()),
             state,
+            head_timeout: HEAD_TIMEOUT,
         })
+    }
+
+    /// Replaces the 30 seconds a connection has to send each request head.
+    pub fn with_head_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.head_timeout = timeout;
+        self
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -105,28 +118,20 @@ impl Server {
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
         grace: std::time::Duration,
-    ) -> std::io::Result<()> {
+    ) {
         let pruner = tokio::spawn(prune_loop(self.state.clone()));
         let (stopping, stopped) = tokio::sync::oneshot::channel::<()>();
-        let drained = axum::serve(
-            self.listener,
-            self.app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
+        let drained = accept::serve(self.listener, self.app, self.head_timeout, async move {
             shutdown.await;
             let _ = stopping.send(());
-        })
-        .into_future();
+        });
         let deadline = async move {
-            // A sender dropped unsent is a server that ended on its own.
-            if stopped.await.is_err() {
-                std::future::pending::<()>().await;
-            }
+            let _ = stopped.await;
             tokio::time::sleep(grace).await;
         };
         tokio::pin!(drained);
-        let result = tokio::select! {
-            result = &mut drained => result,
+        tokio::select! {
+            () = &mut drained => {}
             () = deadline => {
                 tracing::warn!(
                     in_flight = self.state.activity.in_flight().len(),
@@ -134,14 +139,11 @@ impl Server {
                     "cutting requests still in flight"
                 );
                 self.state.cut_in_flight();
-                tokio::time::timeout(AFTER_CUT, drained)
-                    .await
-                    .unwrap_or_else(|_| {
-                        tracing::warn!("connections still open after the cut");
-                        Ok(())
-                    })
+                if tokio::time::timeout(AFTER_CUT, drained).await.is_err() {
+                    tracing::warn!("connections still open after the cut");
+                }
             }
-        };
+        }
         pruner.abort();
         if tokio::time::timeout(AFTER_CUT, crate::private_fs::settled())
             .await
@@ -149,7 +151,6 @@ impl Server {
         {
             tracing::warn!("stopping before every record was written");
         }
-        result
     }
 }
 
