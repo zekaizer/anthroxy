@@ -50,3 +50,4 @@ A 4xx/5xx from the backend keeps its status; its body becomes an Anthropic error
 - Every request to an `openai` backend is parsed and re-serialized; the byte-for-byte relay of ADR-0003 is kept only for `anthropic` backends.
 - The router lags the Anthropic API for this kind: a new block type or parameter is a 400 until a mapping exists.
 - The thinking blocks the router emits carry no signature. They are stripped again before any `anthropic` backend sees them, so switching models back costs no failed request.
+- Tool call ids are the backend's own and reach Claude Code unchanged. Some servers use characters the Anthropic API rejects (vLLM names a Kimi model's calls `functions.<name>:<n>`), so a request to an `anthropic` backend has those characters replaced with `_` (ADR-0013).

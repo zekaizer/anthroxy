@@ -1042,6 +1042,33 @@ async fn unsigned_thinking_blocks_are_removed_before_an_anthropic_backend() {
     assert_eq!(upstream.last().body, raw.as_bytes(), "untouched bytes");
 }
 
+/// ADR-0013: vLLM names a Kimi model's tool calls `functions.<name>:<n>`,
+/// which the Anthropic API rejects in the history of a switched session.
+#[tokio::test]
+async fn tool_call_ids_an_anthropic_backend_rejects_are_rewritten() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("smart");
+    body["messages"] = json!([
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {"command": "ls"}}
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "a.txt"}
+        ]}
+    ]);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    assert_eq!(sent["messages"][1]["content"][0]["id"], "functions_Bash_0");
+    assert_eq!(
+        sent["messages"][2]["content"][0]["tool_use_id"],
+        "functions_Bash_0"
+    );
+    assert_eq!(sent["future_field"], json!({"nested": [1, 2, 3]}));
+}
+
 /// A backend entry that names a proxy is reached through it; the backend
 /// beside it still connects directly.
 #[tokio::test]

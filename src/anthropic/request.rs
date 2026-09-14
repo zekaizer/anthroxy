@@ -65,11 +65,12 @@ pub fn peek(body: &[u8]) -> Result<RequestPeek, PeekError> {
     Ok(peek)
 }
 
-/// Returns `body` with `model` replaced when `model` is given, every path
-/// in `drop_fields` removed and, when `strip_unsigned_thinking` is set,
-/// unsigned `thinking` blocks removed (ADR-0010: the router's own thinking
-/// blocks, which an Anthropic backend rejects; an assistant message left
-/// empty by that goes with them). Other fields and their order stay intact;
+/// Returns `body` with `model` replaced when `model` is given and every path
+/// in `drop_fields` removed. For an Anthropic backend (`for_anthropic`),
+/// unsigned `thinking` blocks are removed too (ADR-0010: the router's own
+/// thinking blocks, which an Anthropic backend rejects; an assistant message
+/// left empty by that goes with them) and tool call ids are put in the form
+/// it accepts (ADR-0013). Other fields and their order stay intact;
 /// `Ok(None)` when nothing changed, so the caller forwards the original
 /// bytes. A path is dot-separated object keys; one whose prefix is missing
 /// or not an object removes nothing.
@@ -82,15 +83,16 @@ pub fn rewrite(
     body: &[u8],
     model: Option<&str>,
     drop_fields: &[String],
-    strip_unsigned_thinking: bool,
+    for_anthropic: bool,
 ) -> Result<Option<Vec<u8>>, PeekError> {
-    // Parsing is paid only when a rewrite can apply; for the thinking strip
-    // that needs the text `"thinking"` to be in the body at all. The body
-    // passed `peek`, so it is UTF-8 and `str::contains` (two-way search)
-    // does the scan.
-    let may_strip = strip_unsigned_thinking
-        && std::str::from_utf8(body).is_ok_and(|text| text.contains(THINKING));
-    if model.is_none() && drop_fields.is_empty() && !may_strip {
+    // Parsing is paid only when a rewrite can apply; the Anthropic rules need
+    // the text `"thinking"` or `"tool_use"` to be in the body at all. The
+    // body passed `peek`, so it is UTF-8 and `str::contains` (two-way
+    // search) does the scan.
+    let text = std::str::from_utf8(body).unwrap_or_default();
+    let may_strip = for_anthropic && text.contains(THINKING);
+    let may_rename_ids = for_anthropic && text.contains(TOOL_USE);
+    if model.is_none() && drop_fields.is_empty() && !may_strip && !may_rename_ids {
         return Ok(None);
     }
     let mut value: serde_json::Map<String, serde_json::Value> =
@@ -109,10 +111,14 @@ pub fn rewrite(
     if may_strip {
         changed |= strip_unsigned(&mut value);
     }
+    if may_rename_ids {
+        changed |= accepted_tool_ids(&mut value);
+    }
     Ok(changed.then(|| serde_json::to_vec(&value).expect("a parsed document serializes")))
 }
 
 const THINKING: &str = "\"thinking\"";
+const TOOL_USE: &str = "\"tool_use\"";
 
 /// Whether `path` named an existing field, which is now gone.
 fn remove_path(object: &mut serde_json::Map<String, serde_json::Value>, path: &str) -> bool {
@@ -152,4 +158,42 @@ fn strip_unsigned(root: &mut serde_json::Map<String, serde_json::Value>) -> bool
         !blocks.is_empty()
     });
     changed
+}
+
+/// Whether any `tool_use.id` or `tool_result.tool_use_id` had a character
+/// outside `[A-Za-z0-9_-]`, which is now `_` (ADR-0013).
+fn accepted_tool_ids(root: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    use serde_json::Value;
+    let Some(Value::Array(messages)) = root.get_mut("messages") else {
+        return false;
+    };
+    let mut changed = false;
+    let blocks = messages
+        .iter_mut()
+        .filter_map(|message| match message.get_mut("content") {
+            Some(Value::Array(blocks)) => Some(blocks),
+            _ => None,
+        })
+        .flatten();
+    for block in blocks {
+        let field = match block.get("type").and_then(Value::as_str) {
+            Some("tool_use") => "id",
+            Some("tool_result") => "tool_use_id",
+            _ => continue,
+        };
+        if let Some(Value::String(id)) = block.get_mut(field)
+            && id.chars().any(|c| !accepted_id_char(c))
+        {
+            *id = id
+                .chars()
+                .map(|c| if accepted_id_char(c) { c } else { '_' })
+                .collect();
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn accepted_id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }

@@ -261,6 +261,55 @@ fn untouched_bodies_are_not_rewritten() {
     assert_eq!(rewrite(b"{}", None, &[], true).unwrap(), None);
 }
 
+// ---- tool call ids (rewrite, ADR-0013)
+
+#[test]
+fn tool_call_ids_outside_the_accepted_form_are_rewritten_in_pairs() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "read it"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "functions.read:0 stays in text"},
+            {"type": "tool_use", "id": "functions.read:0", "name": "read", "input": {}},
+            {"type": "tool_use", "id": "call_ok-1", "name": "read", "input": {}}
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "functions.read:0", "content": "a"},
+            {"type": "tool_result", "tool_use_id": "call_ok-1", "content": "b"}
+        ]},
+        {"role": "assistant", "content": [
+            {"type": "server_tool_use", "id": "srvtoolu.kept", "name": "web_search", "input": {}}
+        ]}
+    ]});
+    let messages = run(body).unwrap()["messages"].clone();
+    assert_eq!(
+        messages[1]["content"][0]["text"],
+        "functions.read:0 stays in text"
+    );
+    assert_eq!(messages[1]["content"][1]["id"], "functions_read_0");
+    assert_eq!(messages[1]["content"][2]["id"], "call_ok-1");
+    assert_eq!(messages[2]["content"][0]["tool_use_id"], "functions_read_0");
+    assert_eq!(messages[2]["content"][1]["tool_use_id"], "call_ok-1");
+    assert_eq!(messages[3]["content"][0]["id"], "srvtoolu.kept");
+}
+
+#[test]
+fn accepted_tool_call_ids_leave_the_body_alone() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_01AbC", "name": "read", "input": {}}
+        ]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01AbC"}]}
+    ]});
+    assert_eq!(run(body.clone()), None);
+    let mut foreign = body;
+    foreign["messages"][0]["content"][0]["id"] = json!("functions.read:0");
+    assert_eq!(
+        rewrite(&serde_json::to_vec(&foreign).unwrap(), None, &[], false).unwrap(),
+        None,
+        "a body for an openai backend keeps its ids"
+    );
+}
+
 #[test]
 fn summary_names_the_last_prompt_without_reminders_or_tool_results() {
     let body = json!({"model": "m", "messages": [
