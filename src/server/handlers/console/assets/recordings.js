@@ -141,12 +141,11 @@ function entryFacts(e, filterBy) {
 /// `listed` is the whole list, where earlier requests of the session are found.
 async function inspect(target, name, files, neighbors, listed) {
   await guarded(target, async () => {
-    const names = files || ["meta.json", "request.json", "response.json", "response.sse", "response.bin"];
-    const responseName = names.find((file) => file.startsWith("response."));
+    const responses = (files || RESPONSE_FILES).filter((file) => file.startsWith("response."));
     const [meta, request, response] = await Promise.all([
       recordedFile(name, "meta.json"),
       recordedFile(name, "request.json"),
-      responseName ? recordedFile(name, responseName) : null,
+      firstRecordedFile(name, responses),
     ]);
     const exchange = {
       name,
@@ -193,6 +192,17 @@ async function inspect(target, name, files, neighbors, listed) {
 /// The request format an upstream path speaks.
 function dialectOf(path) {
   return String(path || "").startsWith("/v1/chat/completions") ? "openai" : "anthropic";
+}
+
+const RESPONSE_FILES = ["response.json", "response.sse", "response.bin"];
+
+/// The first of `names` the entry holds, or null.
+async function firstRecordedFile(name, names) {
+  for (const file of names) {
+    const found = await recordedFile(name, file);
+    if (found) return found;
+  }
+  return null;
 }
 
 /// A recorded file as `{ name, text }`, or null when the entry has none.
