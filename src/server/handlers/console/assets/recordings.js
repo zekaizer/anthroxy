@@ -640,12 +640,15 @@ function compareSection(exchange, doc, ctx) {
       replace(box, h("p", { class: "note" }, "The session's earlier recordings could not be read."));
       return;
     }
-    const best = earlier.reduce((a, b) => (b.diff.shared > a.diff.shared ? b : a));
+    // The choice outlives the section, which Find redraws.
+    if (exchange.parsed.compareWith === undefined) {
+      exchange.parsed.compareWith = earlier.indexOf(earlier.reduce((a, b) => (b.diff.shared > a.diff.shared ? b : a)));
+    }
     const picker = h("select", { "aria-label": "Earlier request" });
     for (const [i, e] of earlier.entries()) {
       const option = h("option", { value: String(i) },
-        `${fmt.clock(e.entry.at)}, ${e.entry.messages ?? "?"} message(s), shares ${fmt.pct(e.diff.shared / e.diff.total)}: ${e.entry.prompt || e.entry.request_id}`);
-      option.selected = e === best;
+        `${fmt.clock(e.entry.at)}, ${e.entry.messages ?? "?"} message(s), shares ${fmt.pct(e.diff.shared / (e.diff.total || 1))}: ${e.entry.prompt || e.entry.request_id}`);
+      option.selected = i === exchange.parsed.compareWith;
       picker.append(option);
     }
     const open = h("button", { type: "button", class: "small" }, "Open");
@@ -655,7 +658,10 @@ function compareSection(exchange, doc, ctx) {
       open.onclick = () => go("recordings", chosen.entry.name);
       replace(view, diffView(doc, chosen.doc, chosen.diff, ctx));
     };
-    picker.addEventListener("change", draw);
+    picker.addEventListener("change", () => {
+      exchange.parsed.compareWith = Number(picker.value);
+      draw();
+    });
     replace(box, h("div", { class: "controls" }, h("label", null, "Against ", picker), open), view);
     draw();
   });
