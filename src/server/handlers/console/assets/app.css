@@ -182,6 +182,8 @@ tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--accent-soft); }
 tr.selected td { background: var(--accent-soft); }
 td .sub { color: var(--muted); font-size: 12px; }
+/* A reason beside its badge: one line, however long the backend made it. */
+td .sub.one-line { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nowrap { white-space: nowrap; }
 /* break-word, not anywhere: a long value widens its table, which scrolls,
    instead of squeezing the column to one character. */

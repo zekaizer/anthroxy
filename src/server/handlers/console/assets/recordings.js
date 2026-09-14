@@ -18,6 +18,8 @@ const MARKS = 200;
 /// Label the router writes before images it moves out of a tool result for a
 /// Chat Completions backend.
 const ROUTER_LABEL = /^Images? from tool call \S+:$/;
+/// How a recorded outcome that failed upstream begins.
+const UPSTREAM_ERROR = "upstream_error:";
 
 const PARTS = [["request", "Request"], ["response", "Response"], ["meta", "Meta"]];
 const VIEWS = [["sections", "Sections"], ["raw", "Raw"]];
@@ -73,7 +75,7 @@ function recordings(view, opened) {
             h("div", { class: "sub" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; draw(); }))),
           h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
           h("td", null, statusBadge(e.status)),
-          h("td", { class: "wrap-anywhere" }, e.outcome || h("span", { class: "muted" }, "in progress")),
+          h("td", null, entryOutcome(e)),
           h("td", { class: "num" }, fmt.bytes(e.bytes)),
           h("td", null, remove));
       }), { empty: needle ? "No recording matches." : "No recording yet." }));
@@ -114,6 +116,21 @@ function recordings(view, opened) {
     inspector,
     panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list));
   guarded(list, load);
+}
+
+/// How the entry ended, as the Requests tab judges it: a recorded relay that
+/// finished still failed the request when the status did. An upstream failure
+/// keeps its reason on one line; the inspector has it in full.
+function entryOutcome(e) {
+  if (!e.outcome) return h("span", { class: "muted" }, "in progress");
+  if (e.outcome.startsWith(UPSTREAM_ERROR)) {
+    const reason = e.outcome.slice(UPSTREAM_ERROR.length).trim();
+    return [badge("error", "err"), h("div", { class: "sub one-line", title: reason }, reason)];
+  }
+  if (e.outcome === "client_disconnected") return badge("client left", "warn");
+  if (e.status >= 400) return badge("error", "err");
+  if (e.outcome === "complete") return badge("complete", "ok");
+  return badge(e.outcome, "err");
 }
 
 /// Message count, session and request id under an entry's prompt; the
@@ -749,7 +766,10 @@ function diffView(now, before, diff, ctx) {
       fact("System", systemText),
       fact("Messages", messageText),
       fact("Parameters", diff.params.length ? [badge("changed", "warn"), ` ${diff.params.join(", ")}`] : badge("same", "ok"))),
-    newer.length ? [h("h3", null, "Messages after the repeated ones"), newer.map((m) => messageItem(m, ctx, m.bytes <= OPEN_BYTES))] : null,
+    // Only the first difference unfolds: a session's newest request adds a
+    // whole turn, and unfolding all of it buries the summary above.
+    newer.length ? [h("h3", null, `Messages after the repeated ones (${newer.length})`),
+      newer.map((m, i) => messageItem(m, ctx, i === 0 && m.bytes <= OPEN_BYTES))] : null,
     dropped ? [h("h3", null, "The earlier request's messages from there"),
       before.messages.slice(diff.messages).map((m) => messageItem(m, { ...NO_CONTEXT, needle: ctx.needle }, false))] : null,
   ];
