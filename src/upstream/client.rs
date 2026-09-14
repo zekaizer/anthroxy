@@ -73,6 +73,11 @@ pub enum UpstreamError {
         #[source]
         source: reqwest::Error,
     },
+    /// A body the router reads whole went past its limit.
+    #[error(
+        "backend `{backend}` sent a response body over {limit} bytes, more than the router reads whole"
+    )]
+    BodyTooLarge { backend: String, limit: usize },
 }
 
 /// The error with its full source chain, e.g. `error sending request: ... : Connection refused`.

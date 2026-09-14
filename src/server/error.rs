@@ -86,7 +86,8 @@ impl RouterError {
                 UpstreamError::Credential { backend, .. }
                 | UpstreamError::Transport { backend, .. }
                 | UpstreamError::Redirected { backend, .. }
-                | UpstreamError::Body { backend, .. },
+                | UpstreamError::Body { backend, .. }
+                | UpstreamError::BodyTooLarge { backend, .. },
             )
             | RouterError::Translate { backend, .. }
             | RouterError::NotOnOpenAi { backend, .. }

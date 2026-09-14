@@ -793,6 +793,38 @@ async fn upstream_error_body_that_breaks_off_is_a_502() {
     );
 }
 
+/// Error bodies are read whole to be annotated; one that never ends must not
+/// grow the router's memory until the read timeout.
+#[tokio::test]
+async fn an_upstream_error_body_without_end_is_cut_off_with_a_502() {
+    let upstream = MockUpstream::start(|_| {
+        let chunks = futures_util::stream::repeat_with(|| {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![b'x'; 64 * 1024]))
+        });
+        Response::builder()
+            .status(500)
+            .header("content-type", "text/plain")
+            .body(Body::from_stream(chunks))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .expect("the router answered before the client gave up");
+    assert_eq!(res.status(), 502);
+    assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("mock") && message.contains("bytes"),
+        "{message}"
+    );
+}
+
 /// The router refuses to follow a redirect, so it must not hand one to the
 /// client either: Claude Code would follow it, with the conversation and the
 /// router token, to an address the configuration never named.
