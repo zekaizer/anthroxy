@@ -2,6 +2,7 @@
 //! `anthroxy credential` share this so a report shows what the router sees.
 
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::process::Command;
@@ -52,11 +53,11 @@ pub async fn run(command: &str, timeout: Duration) -> Result<Run, CredentialErro
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(CredentialError::Spawn)?;
+        .map_err(|error| CredentialError::Spawn(Arc::new(error)))?;
     let output = tokio::time::timeout(timeout, child.wait_with_output())
         .await
         .map_err(|_| CredentialError::Timeout(timeout))?
-        .map_err(CredentialError::Spawn)?;
+        .map_err(|error| CredentialError::Spawn(Arc::new(error)))?;
     Ok(Run::new(&output, started.elapsed()))
 }
 

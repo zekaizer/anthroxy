@@ -21,7 +21,7 @@ pub struct CommandCredential {
     refresh: Duration,
     timeout: Duration,
     /// Held across the whole fetch so concurrent requests share one run.
-    cache: Mutex<Option<Cached>>,
+    cache: Mutex<Slot>,
     /// Kept apart from `cache` so status output never waits for a run.
     observed: std::sync::Mutex<Observed>,
 }
@@ -40,6 +40,13 @@ struct Current {
     fetched_at: jiff::Timestamp,
     expires_at: Option<jiff::Timestamp>,
     refresh_at: Option<jiff::Timestamp>,
+}
+
+#[derive(Debug, Default)]
+struct Slot {
+    cached: Option<Cached>,
+    /// When the last run ended and its error; cleared by a run that succeeds.
+    failed: Option<(Instant, CredentialError)>,
 }
 
 #[derive(Debug)]
@@ -65,7 +72,7 @@ impl CommandCredential {
             header,
             refresh,
             timeout,
-            cache: Mutex::new(None),
+            cache: Mutex::new(Slot::default()),
             observed: std::sync::Mutex::new(Observed::default()),
         }
     }
@@ -124,19 +131,33 @@ impl CommandCredential {
 
 #[async_trait]
 impl CredentialSource for CommandCredential {
+    /// A call that waited for a run that failed returns that run's error
+    /// instead of running the command again.
     async fn credential(&self) -> Result<Option<Credential>, CredentialError> {
-        let mut cache = self.cache.lock().await;
-        if let Some(cached) = cache.as_ref()
+        let arrived = Instant::now();
+        let mut slot = self.cache.lock().await;
+        if let Some(cached) = &slot.cached
             && Instant::now() < cached.valid_until
         {
             return Ok(Some(cached.credential.clone()));
         }
+        if let Some((ended, error)) = &slot.failed
+            && *ended >= arrived
+        {
+            return Err(error.clone());
+        }
         let (at, started) = (jiff::Timestamp::now(), Instant::now());
         let fetched = self.fetch().await;
         self.observe(at, started.elapsed(), &fetched);
-        let fetched = fetched.inspect_err(|e| {
-            tracing::warn!(error = %e, "credential command failed");
-        })?;
+        let fetched = match fetched {
+            Ok(fetched) => fetched,
+            Err(error) => {
+                tracing::warn!(%error, "credential command failed");
+                slot.failed = Some((Instant::now(), error.clone()));
+                return Err(error);
+            }
+        };
+        slot.failed = None;
         let expires_at = fetched
             .expires_at
             .map(|t| humantime::format_rfc3339_seconds(t).to_string());
@@ -146,17 +167,18 @@ impl CredentialSource for CommandCredential {
             "credential refreshed"
         );
         let credential = fetched.credential.clone();
-        *cache = Some(fetched);
+        slot.cached = Some(fetched);
         Ok(Some(credential))
     }
 
     async fn invalidate(&self, rejected: &Credential) {
-        let mut cache = self.cache.lock().await;
-        if cache
+        let mut slot = self.cache.lock().await;
+        if slot
+            .cached
             .as_ref()
             .is_some_and(|cached| cached.credential == *rejected)
         {
-            *cache = None;
+            slot.cached = None;
             self.observed().current = None;
         }
     }

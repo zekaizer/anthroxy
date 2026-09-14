@@ -278,6 +278,35 @@ async fn command_failure_is_not_cached() {
     assert_eq!(source.credential().await.unwrap(), Some(bearer("tok")));
 }
 
+/// Requests queued behind a failing run would otherwise each run the command
+/// in turn, the last one waiting for all of them.
+#[tokio::test]
+async fn requests_waiting_on_a_failed_run_share_its_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let cmd = format!(
+        "echo run >> {}; sleep 0.3; echo down >&2; exit 1",
+        counter.display()
+    );
+    let source = command(&cmd, Duration::from_secs(60), Duration::from_secs(5));
+
+    let started = std::time::Instant::now();
+    let (a, b, c) = tokio::join!(
+        source.credential(),
+        source.credential(),
+        source.credential()
+    );
+    for result in [a, b, c] {
+        let error = result.expect_err("every waiter sees the failure");
+        assert!(error.to_string().contains("down"), "{error}");
+    }
+    assert_eq!(runs(&counter), 1);
+    assert!(started.elapsed() < Duration::from_millis(900));
+
+    assert!(source.credential().await.is_err());
+    assert_eq!(runs(&counter), 2, "a request after the failure runs again");
+}
+
 #[tokio::test]
 async fn json_output_yields_the_token() {
     let source = json_command(r#"echo '{"token": "tok-json"}'"#, Duration::from_secs(60));
