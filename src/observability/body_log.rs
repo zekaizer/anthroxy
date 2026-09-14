@@ -34,6 +34,11 @@ pub struct RequestRecord {
     pub backend: String,
     pub stream: bool,
     pub request_headers: BTreeMap<String, String>,
+    /// `messages` in the client's body.
+    pub messages: usize,
+    /// The client's last prompt, as [`crate::anthropic::RequestSummary`] cuts it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +182,10 @@ pub struct EntrySummary {
     pub backend: Option<String>,
     pub status: Option<u16>,
     pub outcome: Option<String>,
+    pub messages: Option<u64>,
+    pub prompt: Option<String>,
+    /// Claude Code's `x-claude-code-session-id` request header.
+    pub session: Option<String>,
 }
 
 impl BodyLog {
@@ -230,6 +239,12 @@ impl BodyLog {
                 .and_then(|v| v.as_u64())
                 .and_then(|v| u16::try_from(v).ok()),
             outcome: text("outcome"),
+            messages: meta.get("messages").and_then(|v| v.as_u64()),
+            prompt: text("prompt"),
+            session: meta
+                .pointer("/request_headers/x-claude-code-session-id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
             name,
         }
     }
@@ -503,7 +518,7 @@ mod tests {
             std::fs::create_dir(&entry).unwrap();
             std::fs::write(
                 entry.join("meta.json"),
-                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete"}}"#),
+                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "messages": 3, "prompt": "Read it", "request_headers": {{"x-claude-code-session-id": "s-1"}}}}"#),
             )
             .unwrap();
             std::fs::write(entry.join("request.json"), "{}").unwrap();
@@ -526,6 +541,9 @@ mod tests {
         assert_eq!(newest.files, ["meta.json", "request.json"]);
         assert_eq!(newest.status, Some(400));
         assert_eq!(newest.model.as_deref(), Some("fast"));
+        assert_eq!(newest.messages, Some(3));
+        assert_eq!(newest.prompt.as_deref(), Some("Read it"));
+        assert_eq!(newest.session.as_deref(), Some("s-1"));
         assert!(newest.bytes > 2);
         assert_eq!(log.list(1).len(), 1);
 

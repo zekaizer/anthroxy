@@ -95,6 +95,11 @@ async fn handle(
     let body = read_body(body, state.max_body_bytes).await?;
 
     let peek = anthropic::peek(&body)?;
+    // Read from the client's body, before any rewrite or translation.
+    let summary = state
+        .body_log
+        .is_some()
+        .then(|| anthropic::summarize(&body));
     let requested_model = peek.model.expect("peek guarantees a model");
     note(exchange, |e| e.requested(&requested_model, peek.stream));
     let resolution = state.registry.resolve(&requested_model).ok_or_else(|| {
@@ -157,6 +162,7 @@ async fn handle(
             &requested_model,
             route,
             peek.stream,
+            summary.unwrap_or_default(),
         );
         log.begin(record, &body, started)
     });
@@ -337,6 +343,7 @@ fn record_failure(recorder: Option<Recorder>, error: &impl std::fmt::Display) {
 
 /// Snapshot for the body log. `headers` are the ones going upstream; the
 /// credential is added at send time and never written.
+#[allow(clippy::too_many_arguments)]
 fn request_record(
     request_id: &RequestId,
     method: &http::Method,
@@ -345,6 +352,7 @@ fn request_record(
     requested_model: &str,
     route: &crate::routing::Route,
     stream: bool,
+    summary: anthropic::RequestSummary,
 ) -> RequestRecord {
     RequestRecord {
         request_id: request_id.as_str().to_owned(),
@@ -357,6 +365,8 @@ fn request_record(
         backend: route.backend.name.clone(),
         stream,
         request_headers: headers_for_record(headers),
+        messages: summary.messages,
+        prompt: summary.prompt,
     }
 }
 

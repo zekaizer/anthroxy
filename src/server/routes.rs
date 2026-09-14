@@ -49,6 +49,7 @@ pub fn build(state: AppState) -> Router {
         .route("/ui", get(console::root))
         .route("/ui/", get(console::index))
         .route("/ui/app.js", get(console::script))
+        .route("/ui/recordings.js", get(console::recordings_script))
         .route("/ui/app.css", get(console::style))
         .merge(protected)
         .fallback(not_found)

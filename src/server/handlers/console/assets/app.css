@@ -141,6 +141,7 @@ main {
 }
 
 section.panel {
+  scroll-margin-top: 5.5rem;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -207,6 +208,8 @@ td .sub { color: var(--muted); font-size: 12px; }
 
 .controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem; }
 .controls label { display: inline-flex; gap: 0.3rem; align-items: center; }
+.controls label:has(select) { flex: 1 1 20rem; min-width: 0; }
+.controls select { flex: 1; min-width: 0; max-width: 100%; }
 .controls input[type="text"] { flex: 1 1 18rem; max-width: 34rem; }
 .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .segmented button { border: none; border-radius: 0; border-right: 1px solid var(--line); }
@@ -271,6 +274,52 @@ figure.chart figcaption { display: flex; flex-wrap: wrap; align-items: baseline;
 .chart-table { margin-bottom: 0.5rem; }
 .chart-table > summary { margin-bottom: 0.4rem; }
 details > summary { cursor: pointer; color: var(--muted); }
+
+.inspect { display: grid; grid-template-columns: minmax(10rem, 13rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
+.section-nav { display: flex; flex-direction: column; gap: 0.2rem; position: sticky; top: 6rem; }
+.section-nav button { display: grid; grid-template-columns: 1fr auto; gap: 0 0.5rem; text-align: left; border-color: transparent; background: none; padding: 0.3rem 0.5rem; }
+.section-nav button[aria-current="true"] { background: var(--accent-soft); }
+.section-nav button.empty { opacity: 0.55; }
+.section-nav .label { font-weight: 600; }
+.section-nav .count { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.section-nav .size { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.section-nav .bar { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.section-nav .bar span { display: block; height: 100%; background: var(--accent); }
+.section-body { min-width: 0; }
+td.prompt-cell { min-width: 16rem; }
+.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.prompt { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; padding: 0.5rem 0.75rem; max-height: 40vh; overflow: auto; }
+.section-body > .note:first-child { margin-top: 0; }
+
+details.item { border: 1px solid var(--line); border-radius: 6px; margin: 0.35rem 0; }
+details.item > summary { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.3rem 0.6rem; color: var(--text); list-style: none; min-width: 0; }
+details.item > summary::-webkit-details-marker { display: none; }
+details.item > summary::before { content: "▸"; color: var(--muted); flex: none; }
+details.item[open] > summary::before { content: "▾"; }
+details.item > .item-body { padding: 0 0.6rem 0.5rem; }
+details.item.group { border: none; }
+details.item.group > summary { padding-left: 0; }
+details.item.group > .item-body { padding: 0; }
+details.item.reminder, details.item.thinking { background: var(--bg); }
+details.message.flash { outline: 2px solid var(--accent); }
+mark { background: var(--warn-soft); color: inherit; outline: 1px solid var(--warn); border-radius: 2px; }
+summary .kinds { white-space: nowrap; font-size: 12px; color: var(--muted); }
+summary .preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+summary .size { margin-left: auto; flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.block { border-left: 3px solid var(--line); padding: 0.1rem 0 0.1rem 0.6rem; margin: 0.45rem 0; }
+.block.tool-use { border-left-color: var(--accent); }
+.block.tool-result { border-left-color: var(--ok); }
+.block.tool-result.error { border-left-color: var(--err); }
+.block-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.5rem; margin-bottom: 0.2rem; }
+h4 { font-size: 13px; margin: 0.6rem 0 0.2rem; color: var(--muted); }
+img.thumb { display: block; max-width: min(100%, 320px); max-height: 240px; border: 1px solid var(--line); border-radius: 4px; }
+
+@media (max-width: 800px) {
+  .inspect { grid-template-columns: 1fr; }
+  .section-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .section-nav button { flex: 1 1 8rem; }
+}
 
 @media (max-width: 640px) {
   main { padding: 0.6rem; }

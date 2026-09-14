@@ -9,6 +9,7 @@ use http::header::{
 
 const INDEX: &str = include_str!("assets/index.html");
 const SCRIPT: &str = include_str!("assets/app.js");
+const RECORDINGS_SCRIPT: &str = include_str!("assets/recordings.js");
 const STYLE: &str = include_str!("assets/app.css");
 
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -39,6 +40,10 @@ pub async fn index() -> Response {
 
 pub async fn script() -> Response {
     asset("text/javascript; charset=utf-8", SCRIPT)
+}
+
+pub async fn recordings_script() -> Response {
+    asset("text/javascript; charset=utf-8", RECORDINGS_SCRIPT)
 }
 
 pub async fn style() -> Response {

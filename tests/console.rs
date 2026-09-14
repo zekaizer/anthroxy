@@ -88,6 +88,7 @@ async fn the_page_is_served_without_a_token_under_a_strict_policy() {
     for (path, content_type) in [
         ("/ui/", "text/html"),
         ("/ui/app.js", "text/javascript"),
+        ("/ui/recordings.js", "text/javascript"),
         ("/ui/app.css", "text/css"),
     ] {
         let res = http.get(router.url(path)).send().await.unwrap();
@@ -117,7 +118,7 @@ async fn the_page_is_served_without_a_token_under_a_strict_policy() {
         .await
         .unwrap();
     assert!(
-        page.contains("app.js") && page.contains("app.css"),
+        page.contains("app.js") && page.contains("recordings.js") && page.contains("app.css"),
         "{page}"
     );
 }
@@ -633,6 +634,7 @@ async fn recordings_can_be_listed_read_and_deleted() {
     for model in ["fast", "smart"] {
         let res = router
             .post("/v1/messages", &messages_body(model))
+            .header("x-claude-code-session-id", format!("session-{model}"))
             .send()
             .await
             .unwrap();
@@ -653,6 +655,9 @@ async fn recordings_can_be_listed_read_and_deleted() {
     assert_eq!(entries[0]["request_id"], ids[1].as_str(), "newest first");
     assert_eq!(entries[0]["model"], "smart");
     assert_eq!(entries[0]["status"], 200);
+    assert_eq!(entries[0]["prompt"], "hi");
+    assert_eq!(entries[0]["messages"], 1);
+    assert_eq!(entries[0]["session"], "session-smart");
     assert!(entries[0]["bytes"].as_u64().unwrap() > 0);
     assert!(
         entries[0]["files"]

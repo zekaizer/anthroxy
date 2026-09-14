@@ -260,3 +260,99 @@ fn untouched_bodies_are_not_rewritten() {
     );
     assert_eq!(rewrite(b"{}", None, &[], true).unwrap(), None);
 }
+
+#[test]
+fn summary_names_the_last_prompt_without_reminders_or_tool_results() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": [
+            {"type": "text", "text": "<system-reminder>\nContext.\n</system-reminder>"},
+            {"type": "text", "text": "What is in\n  hostname.txt?"}
+        ]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "fixture-host"},
+            {"type": "text", "text": "<system-reminder>Only a reminder.</system-reminder>"}
+        ]},
+        {"role": "system", "content": "Mid-conversation system text."}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()),
+        RequestSummary {
+            messages: 4,
+            prompt: Some("What is in hostname.txt?".to_owned()),
+        }
+    );
+}
+
+#[test]
+fn summary_prompt_is_one_cut_line_and_absent_without_user_text() {
+    let long = format!("{}\n{}", "a".repeat(150), "b".repeat(150));
+    let body = json!({"model": "m", "messages": [{"role": "user", "content": long}]});
+    let prompt = summarize(body.to_string().as_bytes()).prompt.unwrap();
+    assert_eq!(prompt.chars().count(), 201, "{prompt}");
+    assert!(prompt.starts_with(&format!("{} b", "a".repeat(150))) && prompt.ends_with('…'));
+
+    let body = json!({"model": "m", "messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "out"}
+    ]}]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()),
+        RequestSummary {
+            messages: 1,
+            prompt: None
+        }
+    );
+    assert_eq!(summarize(b"not json"), RequestSummary::default());
+    assert_eq!(
+        summarize(br#"{"model": "m", "messages": 3}"#),
+        RequestSummary::default()
+    );
+}
+
+#[test]
+fn summary_takes_a_message_sent_while_the_model_worked_as_the_prompt() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "Fix the build."},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+            {"type": "text", "text": "<system-reminder>\nThe user sent a new message while you were working:\nAlso run the tests.\n</system-reminder>"}
+        ]}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()).prompt.as_deref(),
+        Some("Also run the tests.")
+    );
+}
+
+#[test]
+fn summary_keeps_text_after_a_reminder_tag_that_never_closes() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "why does <system-reminder> show up in my log?"}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()).prompt.as_deref(),
+        Some("why does <system-reminder> show up in my log?")
+    );
+}
+
+#[test]
+fn summary_reads_past_messages_and_blocks_it_cannot_make_sense_of() {
+    let body = json!({"model": "m", "messages": [
+        null,
+        {"role": null, "content": "no role"},
+        {"role": "user", "content": [
+            {"type": null, "text": "no type"},
+            {"type": "text", "text": null},
+            {"type": "text", "text": "the prompt"}
+        ]},
+        7
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()),
+        RequestSummary {
+            messages: 4,
+            prompt: Some("the prompt".to_owned()),
+        }
+    );
+}
