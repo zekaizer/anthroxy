@@ -91,20 +91,44 @@ impl Server {
         self.state.clone()
     }
 
-    /// Serves until `shutdown` resolves, then lets in-flight requests finish.
-    /// Body-log pruning runs alongside on whichever snapshot is current and
-    /// stops with the server.
+    /// Serves until `shutdown` resolves, then gives in-flight requests up to
+    /// `grace` to finish. Past it this returns with them still open; they end
+    /// when the runtime is dropped. Body-log pruning runs alongside on
+    /// whichever snapshot is current and stops with the server.
     pub async fn serve(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+        grace: std::time::Duration,
     ) -> std::io::Result<()> {
         let pruner = tokio::spawn(prune_loop(self.state.clone()));
-        let result = axum::serve(
+        let (stopping, stopped) = tokio::sync::oneshot::channel::<()>();
+        let drained = axum::serve(
             self.listener,
             self.app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown)
-        .await;
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            let _ = stopping.send(());
+        })
+        .into_future();
+        let deadline = async move {
+            // A sender dropped unsent is a server that ended on its own.
+            if stopped.await.is_err() {
+                std::future::pending::<()>().await;
+            }
+            tokio::time::sleep(grace).await;
+        };
+        let result = tokio::select! {
+            result = drained => result,
+            () = deadline => {
+                tracing::warn!(
+                    in_flight = self.state.activity.in_flight().len(),
+                    grace_ms = grace.as_millis() as u64,
+                    "stopping with requests still in flight"
+                );
+                Ok(())
+            }
+        };
         pruner.abort();
         result
     }

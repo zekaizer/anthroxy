@@ -517,6 +517,62 @@ async fn streams_sse_chunks_as_they_arrive() {
     );
 }
 
+/// A stop must not wait on a response that is still streaming: Claude Code
+/// holds some open for minutes, and a service restart would wait with it.
+#[tokio::test]
+async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
+    let upstream = MockUpstream::start(|_| {
+        let events = futures_util::stream::iter(0..).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, std::io::Error>(format!("event: ping\ndata: {{\"n\":{i}}}\n\n"))
+        });
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(events))
+            .unwrap()
+    })
+    .await;
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(&upstream.url(), "\n[stats]\nenabled = false\n"),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config).await.unwrap();
+    let addr = server.local_addr();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let grace = Duration::from_millis(300);
+    let serving = tokio::spawn(server.serve(
+        async move {
+            let _ = stopped.await;
+        },
+        grace,
+    ));
+
+    let mut body = messages_body("fast");
+    body["stream"] = Value::Bool(true);
+    let res = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-api-key", TOKEN)
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    let mut stream = res.bytes_stream();
+    stream.next().await.unwrap().unwrap();
+
+    let stopping = Instant::now();
+    stop.send(()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    let elapsed = stopping.elapsed();
+    result
+        .expect("serve kept waiting on the open stream")
+        .unwrap()
+        .unwrap();
+    assert!(elapsed >= grace, "the stream got no grace: {elapsed:?}");
+}
+
 #[tokio::test]
 async fn retries_connection_failures_then_reports_backend() {
     // Nothing listens here.

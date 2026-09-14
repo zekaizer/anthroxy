@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Args;
 
@@ -8,6 +9,10 @@ use super::models::default_route_line;
 use super::{Cli, Style, display_path};
 use crate::config::{Config, Overrides};
 use crate::server::{AppState, Loaded, Loader, ReloadTrigger, Server, Snapshot};
+
+/// How long a stop waits for responses still streaming. Claude Code retries a
+/// response that was cut, so a stop or restart is not held up by a long one.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Args)]
 pub struct ServeArgs {
@@ -53,7 +58,7 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     crate::upstream::network::log(&config);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
-    let result = server.serve(shutdown_signal()).await;
+    let result = server.serve(shutdown_signal(), SHUTDOWN_GRACE).await;
     reloader.abort();
     result?;
     tracing::info!("anthroxy stopped");
