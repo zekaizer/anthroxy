@@ -145,8 +145,10 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
     /// Current credential; `None` means the backend takes no auth header.
     async fn credential(&self) -> Result<Option<Credential>, CredentialError>;
 
-    /// Forgets any cached value so the next call re-acquires it.
-    async fn invalidate(&self);
+    /// Forgets the cached value if it is still `rejected`, so the next call
+    /// re-acquires it. A value re-acquired since `rejected` was handed out
+    /// stays: requests that were rejected together refresh once.
+    async fn invalidate(&self, rejected: &Credential);
 
     /// Whether `invalidate` can yield a different credential. Callers skip the
     /// 401-refresh cycle when it cannot.

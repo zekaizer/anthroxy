@@ -43,7 +43,7 @@ impl CredentialSource for FixedCredential {
         Ok(self.credential.clone())
     }
 
-    async fn invalidate(&self) {}
+    async fn invalidate(&self, _rejected: &Credential) {}
 
     fn describe(&self) -> String {
         match (&self.env_name, &self.credential) {

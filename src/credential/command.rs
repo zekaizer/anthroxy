@@ -150,9 +150,15 @@ impl CredentialSource for CommandCredential {
         Ok(Some(credential))
     }
 
-    async fn invalidate(&self) {
-        *self.cache.lock().await = None;
-        self.observed().current = None;
+    async fn invalidate(&self, rejected: &Credential) {
+        let mut cache = self.cache.lock().await;
+        if cache
+            .as_ref()
+            .is_some_and(|cached| cached.credential == *rejected)
+        {
+            *cache = None;
+            self.observed().current = None;
+        }
     }
 
     fn is_refreshable(&self) -> bool {

@@ -228,9 +228,10 @@ impl UpstreamClient {
                     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
                         && !credential_refreshed
                         && backend.credential.is_refreshable()
+                        && let Some(rejected) = &credential
                     {
                         tracing::warn!(%status, "backend rejected credential; re-acquiring and retrying once");
-                        backend.credential.invalidate().await;
+                        backend.credential.invalidate(rejected).await;
                         credential_refreshed = true;
                         continue;
                     }

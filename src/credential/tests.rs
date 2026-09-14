@@ -170,13 +170,35 @@ async fn command_output_is_trimmed_and_cached() {
         "second call served from cache"
     );
 
-    source.invalidate().await;
+    source.invalidate(&bearer("tok-abcdefgh")).await;
     source.credential().await.unwrap();
     assert_eq!(
         std::fs::read_to_string(&counter).unwrap().lines().count(),
         2,
         "invalidate forces a re-run"
     );
+}
+
+/// Requests sent with one value and rejected together each report it; only
+/// the first report may cost a run.
+#[tokio::test]
+async fn invalidating_a_value_already_replaced_keeps_the_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let cmd = format!(
+        "echo run >> {c} && echo tok-$(wc -l < {c} | tr -d ' ')",
+        c = counter.display()
+    );
+    let source = command(&cmd, Duration::from_secs(60), Duration::from_secs(5));
+
+    let rejected = source.credential().await.unwrap().unwrap();
+    assert_eq!(rejected, bearer("tok-1"));
+    source.invalidate(&rejected).await;
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok-2")));
+
+    source.invalidate(&rejected).await;
+    assert_eq!(source.credential().await.unwrap(), Some(bearer("tok-2")));
+    assert_eq!(runs(&counter), 2, "a stale rejection re-ran the command");
 }
 
 #[tokio::test]
@@ -443,7 +465,7 @@ async fn command_status_reports_the_cached_value_and_each_run() {
     assert_eq!(before.masked, None);
     assert!(before.refreshes.is_empty());
 
-    source.credential().await.unwrap();
+    let served = source.credential().await.unwrap().unwrap();
     source.credential().await.unwrap();
     let status = source.status();
     assert_eq!(status.masked.as_deref(), Some("tok-…7890"));
@@ -465,7 +487,7 @@ async fn command_status_reports_the_cached_value_and_each_run() {
     assert_eq!(status.refreshes[0].masked.as_deref(), Some("tok-…7890"));
     assert_eq!(status.refreshes[0].error, None);
 
-    source.invalidate().await;
+    source.invalidate(&served).await;
     let status = source.status();
     assert_eq!(status.masked, None, "nothing is cached after invalidate");
     assert_eq!(status.refresh_at, None);
