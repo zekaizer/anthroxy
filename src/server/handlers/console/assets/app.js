@@ -26,7 +26,7 @@ const state = {
   recordingPart: "request",
   recordingView: "sections",
   requestSection: "prompt",
-  toolsFilter: "",
+  requestFind: "",
   lastProbe: null,
   lastSmoke: null,
   reloadNotice: null,

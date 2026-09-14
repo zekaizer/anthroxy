@@ -222,32 +222,42 @@ function requestView(exchange) {
 
   const prompt = lastPrompt(doc.messages);
   const sum = (items) => items.reduce((total, item) => total + item.bytes, 0);
+  const matching = (items, needle) => (needle ? items.filter((item) => item.find.includes(needle)) : items);
   const sections = [
-    { id: "prompt", label: "Last prompt", count: prompt < 0 ? "none" : `#${doc.messages[prompt].index}`, bytes: prompt < 0 ? 0 : sum(doc.messages.slice(prompt)), render: () => promptSection(doc, prompt, links) },
-    { id: "messages", label: "Messages", count: doc.messages.length, bytes: sum(doc.messages), render: () => doc.messages.map((m) => messageItem(m, links, false)) },
-    { id: "system", label: "System", count: doc.system.length, bytes: sum(doc.system), render: () => systemSection(doc) },
-    { id: "tools", label: "Tools", count: doc.tools.length, bytes: sum(doc.tools), render: () => toolsSection(doc) },
-    { id: "params", label: "Parameters", count: doc.params.length, bytes: sum(doc.params), render: () => paramsSection(doc) },
+    { id: "prompt", label: "Last prompt", count: prompt < 0 ? "none" : `#${doc.messages[prompt].index}`, items: prompt < 0 ? [] : doc.messages.slice(prompt), render: (ctx) => promptSection(doc, prompt, ctx) },
+    { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
+    { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
+    { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
+    { id: "params", label: "Parameters", count: doc.params.length, items: doc.params, render: (ctx) => paramsSection(matching(doc.params, ctx.needle), ctx) },
   ];
-  const total = sections.slice(1).reduce((all, s) => all + s.bytes, 0) || 1;
+  const total = sections.slice(1).reduce((all, s) => all + sum(s.items), 0) || 1;
+  const find = h("input", { type: "text", placeholder: "Find in the request: prompts, reminders, tool calls and results, system text, tools", "aria-label": "Find in the request", value: state.requestFind });
+  const found = h("span", { class: "muted" });
   const nav = h("nav", { class: "section-nav", "aria-label": "Request sections" });
   const content = h("div", { class: "section-body" });
+  const links = toolLinks(doc);
   const show = (id) => {
     state.requestSection = id;
+    const needle = state.requestFind.trim().toLowerCase();
+    const ctx = { ...links, needle, reveal };
+    replace(found, needle ? `${sections.slice(1).reduce((n, s) => n + matching(s.items, needle).length, 0)} matching item(s)` : "");
     replace(nav, sections.map((s) => {
       const fill = h("span");
-      fill.style.width = `${Math.min(100, (s.bytes / total) * 100)}%`;
-      return h("button", { type: "button", "aria-current": s.id === id ? "true" : null, onclick: () => show(s.id) },
+      fill.style.width = `${Math.min(100, (sum(s.items) / total) * 100)}%`;
+      const hits = needle ? matching(s.items, needle).length : null;
+      return h("button", { type: "button", class: hits === 0 ? "empty" : null, "aria-current": s.id === id ? "true" : null, onclick: () => show(s.id) },
         h("span", { class: "label" }, s.label),
-        h("span", { class: "count" }, String(s.count)),
-        h("span", { class: "size" }, fmt.bytes(s.bytes)),
+        h("span", { class: "count" }, hits === null ? String(s.count) : `${hits} found`),
+        h("span", { class: "size" }, fmt.bytes(sum(s.items))),
         h("span", { class: "bar" }, fill));
     }));
-    replace(content, sections.find((s) => s.id === id).render());
+    replace(content, sections.find((s) => s.id === id).render(ctx));
   };
-  const links = toolLinks(doc, (index) => {
+  const reveal = (index) => {
     let target = content.querySelector(`[data-message="${index}"]`);
     if (!target) {
+      state.requestFind = "";
+      find.value = "";
       show("messages");
       target = content.querySelector(`[data-message="${index}"]`);
     }
@@ -256,19 +266,28 @@ function requestView(exchange) {
     target.scrollIntoView({ block: "start", behavior: "smooth" });
     target.classList.add("flash");
     setTimeout(() => target.classList.remove("flash"), 1500);
+  };
+  let typing = null;
+  find.addEventListener("input", () => {
+    clearTimeout(typing);
+    typing = setTimeout(() => {
+      state.requestFind = find.value;
+      show(state.requestSection);
+    }, 150);
   });
   show(sections.some((s) => s.id === state.requestSection) ? state.requestSection : "prompt");
-  return h("div", { class: "inspect" }, nav, content);
+  return [h("div", { class: "controls" }, find, found), h("div", { class: "inspect" }, nav, content)];
 }
 
 /// A Messages or Chat Completions body as parameters, system blocks, tools
-/// and messages. Messages keep their index in the body's `messages`.
+/// and messages. Messages keep their index in the body's `messages`. Each
+/// item carries its size and the lowercased text Find searches.
 function readRequest(body, dialect) {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("not a JSON object");
   const sectioned = new Set(["system", "tools", "messages"]);
   const params = Object.entries(body)
     .filter(([key]) => !sectioned.has(key))
-    .map(([key, value]) => ({ key, value, bytes: byteSize(value) }));
+    .map(([key, value]) => indexed({ key, value }, { [key]: value }));
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const tools = Array.isArray(body.tools) ? body.tools : [];
   if (dialect === "openai") {
@@ -277,26 +296,46 @@ function readRequest(body, dialect) {
     while (lead < messages.length && messages[lead] && messages[lead].role === "system") lead++;
     return {
       params,
-      system: messages.slice(0, lead).map((m, i) => sized({ label: `messages[${i}]`, blocks: openaiContent(m.content) }, m)),
+      system: messages.slice(0, lead).map((m, i) => indexed({ label: `messages[${i}]`, blocks: openaiContent(m.content) }, m)),
       tools: tools.map((t) => {
         const fn = t.function || {};
-        return sized({ name: fn.name || t.type || "?", description: fn.description || "", schema: fn.parameters, extra: omit(t, ["type", "function"]) }, t);
+        return indexed({ name: fn.name || t.type || "?", description: fn.description || "", schema: fn.parameters, extra: omit(t, ["type", "function"]) }, t);
       }),
-      messages: messages.slice(lead).map((m, i) => sized({ index: lead + i, role: m.role, blocks: openaiMessage(m) }, m)),
+      messages: messages.slice(lead).map((m, i) => indexed({ index: lead + i, role: m.role, blocks: openaiMessage(m) }, m)),
     };
   }
   const system = typeof body.system === "string" ? [{ type: "text", text: body.system }] : Array.isArray(body.system) ? body.system : [];
   return {
     params,
-    system: system.map((b, i) => sized({ label: `system[${i}]`, blocks: [anthropicBlock(b)] }, b)),
-    tools: tools.map((t) => sized({ name: t.name || t.type || "?", description: t.description || "", schema: t.input_schema, extra: omit(t, ["name", "description", "input_schema"]) }, t)),
-    messages: messages.map((m, i) => sized({ index: i, role: m.role, blocks: anthropicContent(m.content) }, m)),
+    system: system.map((b, i) => indexed({ label: `system[${i}]`, blocks: [anthropicBlock(b)] }, b)),
+    tools: tools.map((t) => indexed({ name: t.name || t.type || "?", description: t.description || "", schema: t.input_schema, extra: omit(t, ["name", "description", "input_schema"]) }, t)),
+    messages: messages.map((m, i) => indexed({ index: i, role: m.role, blocks: anthropicContent(m.content) }, m)),
   };
 }
 
-function sized(item, source) {
+function indexed(item, source) {
   item.bytes = byteSize(source);
+  item.find = findText(source);
   return item;
+}
+
+/// Every key and string or scalar value under `value`, lowercased; encoded
+/// payloads (`data`, `signature`) are left out.
+function findText(value) {
+  const parts = [];
+  const walk = (v) => {
+    if (typeof v === "string") parts.push(v);
+    else if (typeof v === "number" || typeof v === "boolean") parts.push(String(v));
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") {
+      for (const [key, inner] of Object.entries(v)) {
+        parts.push(key);
+        if (key !== "data" && key !== "signature") walk(inner);
+      }
+    }
+  };
+  walk(value);
+  return parts.join("\n").toLowerCase();
 }
 
 function omit(object, keys) {
@@ -369,7 +408,7 @@ function lastPrompt(messages) {
 }
 
 /// Where each tool call and its result sit, so either can lead to the other.
-function toolLinks(doc, reveal) {
+function toolLinks(doc) {
   const calls = new Map();
   const results = new Map();
   for (const m of doc.messages) {
@@ -378,10 +417,10 @@ function toolLinks(doc, reveal) {
       if (b.kind === "tool_result" && b.id) results.set(b.id, m.index);
     }
   }
-  return { calls, results, reveal };
+  return { calls, results };
 }
 
-function promptSection(doc, position, links) {
+function promptSection(doc, position, ctx) {
   if (position < 0) return h("p", { class: "note" }, "No user message carries text of its own.");
   const m = doc.messages[position];
   const after = doc.messages.slice(position + 1);
@@ -395,53 +434,52 @@ function promptSection(doc, position, links) {
   const told = [`Message #${m.index} of ${doc.messages.length}`];
   if (reminders) told.push(`sent with ${reminders} system reminder(s)`);
   told.push(after.length ? `followed by ${after.length} message(s) with ${calls} tool call(s)` : "the last message");
+  const opens = (item, fallback) => (ctx.needle ? item.find.includes(ctx.needle) : fallback);
   return [
-    h("div", { class: "prompt text" }, own),
+    h("div", { class: "prompt text" }, marked(own, ctx.needle)),
     h("p", { class: "note" }, `${told.join(", ")}.`),
-    messageItem(m, links, false),
-    after.map((next) => messageItem(next, links, next.bytes <= OPEN_BYTES)),
+    messageItem(m, ctx, opens(m, false)),
+    after.map((next) => messageItem(next, ctx, opens(next, next.bytes <= OPEN_BYTES))),
   ];
 }
 
+function messagesSection(doc, shown, ctx) {
+  return [
+    ctx.needle ? h("p", { class: "note" }, `${shown.length} of ${doc.messages.length} message(s) contain the text.`) : null,
+    shown.map((m) => messageItem(m, ctx, Boolean(ctx.needle))),
+  ];
+}
 
-function systemSection(doc) {
+function systemSection(doc, shown, ctx) {
   if (!doc.system.length) return h("p", { class: "note" }, "The request has no system prompt.");
-  return doc.system.map((s) => {
+  if (!shown.length) return h("p", { class: "note" }, "No system block contains the text.");
+  return shown.map((s) => {
     const text = s.blocks.filter((b) => b.kind === "text").map((b) => b.text).join("\n");
     return lazyDetails({ class: "item" },
       [h("span", { class: "mono muted" }, s.label), s.blocks.some((b) => b.cache) ? badge("cache", "info") : null,
-        h("span", { class: "preview" }, firstLine(text)), h("span", { class: "size" }, fmt.bytes(s.bytes))],
-      () => s.blocks.map((b) => blockView(b, null)));
+        h("span", { class: "preview" }, marked(firstLine(text), ctx.needle)), h("span", { class: "size" }, fmt.bytes(s.bytes))],
+      () => s.blocks.map((b) => blockView(b, ctx)), Boolean(ctx.needle));
   });
 }
 
-function toolsSection(doc) {
+function toolsSection(doc, shown, ctx) {
   if (!doc.tools.length) return h("p", { class: "note" }, "The request offers no tools.");
-  const filter = h("input", { type: "text", placeholder: "Filter tools by name or description", value: state.toolsFilter });
-  const list = h("div");
-  const draw = () => {
-    const needle = filter.value.trim().toLowerCase();
-    const groups = new Map();
-    for (const tool of doc.tools) {
-      if (needle && !`${tool.name}\n${tool.description}`.toLowerCase().includes(needle)) continue;
-      const group = toolGroup(tool.name);
-      if (!groups.has(group.label)) groups.set(group.label, { ...group, tools: [] });
-      groups.get(group.label).tools.push(tool);
-    }
-    const ordered = [...groups.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
-    // Groups start folded so every MCP server shows in one screen.
-    const open = Boolean(needle) || ordered.length === 1;
-    replace(list, ordered.length ? ordered.map((group) =>
-      lazyDetails({ class: "item group" },
-        [h("strong", null, group.label), h("span", { class: "kinds" }, `${group.tools.length} tool(s)`),
-          h("span", { class: "preview" }, group.tools.map((t) => shortToolName(t, group.prefix)).join(", ")),
-          h("span", { class: "size" }, fmt.bytes(group.tools.reduce((n, t) => n + t.bytes, 0)))],
-        () => group.tools.map((tool) => toolItem(tool, group.prefix)), open))
-      : h("p", { class: "note" }, "No tool matches."));
-  };
-  filter.addEventListener("input", () => { state.toolsFilter = filter.value; draw(); });
-  draw();
-  return [h("div", { class: "controls" }, filter), list];
+  if (!shown.length) return h("p", { class: "note" }, "No tool contains the text.");
+  const groups = new Map();
+  for (const tool of shown) {
+    const group = toolGroup(tool.name);
+    if (!groups.has(group.label)) groups.set(group.label, { ...group, tools: [] });
+    groups.get(group.label).tools.push(tool);
+  }
+  const ordered = [...groups.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+  // Groups start folded so every MCP server shows in one screen.
+  const open = Boolean(ctx.needle) || ordered.length === 1;
+  return ordered.map((group) =>
+    lazyDetails({ class: "item group" },
+      [h("strong", null, group.label), h("span", { class: "kinds" }, `${group.tools.length} tool(s)`),
+        h("span", { class: "preview" }, group.tools.map((t) => shortToolName(t, group.prefix)).join(", ")),
+        h("span", { class: "size" }, fmt.bytes(group.tools.reduce((n, t) => n + t.bytes, 0)))],
+      () => group.tools.map((tool) => toolItem(tool, group.prefix, ctx)), open));
 }
 
 /// MCP tools are named `mcp__<server>__<tool>`.
@@ -455,34 +493,35 @@ function shortToolName(tool, prefix) {
   return prefix && tool.name.startsWith(prefix) ? tool.name.slice(prefix.length) : tool.name;
 }
 
-function toolItem(tool, prefix) {
+function toolItem(tool, prefix, ctx) {
   return lazyDetails({ class: "item" },
-    [h("strong", { class: "mono", title: tool.name }, shortToolName(tool, prefix)),h("span", { class: "preview" }, firstLine(tool.description)),
+    [h("strong", { class: "mono", title: tool.name }, marked(shortToolName(tool, prefix), ctx.needle)),
+      h("span", { class: "preview" }, marked(firstLine(tool.description), ctx.needle)),
       h("span", { class: "size" }, fmt.bytes(tool.bytes))],
     () => [
-      tool.description ? h("div", { class: "text" }, tool.description) : null,
-      tool.schema !== undefined ? [h("h4", null, "Input schema"), h("pre", null, JSON.stringify(tool.schema, null, 2))] : null,
-      tool.extra ? [h("h4", null, "Other fields"), h("pre", null, JSON.stringify(tool.extra, null, 2))] : null,
-    ]);
+      tool.description ? h("div", { class: "text" }, marked(tool.description, ctx.needle)) : null,
+      tool.schema !== undefined ? [h("h4", null, "Input schema"), h("pre", null, marked(JSON.stringify(tool.schema, null, 2), ctx.needle))] : null,
+      tool.extra ? [h("h4", null, "Other fields"), h("pre", null, marked(JSON.stringify(tool.extra, null, 2), ctx.needle))] : null,
+    ], Boolean(ctx.needle));
 }
 
-function paramsSection(doc) {
-  return table(["Field", "Value"], doc.params.map((p) =>
+function paramsSection(shown, ctx) {
+  return table(["Field", "Value"], shown.map((p) =>
     h("tr", null,
-      h("td", { class: "mono nowrap" }, p.key),
-      h("td", { class: "mono wrap-anywhere" }, jsonValue(p.value)))),
-  { empty: "The request has no other fields." });
+      h("td", { class: "mono nowrap" }, marked(p.key, ctx.needle)),
+      h("td", { class: "mono wrap-anywhere" }, jsonValue(p.value, ctx.needle)))),
+  { empty: ctx.needle ? "No field contains the text." : "The request has no other fields." });
 }
 
 // ---------------------------------------------------------------- messages
 
-function messageItem(m, links, open) {
+function messageItem(m, ctx, open) {
   return lazyDetails({ class: `item message role-${m.role}`, "data-message": m.index },
     [roleBadge(m.role), h("span", { class: "mono muted" }, `#${m.index}`),
-      h("span", { class: "kinds" }, blockKinds(m.blocks, links)),
-      h("span", { class: "preview" }, messagePreview(m.blocks)),
+      h("span", { class: "kinds" }, blockKinds(m.blocks, ctx)),
+      h("span", { class: "preview" }, marked(messagePreview(m.blocks), ctx.needle)),
       h("span", { class: "size" }, fmt.bytes(m.bytes))],
-    () => m.blocks.map((b) => blockView(b, links)), open);
+    () => m.blocks.map((b) => blockView(b, ctx)), open);
 }
 
 function roleBadge(role) {
@@ -490,12 +529,12 @@ function roleBadge(role) {
   return badge(String(role), kind);
 }
 
-function blockKinds(blocks, links) {
+function blockKinds(blocks, ctx) {
   const counts = new Map();
   for (const b of blocks) {
     let label = b.kind === "other" ? b.type : b.kind.replace("_", " ");
     if (b.kind === "tool_use") label = `→ ${b.name}`;
-    if (b.kind === "tool_result") label = `← ${(links && links.calls.get(b.id) || {}).name || "result"}${b.isError ? " (error)" : ""}`;
+    if (b.kind === "tool_result") label = `← ${(ctx.calls.get(b.id) || {}).name || "result"}${b.isError ? " (error)" : ""}`;
     if (b.kind === "text" && b.text.includes("<system-reminder>")) label = b.text.replace(REMINDER, "").trim() ? "text + reminder" : "reminder";
     counts.set(label, (counts.get(label) || 0) + 1);
   }
@@ -516,32 +555,38 @@ function messagePreview(blocks) {
   return "";
 }
 
-function blockView(b, links) {
+/// A block rendering context carries `calls` and `results` from toolLinks,
+/// the `reveal(index)` that opens a message, and the Find `needle` to mark;
+/// this one has none of them.
+const NO_CONTEXT = { calls: new Map(), results: new Map(), reveal: null, needle: "" };
+
+function blockView(b, ctx) {
+  const needle = ctx.needle;
   const cache = b.cache ? badge("cache breakpoint", "info") : null;
   switch (b.kind) {
     case "text":
-      return h("div", { class: "block" }, cache, textView(b.text));
+      return h("div", { class: "block" }, cache, textView(b.text, needle));
     case "thinking":
       return lazyDetails({ class: "item thinking" },
-        [badge("thinking"), cache, h("span", { class: "preview" }, firstLine(b.text)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
-        () => h("div", { class: "text" }, b.text));
+        [badge("thinking"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
+        () => h("div", { class: "text" }, marked(b.text, needle)), contains(b.text, needle));
     case "redacted_thinking":
       return h("div", { class: "block" }, badge("redacted thinking"), cache);
     case "tool_use": {
-      const result = links ? links.results.get(b.id) : undefined;
+      const result = ctx.reveal ? ctx.results.get(b.id) : undefined;
       return h("div", { class: "block tool-use" },
-        h("div", { class: "block-head" }, badge("tool call", "info"), h("strong", { class: "mono" }, b.name || "?"),
+        h("div", { class: "block-head" }, badge("tool call", "info"), h("strong", { class: "mono" }, marked(b.name || "?", needle)),
           h("span", { class: "mono muted" }, b.id || ""), cache,
-          result !== undefined ? h("button", { type: "button", class: "link small", onclick: () => links.reveal(result) }, `result in #${result}`) : null),
-        h("pre", null, typeof b.input === "string" ? b.input : JSON.stringify(b.input, null, 2)));
+          result !== undefined ? h("button", { type: "button", class: "link small", onclick: () => ctx.reveal(result) }, `result in #${result}`) : null),
+        h("pre", null, marked(typeof b.input === "string" ? b.input : JSON.stringify(b.input, null, 2), needle)));
     }
     case "tool_result": {
-      const call = links && links.calls.get(b.id);
+      const call = ctx.calls.get(b.id);
       return h("div", { class: `block tool-result ${b.isError ? "error" : ""}` },
         h("div", { class: "block-head" }, badge(b.isError ? "tool error" : "tool result", b.isError ? "err" : "ok"),
           call ? h("strong", { class: "mono" }, call.name) : null, h("span", { class: "mono muted" }, b.id || ""), cache,
-          call ? h("button", { type: "button", class: "link small", onclick: () => links.reveal(call.index) }, `call in #${call.index}`) : null),
-        b.content.length ? b.content.map((inner) => blockView(inner, links)) : h("span", { class: "muted" }, "empty"));
+          call && ctx.reveal ? h("button", { type: "button", class: "link small", onclick: () => ctx.reveal(call.index) }, `call in #${call.index}`) : null),
+        b.content.length ? b.content.map((inner) => blockView(inner, ctx)) : h("span", { class: "muted" }, "empty"));
     }
     case "image":
       return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("image"), cache), imageView(b));
@@ -549,26 +594,48 @@ function blockView(b, links) {
       return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("document"), b.title || "", cache,
         h("span", { class: "muted" }, b.source ? `${b.source.media_type || b.source.type || ""}, ${fmt.bytes(byteSize(b.source))}` : "")));
     default:
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge(b.type), cache), h("pre", null, JSON.stringify(b.raw, null, 2)));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge(b.type), cache), h("pre", null, marked(JSON.stringify(b.raw, null, 2), needle)));
   }
 }
 
-/// Text with each system reminder folded under its first line.
-function textView(text) {
+/// Text with each system reminder folded under its first line; a reminder
+/// holding the Find needle starts unfolded.
+function textView(text, needle) {
   const pieces = [];
   let at = 0;
   for (const match of text.matchAll(REMINDER)) {
     const before = text.slice(at, match.index);
-    if (before.trim()) pieces.push(h("div", { class: "text" }, before.replace(/^\n+|\n+$/g, "")));
+    if (before.trim()) pieces.push(h("div", { class: "text" }, marked(before.replace(/^\n+|\n+$/g, ""), needle)));
     const inner = match[1].replace(/^\n+|\n+$/g, "");
     pieces.push(lazyDetails({ class: "item reminder" },
-      [badge("system reminder", "warn"), h("span", { class: "preview" }, firstLine(inner)), h("span", { class: "size" }, fmt.bytes(byteSize(match[0])))],
-      () => h("div", { class: "text" }, inner)));
+      [badge("system reminder", "warn"), h("span", { class: "preview" }, marked(firstLine(inner), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(match[0])))],
+      () => h("div", { class: "text" }, marked(inner, needle)), contains(inner, needle)));
     at = match.index + match[0].length;
   }
   const rest = text.slice(at);
-  if (rest.trim() || !pieces.length) pieces.push(h("div", { class: "text" }, at ? rest.replace(/^\n+|\n+$/g, "") : rest));
+  if (rest.trim() || !pieces.length) pieces.push(h("div", { class: "text" }, marked(at ? rest.replace(/^\n+|\n+$/g, "") : rest, needle)));
   return pieces;
+}
+
+function contains(text, needle) {
+  return Boolean(needle) && text.toLowerCase().includes(needle);
+}
+
+/// `text` with each case-insensitive occurrence of `needle` in a `<mark>`.
+function marked(text, needle) {
+  if (!needle) return text;
+  const lower = text.toLowerCase();
+  // Lowercasing that changes length would misplace the marks.
+  if (lower.length !== text.length) return text;
+  const out = [];
+  let at = 0;
+  for (let i = lower.indexOf(needle); i >= 0; i = lower.indexOf(needle, at)) {
+    if (i > at) out.push(text.slice(at, i));
+    out.push(h("mark", null, text.slice(i, i + needle.length)));
+    at = i + needle.length;
+  }
+  out.push(text.slice(at));
+  return out;
 }
 
 function imageView(b) {
@@ -599,7 +666,7 @@ function responseView(exchange) {
       folded.malformed ? fact("Unreadable frames", String(folded.malformed)) : null),
     bare ? null : [
       h("h3", null, "Content"),
-      folded.blocks.length ? folded.blocks.map((b) => blockView(b, null)) : h("p", { class: "note" }, "No content."),
+      folded.blocks.length ? folded.blocks.map((b) => blockView(b, NO_CONTEXT)) : h("p", { class: "note" }, "No content."),
     ],
   ];
 }
@@ -788,10 +855,11 @@ function lazyDetails(props, summary, build, open) {
 }
 
 /// Short values on one line, longer ones indented in a block.
-function jsonValue(value) {
+function jsonValue(value, needle) {
   const line = JSON.stringify(value);
-  if (line === undefined || line.length <= 100) return line;
-  return h("pre", null, JSON.stringify(value, null, 2));
+  if (line === undefined) return "";
+  if (line.length <= 100) return marked(line, needle);
+  return h("pre", null, marked(JSON.stringify(value, null, 2), needle));
 }
 
 function firstLine(text) {

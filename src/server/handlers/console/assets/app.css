@@ -277,6 +277,7 @@ details > summary { cursor: pointer; color: var(--muted); }
 .section-nav { display: flex; flex-direction: column; gap: 0.2rem; position: sticky; top: 6rem; }
 .section-nav button { display: grid; grid-template-columns: 1fr auto; gap: 0 0.5rem; text-align: left; border-color: transparent; background: none; padding: 0.3rem 0.5rem; }
 .section-nav button[aria-current="true"] { background: var(--accent-soft); }
+.section-nav button.empty { opacity: 0.55; }
 .section-nav .label { font-weight: 600; }
 .section-nav .count { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
 .section-nav .size { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
@@ -297,6 +298,7 @@ details.item.group > summary { padding-left: 0; }
 details.item.group > .item-body { padding: 0; }
 details.item.reminder, details.item.thinking { background: var(--bg); }
 details.message.flash { outline: 2px solid var(--accent); }
+mark { background: var(--warn-soft); color: inherit; outline: 1px solid var(--warn); border-radius: 2px; }
 summary .kinds { white-space: nowrap; font-size: 12px; color: var(--muted); }
 summary .preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 summary .size { margin-left: auto; flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
