@@ -70,7 +70,7 @@ async fn records_request_and_json_response() {
     let upstream = MockUpstream::start(echo).await;
     let dir = tempfile::tempdir().unwrap();
     let extra = format!(
-        "[logging]\nbody_dir = \"{}\"\n",
+        "[backends.mock.headers]\ncf-access-client-secret = \"forced-secret\"\n[logging]\nbody_dir = \"{}\"\n",
         dir.path().join("bodies").display()
     );
     let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
@@ -129,6 +129,10 @@ async fn records_request_and_json_response() {
             && meta["request_headers"].get("x-api-key").is_none(),
         "credentials never land on disk: {}",
         meta["request_headers"]
+    );
+    assert_eq!(
+        meta["request_headers"]["cf-access-client-secret"], "<redacted>",
+        "a forced header is a secret as the console shows it"
     );
     assert_eq!(meta["response_headers"]["content-type"], "application/json");
 }
