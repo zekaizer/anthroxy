@@ -307,6 +307,86 @@ async fn requests_waiting_on_a_failed_run_share_its_error() {
     assert_eq!(runs(&counter), 2, "a request after the failure runs again");
 }
 
+/// A command that appends to `counter`, then prints `json` while `flag`
+/// exists and fails otherwise.
+fn flaky(counter: &std::path::Path, flag: &std::path::Path, json: &str) -> String {
+    format!(
+        "echo run >> {c}; test -f {f} || {{ echo down >&2; exit 1; }}; printf '{json}'",
+        c = counter.display(),
+        f = flag.display()
+    )
+}
+
+/// ADR-0015: a value whose reported expiry is far off outlives a failed
+/// refresh, and the command is not run again on every request meanwhile.
+#[tokio::test]
+async fn a_failed_refresh_keeps_serving_a_value_that_has_not_expired() {
+    let dir = tempfile::tempdir().unwrap();
+    let (counter, flag) = (dir.path().join("runs"), dir.path().join("up"));
+    std::fs::write(&flag, "").unwrap();
+    let cmd = flaky(
+        &counter,
+        &flag,
+        r#"{"token": "tok-1234567890", "expires_at": 4102444800}"#,
+    );
+    let source = json_command(&cmd, Duration::ZERO);
+    let token = source.credential().await.unwrap().unwrap();
+
+    std::fs::remove_file(&flag).unwrap();
+    assert_eq!(source.credential().await.unwrap(), Some(token.clone()));
+    assert_eq!(runs(&counter), 2, "the refresh was attempted");
+    assert_eq!(source.credential().await.unwrap(), Some(token.clone()));
+    assert_eq!(runs(&counter), 2, "no run again right after a failure");
+    let status = source.status();
+    assert_eq!(status.masked.as_deref(), Some("tok-…7890"));
+    assert!(
+        status.refreshes[1]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("down")
+    );
+
+    source.invalidate(&token).await;
+    assert!(
+        source.credential().await.is_err(),
+        "a value the backend rejected is not served again"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_refresh_serves_nothing_near_expiry_or_without_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let near = SystemTime::now() + EXPIRY_MARGIN / 2;
+    for (name, output, json) in [
+        (
+            "near-expiry",
+            CommandOutput::Json,
+            format!(
+                r#"{{"token": "tok-1234567890", "expires_at": {}}}"#,
+                unix_secs(near)
+            ),
+        ),
+        ("text", CommandOutput::Text, "tok-1234567890".to_owned()),
+    ] {
+        let (counter, flag) = (
+            dir.path().join(format!("{name}-runs")),
+            dir.path().join(format!("{name}-up")),
+        );
+        std::fs::write(&flag, "").unwrap();
+        let source = CommandCredential::new(
+            flaky(&counter, &flag, &json),
+            output,
+            CredentialHeader::bearer(),
+            Duration::ZERO,
+            Duration::from_secs(5),
+        );
+        source.credential().await.unwrap();
+        std::fs::remove_file(&flag).unwrap();
+        assert!(source.credential().await.is_err(), "{name}");
+    }
+}
+
 #[tokio::test]
 async fn json_output_yields_the_token() {
     let source = json_command(r#"echo '{"token": "tok-json"}'"#, Duration::from_secs(60));

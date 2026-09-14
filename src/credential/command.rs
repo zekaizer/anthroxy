@@ -13,6 +13,10 @@ use crate::config::{CommandOutput, CredentialHeader};
 /// Runs kept for status output.
 pub const REFRESH_HISTORY: usize = 20;
 
+/// After a failed run, how long a value still in use is served before the
+/// command is run again (ADR-0015).
+const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(30);
+
 #[derive(Debug)]
 pub struct CommandCredential {
     command: String,
@@ -49,6 +53,14 @@ struct Slot {
     failed: Option<(Instant, CredentialError)>,
 }
 
+impl Slot {
+    /// The cached value, when a failed refresh may still hand it out at `now`.
+    fn fallback(&self, now: Instant) -> Option<Credential> {
+        let cached = self.cached.as_ref()?;
+        (now < cached.usable_until?).then(|| cached.credential.clone())
+    }
+}
+
 #[derive(Debug)]
 struct Cached {
     credential: Credential,
@@ -56,6 +68,9 @@ struct Cached {
     valid_until: Instant,
     /// Reported by the command, for the refresh log line.
     expires_at: Option<SystemTime>,
+    /// Served past `valid_until` while refreshes fail, until then: the
+    /// reported expiry less the margin. `None` without a reported expiry.
+    usable_until: Option<Instant>,
 }
 
 impl CommandCredential {
@@ -83,7 +98,9 @@ impl CommandCredential {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Records one run that started at `at` and took `elapsed`.
+    /// Records one run that started at `at` and took `elapsed`. A failed run
+    /// leaves the current value to the caller, which knows whether it is
+    /// still served.
     fn observe(
         &self,
         at: jiff::Timestamp,
@@ -96,11 +113,7 @@ impl CommandCredential {
             expires_at: cached
                 .expires_at
                 .and_then(|t| jiff::Timestamp::try_from(t).ok()),
-            refresh_at: jiff::SignedDuration::try_from(
-                cached.valid_until.saturating_duration_since(Instant::now()),
-            )
-            .ok()
-            .and_then(|remaining| jiff::Timestamp::now().checked_add(remaining).ok()),
+            refresh_at: timestamp(cached.valid_until),
         });
         let record = RefreshRecord {
             at,
@@ -109,7 +122,9 @@ impl CommandCredential {
             error: run.as_ref().err().map(ToString::to_string),
         };
         let mut observed = self.observed();
-        observed.current = current;
+        if current.is_some() {
+            observed.current = current;
+        }
         if observed.runs.len() == REFRESH_HISTORY {
             observed.runs.pop_front();
         }
@@ -121,30 +136,46 @@ impl CommandCredential {
         let run = exec::run(&self.command, self.timeout).await?;
         let output = exec::interpret(&run, self.output)?;
         let valid_for = exec::valid_for(self.refresh, output.expires_at)?;
+        let now = Instant::now();
         Ok(Cached {
             credential: Credential::new(self.header.clone(), output.secret)?,
-            valid_until: Instant::now() + valid_for,
+            valid_until: now + valid_for,
             expires_at: output.expires_at,
+            usable_until: output.expires_at.map(|expires_at| {
+                let remaining = expires_at
+                    .duration_since(SystemTime::now())
+                    .unwrap_or_default();
+                now + remaining.saturating_sub(exec::EXPIRY_MARGIN)
+            }),
         })
     }
 }
 
 #[async_trait]
 impl CredentialSource for CommandCredential {
-    /// A call that waited for a run that failed returns that run's error
-    /// instead of running the command again.
+    /// A call that waited for a run that failed gets that run's outcome
+    /// instead of running the command again. A failed run hands out the
+    /// previous value while its reported expiry is not near, and for
+    /// [`RETRY_AFTER_FAILURE`] no run follows (ADR-0015).
     async fn credential(&self) -> Result<Option<Credential>, CredentialError> {
         let arrived = Instant::now();
         let mut slot = self.cache.lock().await;
+        let now = Instant::now();
         if let Some(cached) = &slot.cached
-            && Instant::now() < cached.valid_until
+            && now < cached.valid_until
         {
             return Ok(Some(cached.credential.clone()));
         }
-        if let Some((ended, error)) = &slot.failed
-            && *ended >= arrived
-        {
-            return Err(error.clone());
+        if let Some((ended, error)) = &slot.failed {
+            let waited = *ended >= arrived;
+            if waited || now < *ended + RETRY_AFTER_FAILURE {
+                if let Some(credential) = slot.fallback(now) {
+                    return Ok(Some(credential));
+                }
+                if waited {
+                    return Err(error.clone());
+                }
+            }
         }
         let (at, started) = (jiff::Timestamp::now(), Instant::now());
         let fetched = self.fetch().await;
@@ -153,7 +184,19 @@ impl CredentialSource for CommandCredential {
             Ok(fetched) => fetched,
             Err(error) => {
                 tracing::warn!(%error, "credential command failed");
-                slot.failed = Some((Instant::now(), error.clone()));
+                let ended = Instant::now();
+                slot.failed = Some((ended, error.clone()));
+                if let Some(credential) = slot.fallback(ended) {
+                    tracing::warn!(
+                        credential = %credential.masked(),
+                        "serving the previous credential until its reported expiry nears"
+                    );
+                    if let Some(current) = &mut self.observed().current {
+                        current.refresh_at = timestamp(ended + RETRY_AFTER_FAILURE);
+                    }
+                    return Ok(Some(credential));
+                }
+                self.observed().current = None;
                 return Err(error);
             }
         };
@@ -212,4 +255,11 @@ impl CredentialSource for CommandCredential {
             refreshes: observed.runs.iter().cloned().collect(),
         }
     }
+}
+
+/// `at` on the wall clock, for status output.
+fn timestamp(at: Instant) -> Option<jiff::Timestamp> {
+    let remaining =
+        jiff::SignedDuration::try_from(at.saturating_duration_since(Instant::now())).ok()?;
+    jiff::Timestamp::now().checked_add(remaining).ok()
 }
