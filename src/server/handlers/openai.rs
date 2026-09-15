@@ -57,13 +57,20 @@ pub async fn body(
     started: Instant,
     recorder: Option<Recorder>,
     exchange: &mut Option<Exchange>,
+    cut: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(HeaderMap, Body), RouterError> {
     let mut headers = HeaderMap::new();
     let status = upstream.response.status().as_u16();
     if stream && is_event_stream(upstream.response.headers()) {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
         headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-        let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
+        let relay = Relay::new(
+            upstream.response.bytes_stream(),
+            span,
+            started,
+            recorder,
+            cut,
+        );
         let translator = translate::Translator::new(relay, upstream_model, backend);
         let body = match exchange.take() {
             Some(exchange) => Body::from_stream(Pings::new(

@@ -65,6 +65,7 @@ pub async fn smoke(
         Some(viewer.to_string()),
         "POST",
         "/v1/messages",
+        app.cut_signal(),
     );
     let Answer {
         status,
@@ -236,7 +237,14 @@ mod tests {
         let snapshot = Snapshot::from_config(&config).unwrap();
         let activity = Activity::new();
         let id = RequestId::generate();
-        let exchange = activity.begin(id.as_str(), Source::Console, None, "POST", "/v1/messages");
+        let exchange = activity.begin(
+            id.as_str(),
+            Source::Console,
+            None,
+            "POST",
+            "/v1/messages",
+            tokio::sync::watch::channel(false).1,
+        );
         let payload = json!({"model": "m", "max_tokens": 8, "messages": []});
 
         let started = Instant::now();

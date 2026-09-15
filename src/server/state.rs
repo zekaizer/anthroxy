@@ -168,6 +168,12 @@ impl AppState {
         self.cut.send_replace(true);
     }
 
+    /// Reads `true` once [`cut_in_flight`](Self::cut_in_flight) ran; what a
+    /// request drops unfinished after that was cut, not left by its client.
+    pub fn cut_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.cut.subscribe()
+    }
+
     /// Resolves once [`cut_in_flight`](Self::cut_in_flight) ran.
     pub fn cut(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
         let mut cut = self.cut.subscribe();

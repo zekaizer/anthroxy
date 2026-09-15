@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::Stream;
+use tokio::sync::watch;
 
 use super::{Activity, ERROR_BODY_BYTES, ExchangeView, Hint, Outcome};
 use crate::anthropic::UsageScanner;
@@ -18,17 +19,23 @@ use crate::text::cut;
 type OnFinish = Box<dyn FnOnce(&ExchangeView) + Send>;
 
 /// Updates one [`ExchangeView`]. Finishing moves it from in flight to recent;
-/// dropping it unfinished records a client that went away.
+/// dropping it unfinished records a client that went away, or a failure once
+/// a stop cut what was in flight.
 pub struct Exchange {
     activity: Arc<Activity>,
     view: Arc<Mutex<ExchangeView>>,
     started: Instant,
     finished: bool,
     on_finish: Option<OnFinish>,
+    cut: watch::Receiver<bool>,
 }
 
 impl Exchange {
-    pub(super) fn new(activity: Arc<Activity>, view: ExchangeView) -> Self {
+    pub(super) fn new(
+        activity: Arc<Activity>,
+        view: ExchangeView,
+        cut: watch::Receiver<bool>,
+    ) -> Self {
         let view = Arc::new(Mutex::new(view));
         activity.register(&view);
         Self {
@@ -37,7 +44,14 @@ impl Exchange {
             started: Instant::now(),
             finished: false,
             on_finish: None,
+            cut,
         }
+    }
+
+    /// The stop's cut signal this exchange was started with, for what else
+    /// the request drops unfinished.
+    pub fn cut_signal(&self) -> watch::Receiver<bool> {
+        self.cut.clone()
     }
 
     /// Runs once with the finished view, after it joined the recent list.
@@ -184,9 +198,23 @@ impl Exchange {
 
 impl Drop for Exchange {
     fn drop(&mut self) {
-        self.finish(Outcome::ClientDisconnected);
+        if self.finished {
+            return;
+        }
+        if *self.cut.borrow() {
+            // A request cut before its response started was answered 503.
+            self.update(|v| {
+                v.status.get_or_insert(503);
+                v.error = Some(STOPPED.to_owned());
+            });
+            self.finish(Outcome::Error);
+        } else {
+            self.finish(Outcome::ClientDisconnected);
+        }
     }
 }
+
+const STOPPED: &str = "a stop cut the request before it finished";
 
 /// Body stream that reports to its [`Exchange`] as the client reads it.
 pub struct Tracked<S> {

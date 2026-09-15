@@ -49,6 +49,7 @@ pub async fn proxy(
         peer,
         request.method().as_str(),
         request.uri().path(),
+        app.cut_signal(),
     );
     serve(&snapshot, &request_id, request, exchange).await
 }
@@ -70,8 +71,9 @@ pub async fn serve(
             }
         });
     }
+    let cut = exchange.cut_signal();
     let mut exchange = Some(exchange);
-    match handle(snapshot, request_id, request, &mut exchange).await {
+    match handle(snapshot, request_id, request, &mut exchange, cut).await {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(error = %error, status = error.status().as_u16(), "request failed in router");
@@ -84,12 +86,13 @@ pub async fn serve(
 }
 
 /// `exchange` stays in place until a response body takes it; an error return
-/// leaves it for the caller to fail.
+/// leaves it for the caller to fail. `cut` goes to the recorder and the relay.
 async fn handle(
     state: &Snapshot,
     request_id: &RequestId,
     request: Request,
     exchange: &mut Option<Exchange>,
+    cut: tokio::sync::watch::Receiver<bool>,
 ) -> Result<Response, RouterError> {
     let started = Instant::now();
     let (parts, body) = request.into_parts();
@@ -165,7 +168,7 @@ async fn handle(
             peek.stream,
             summary.unwrap_or_default(),
         );
-        log.begin(record, &body, started)
+        log.begin(record, &body, started, cut.clone())
     });
     if let Some(recorder) = &recorder {
         note(exchange, |e| e.recording(recorder.entry()));
@@ -287,7 +290,13 @@ async fn handle(
             // ADR-0003: relayed as it arrives.
             BackendKind::Anthropic => {
                 let events = is_event_stream(upstream.response.headers());
-                let relay = Relay::new(upstream.response.bytes_stream(), span, started, recorder);
+                let relay = Relay::new(
+                    upstream.response.bytes_stream(),
+                    span,
+                    started,
+                    recorder,
+                    cut,
+                );
                 match (exchange.take(), events) {
                     (Some(exchange), true) => Body::from_stream(Pings::new(
                         exchange.track(relay, content_type.as_deref()),
@@ -310,6 +319,7 @@ async fn handle(
                     started,
                     recorder,
                     exchange,
+                    cut,
                 )
                 .await?;
                 headers.extend(overrides);

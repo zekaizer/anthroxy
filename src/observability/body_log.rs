@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
+use tokio::sync::watch;
 
 use crate::private_fs::{PendingWrite, create_dir_private, write_private};
 use crate::server::relay::RelayOutcome;
@@ -69,8 +70,9 @@ struct EndMeta {
 }
 
 /// Accumulates one exchange and writes it out when the response ends. A
-/// recorder dropped before [`Recorder::finish`] records a client that left:
-/// a handler awaiting a buffered body is dropped when its client goes away.
+/// recorder dropped before [`Recorder::finish`] records a client that left, or
+/// a stop once one cut what was in flight: a handler awaiting a buffered body
+/// is dropped when its client goes away.
 pub struct Recorder {
     dir: PathBuf,
     meta: Meta,
@@ -80,6 +82,8 @@ pub struct Recorder {
     /// The initial write; the final write is ordered after it so `meta.json`
     /// always ends in its complete form. Taken by the final write.
     pending: Option<tokio::task::JoinHandle<()>>,
+    /// Tells a stop's cut from a client that left when dropped unfinished.
+    cut: watch::Receiver<bool>,
 }
 
 impl BodyLog {
@@ -129,7 +133,13 @@ impl BodyLog {
     }
 
     /// Starts a record and writes `request.json` plus a first `meta.json`.
-    pub fn begin(&self, record: RequestRecord, body: &Bytes, started: Instant) -> Recorder {
+    pub fn begin(
+        &self,
+        record: RequestRecord,
+        body: &Bytes,
+        started: Instant,
+        cut: watch::Receiver<bool>,
+    ) -> Recorder {
         let dir = self.root.join(format!(
             "{}-{}",
             dir_stamp(jiff::Timestamp::now()),
@@ -155,6 +165,7 @@ impl BodyLog {
             response: Vec::new(),
             response_file: "response.bin",
             pending: Some(pending),
+            cut,
         }
     }
 }
@@ -407,6 +418,7 @@ impl Recorder {
                 RelayOutcome::Complete => "complete".to_owned(),
                 RelayOutcome::UpstreamError(error) => format!("upstream_error: {error}"),
                 RelayOutcome::ClientDisconnected => "client_disconnected".to_owned(),
+                RelayOutcome::Stopped => "stopped".to_owned(),
             },
             response_bytes: self.response.len(),
             duration_ms: self.started.elapsed().as_millis() as u64,
@@ -429,7 +441,8 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         if self.meta.end.is_none() {
-            self.record(&RelayOutcome::ClientDisconnected);
+            let outcome = RelayOutcome::dropped(&self.cut);
+            self.record(&outcome);
         }
     }
 }
