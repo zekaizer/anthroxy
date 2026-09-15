@@ -667,6 +667,7 @@ async fn recordings_can_be_listed_read_and_deleted() {
     assert_eq!(entries[0]["status"], 200);
     assert_eq!(entries[0]["prompt"], "hi");
     assert_eq!(entries[0]["step"], "← Read");
+    assert_eq!(entries[0]["stream"], false, "{listing}");
     assert_eq!(entries[0]["messages"], 3);
     assert_eq!(entries[1]["step"], Value::Null, "{listing}");
     assert_eq!(entries[0]["session"], "session-smart");

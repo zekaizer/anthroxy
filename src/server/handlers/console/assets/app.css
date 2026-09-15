@@ -181,6 +181,9 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--accent-soft); }
 tr.selected td { background: var(--accent-soft); }
+/* A request sent again unchanged, folded under the one it repeats. */
+tr.attempt td { color: var(--muted); }
+tr.attempt td:first-child { box-shadow: inset 3px 0 var(--line); padding-left: 1.2rem; }
 td .sub { color: var(--muted); font-size: 12px; }
 /* A reason beside its badge: one line, however long the backend made it. */
 td .sub.one-line { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

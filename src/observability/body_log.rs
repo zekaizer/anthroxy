@@ -197,6 +197,9 @@ pub struct EntrySummary {
     pub backend: Option<String>,
     pub status: Option<u16>,
     pub outcome: Option<String>,
+    /// The client asked for a stream; absent in entries recorded before the
+    /// field existed.
+    pub stream: Option<bool>,
     pub messages: Option<u64>,
     pub prompt: Option<String>,
     /// Absent for a request that carries its prompt, and in entries recorded
@@ -267,6 +270,7 @@ impl BodyLog {
                 .and_then(|v| v.as_u64())
                 .and_then(|v| u16::try_from(v).ok()),
             outcome: text("outcome"),
+            stream: meta.get("stream").and_then(serde_json::Value::as_bool),
             messages: meta.get("messages").and_then(|v| v.as_u64()),
             prompt: text("prompt"),
             step: text("step"),
@@ -552,7 +556,7 @@ mod tests {
             std::fs::create_dir(&entry).unwrap();
             std::fs::write(
                 entry.join("meta.json"),
-                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "messages": 3, "prompt": "Read it", "step": "← Read", "request_headers": {{"x-claude-code-session-id": "s-1"}}}}"#),
+                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "stream": true, "messages": 3, "prompt": "Read it", "step": "← Read", "request_headers": {{"x-claude-code-session-id": "s-1"}}}}"#),
             )
             .unwrap();
             std::fs::write(entry.join("request.json"), "{}").unwrap();
@@ -578,6 +582,7 @@ mod tests {
         assert_eq!(newest.messages, Some(3));
         assert_eq!(newest.prompt.as_deref(), Some("Read it"));
         assert_eq!(newest.step.as_deref(), Some("← Read"));
+        assert_eq!(newest.stream, Some(true));
         assert_eq!(newest.session.as_deref(), Some("s-1"));
         assert!(newest.bytes > 2);
         let newest_only = log.list(1);

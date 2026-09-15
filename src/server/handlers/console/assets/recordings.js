@@ -6,6 +6,8 @@
 
 /// Rows the list draws at first, and adds per "Show more".
 const LIST_PAGE = 100;
+/// Requests this far apart are never one request tried again.
+const RETRY_WINDOW_MS = 10 * 60 * 1000;
 /// Displays at most this much of a recorded file as raw text.
 const SHOWN_BYTES = 2 * 1024 * 1024;
 /// Messages after the last prompt up to this size start unfolded.
@@ -67,12 +69,65 @@ function recordings(view, opened) {
   let data = null;
   let limit = LIST_PAGE;
   const rows = new Map();
+  /// Reveals the entry of a name that a group holds folded.
+  const reveals = new Map();
 
   const shown = () => {
     const needle = filter.value.trim().toLowerCase();
     return data.entries.filter((e) => !needle || [e.name, e.prompt, e.step, e.session, e.model, e.backend, e.status, e.outcome, e.path]
       .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle)));
   };
+  /// One row per attempt. A request Claude Code sent again unchanged — after
+  /// a stream it could not read, as a rule — follows the one it repeats, so
+  /// the newest stands for the group and the rest fold under it.
+  const groupRows = (group) => {
+    const [newest, ...repeats] = group;
+    const lead = row(newest);
+    if (!repeats.length) return [lead];
+    const folded = repeats.map((e) => {
+      const tr = row(e);
+      tr.classList.add("attempt");
+      tr.hidden = true;
+      return tr;
+    });
+    const toggle = h("button", { type: "button", class: "link small" });
+    const draw = () => replace(toggle, folded[0].hidden ? `${group.length} attempts` : "hide attempts");
+    const show = (open) => {
+      folded.forEach((tr) => { tr.hidden = !open; });
+      draw();
+    };
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      show(folded[0].hidden);
+    });
+    draw();
+    lead.querySelector("td.prompt-cell .sub").append(" · ", toggle);
+    for (const e of repeats) reveals.set(e.name, () => show(true));
+    return [lead, ...folded];
+  };
+
+  /// Requests of one session that ask the same thing within
+  /// [`RETRY_WINDOW_MS`], newest first, as groups of attempts. Another
+  /// session's requests in between do not break a group, since sessions
+  /// sharing the router interleave.
+  const groups = (entries) => {
+    const key = (e) => JSON.stringify([e.session, e.model, e.path, e.messages, e.prompt, e.step]);
+    const open = new Map();
+    const out = [];
+    for (const e of entries) {
+      const id = key(e);
+      const group = open.get(id);
+      if (group && Math.abs(new Date(group[group.length - 1].at) - new Date(e.at)) <= RETRY_WINDOW_MS) {
+        group.push(e);
+        continue;
+      }
+      const started = [e];
+      open.set(id, started);
+      out.push(started);
+    }
+    return out;
+  };
+
   const row = (e) => {
     const remove = h("button", { type: "button", class: "small danger" }, "Delete");
     remove.addEventListener("click", async (event) => {
@@ -103,6 +158,7 @@ function recordings(view, opened) {
   const draw = () => {
     if (!data) return;
     rows.clear();
+    reveals.clear();
     if (!data.dir) {
       removeAll.disabled = true;
       replace(list, banner(["Body recording is off. Set ", h("code", null, "logging.body_dir"), " or pass ", h("code", null, "--body-dir"), " to record each exchange."], "info"));
@@ -113,13 +169,14 @@ function recordings(view, opened) {
     const more = h("button", { type: "button", class: "small" });
     const moreLine = h("p", { class: "note" }, more);
     const label = () => {
-      moreLine.hidden = limit >= entries.length;
-      replace(more, `Show ${Math.min(LIST_PAGE, entries.length - limit)} more of ${entries.length - limit} not shown`);
+      moreLine.hidden = limit >= grouped.length;
+      replace(more, `Show ${Math.min(LIST_PAGE, grouped.length - limit)} more of ${grouped.length - limit} not shown`);
     };
-    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], entries.slice(0, limit).map(row),
+    const grouped = groups(entries);
+    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], grouped.slice(0, limit).flatMap(groupRows),
       { empty: needle ? "No recording matches." : "No recording yet." });
     more.addEventListener("click", () => {
-      append(drawn.querySelector("tbody"), entries.slice(limit, limit + LIST_PAGE).map(row));
+      append(drawn.querySelector("tbody"), grouped.slice(limit, limit + LIST_PAGE).flatMap(groupRows));
       limit += LIST_PAGE;
       label();
     });
@@ -141,6 +198,7 @@ function recordings(view, opened) {
   const open = (name) => {
     rows.get(opened)?.classList.remove("selected");
     opened = name;
+    reveals.get(name)?.();
     rows.get(opened)?.classList.add("selected");
     const box = h("div");
     replace(inspector, box);
@@ -226,6 +284,7 @@ function entryFacts(e, filterBy) {
       onclick: (event) => { event.stopPropagation(); filterBy(e.session); },
     }, `session ${e.session.slice(0, 8)}`));
   }
+  if (e.stream !== null && e.stream !== undefined) facts.push(e.stream ? "stream" : "whole response");
   if (e.path && !/^\/v1\/(messages|chat\/completions)(\?|$)/.test(e.path)) facts.push(h("span", { class: "mono" }, e.path));
   facts.push(h("span", { class: "mono" }, e.request_id));
   return facts.flatMap((fact, i) => (i ? [" · ", fact] : [fact]));
