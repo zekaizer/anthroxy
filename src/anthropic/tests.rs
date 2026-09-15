@@ -374,6 +374,37 @@ fn summary_takes_a_message_sent_while_the_model_worked_as_the_prompt() {
     );
 }
 
+/// Claude Code sends its interruption notice as a text block of the user
+/// message that carries the next prompt.
+#[test]
+fn summary_leaves_out_the_notice_of_an_interrupted_request() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "Fix the build."},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "rejected"},
+            {"type": "text", "text": "[Request interrupted by user for tool use]"},
+            {"type": "text", "text": "Run it on this branch."},
+            {"type": "text", "text": "[Request interrupted by user]"},
+            {"type": "text", "text": "Then commit."}
+        ]}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()).prompt.as_deref(),
+        Some("Run it on this branch. Then commit.")
+    );
+
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "Fix the build."},
+        {"role": "assistant", "content": "Working on it."},
+        {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()).prompt.as_deref(),
+        Some("Fix the build.")
+    );
+}
+
 #[test]
 fn summary_keeps_text_after_a_reminder_tag_that_never_closes() {
     let body = json!({"model": "m", "messages": [
