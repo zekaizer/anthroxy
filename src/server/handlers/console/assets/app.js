@@ -732,9 +732,8 @@ async function showRequest(target, id) {
         fact("Tokens", v.usage
           ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}, cache read ${fmt.int(v.usage.cache_read)}, cache write ${fmt.int(v.usage.cache_creation)}`
           : "not reported"),
-        fact("Output speed", v.output_tokens_per_second
-          ? fmt.rate(v.output_tokens_per_second)
-          : h("span", { class: "muted" }, "measured on streamed answers that complete")),
+        // Measured only on streamed answers that complete.
+        v.output_tokens_per_second ? fact("Output speed", fmt.rate(v.output_tokens_per_second)) : null,
         fact("Outcome", outcomeBadge(v))),
       v.error ? [h("h3", null, "Error"), h("pre", null, v.error)] : null,
       v.hints.length ? [h("h3", null, "Hints"), v.hints.map((hint) =>
