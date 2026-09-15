@@ -13,6 +13,7 @@ fn begin(activity: &Arc<Activity>, id: &str) -> Exchange {
         Some("10.0.0.2:5000".into()),
         "POST",
         "/v1/messages",
+        tokio::sync::watch::channel(false).1,
     )
 }
 

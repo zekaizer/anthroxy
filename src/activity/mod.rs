@@ -97,7 +97,8 @@ impl Activity {
         Arc::new(Self::default())
     }
 
-    /// Starts tracking a request that just arrived.
+    /// Starts tracking a request that just arrived; `cut` is the stop's cut
+    /// signal.
     pub fn begin(
         self: &Arc<Self>,
         id: &str,
@@ -105,6 +106,7 @@ impl Activity {
         peer: Option<String>,
         method: &str,
         path: &str,
+        cut: tokio::sync::watch::Receiver<bool>,
     ) -> Exchange {
         Exchange::new(
             self.clone(),
@@ -136,6 +138,7 @@ impl Activity {
                 hints: Vec::new(),
                 recording: None,
             },
+            cut,
         )
     }
 

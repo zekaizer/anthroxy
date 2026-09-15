@@ -501,8 +501,8 @@ function overviewContent(status, reload) {
     card("Uptime", since(status.started_at, "uptime")),
     card("Listening on", status.listen, true),
     card("Configuration", status.config_path || "built in memory", true),
-    card("Statistics", status.stats ? `${status.stats.dir} (keeps ${status.stats.retention})` : "off", true),
-    card("Body recording", status.body_log ? `${status.body_log.dir} (keeps ${status.body_log.retention})` : "off", true));
+    card("Statistics", status.stats ? `${status.stats.dir} (${kept(status.stats.retention)})` : "off", true),
+    card("Body recording", status.body_log ? `${status.body_log.dir} (${kept(status.body_log.retention)})` : "off", true));
 
   const reloadButton = h("button", { type: "button" }, "Reload configuration");
   reloadButton.addEventListener("click", async () => {
@@ -593,6 +593,11 @@ function overviewContent(status, reload) {
       h("p", { class: "note" }, "Secrets are redacted. ", h("code", null, "${ENV}"), " references are shown expanded."),
       h("details", null, h("summary", null, "Show"), h("pre", null, JSON.stringify(status.config, null, 2)))),
   ];
+}
+
+/// A retention as the configuration spells it; "0s" turns pruning off.
+function kept(retention) {
+  return retention === "0s" ? "kept indefinitely" : `kept for ${retention}`;
 }
 
 function card(label, value, small) {
@@ -727,9 +732,8 @@ async function showRequest(target, id) {
         fact("Tokens", v.usage
           ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}, cache read ${fmt.int(v.usage.cache_read)}, cache write ${fmt.int(v.usage.cache_creation)}`
           : "not reported"),
-        fact("Output speed", v.output_tokens_per_second
-          ? fmt.rate(v.output_tokens_per_second)
-          : h("span", { class: "muted" }, "measured on streamed answers that complete")),
+        // Measured only on streamed answers that complete.
+        v.output_tokens_per_second ? fact("Output speed", fmt.rate(v.output_tokens_per_second)) : null,
         fact("Outcome", outcomeBadge(v))),
       v.error ? [h("h3", null, "Error"), h("pre", null, v.error)] : null,
       v.hints.length ? [h("h3", null, "Hints"), v.hints.map((hint) =>

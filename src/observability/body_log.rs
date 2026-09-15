@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
+use tokio::sync::watch;
 
 use crate::private_fs::{PendingWrite, create_dir_private, write_private};
 use crate::server::relay::RelayOutcome;
@@ -69,8 +70,9 @@ struct EndMeta {
 }
 
 /// Accumulates one exchange and writes it out when the response ends. A
-/// recorder dropped before [`Recorder::finish`] records a client that left:
-/// a handler awaiting a buffered body is dropped when its client goes away.
+/// recorder dropped before [`Recorder::finish`] records a client that left, or
+/// a stop once one cut what was in flight: a handler awaiting a buffered body
+/// is dropped when its client goes away.
 pub struct Recorder {
     dir: PathBuf,
     meta: Meta,
@@ -80,6 +82,8 @@ pub struct Recorder {
     /// The initial write; the final write is ordered after it so `meta.json`
     /// always ends in its complete form. Taken by the final write.
     pending: Option<tokio::task::JoinHandle<()>>,
+    /// Tells a stop's cut from a client that left when dropped unfinished.
+    cut: watch::Receiver<bool>,
 }
 
 impl BodyLog {
@@ -129,7 +133,13 @@ impl BodyLog {
     }
 
     /// Starts a record and writes `request.json` plus a first `meta.json`.
-    pub fn begin(&self, record: RequestRecord, body: &Bytes, started: Instant) -> Recorder {
+    pub fn begin(
+        &self,
+        record: RequestRecord,
+        body: &Bytes,
+        started: Instant,
+        cut: watch::Receiver<bool>,
+    ) -> Recorder {
         let dir = self.root.join(format!(
             "{}-{}",
             dir_stamp(jiff::Timestamp::now()),
@@ -155,6 +165,7 @@ impl BodyLog {
             response: Vec::new(),
             response_file: "response.bin",
             pending: Some(pending),
+            cut,
         }
     }
 }
@@ -188,11 +199,18 @@ pub struct EntrySummary {
     pub session: Option<String>,
 }
 
+/// The newest entries and how many there are in all.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Listing {
+    pub total: usize,
+    pub entries: Vec<EntrySummary>,
+}
+
 impl BodyLog {
     /// Entries, newest first, at most `limit`.
-    pub fn list(&self, limit: usize) -> Vec<EntrySummary> {
+    pub fn list(&self, limit: usize) -> Listing {
         let Ok(entries) = std::fs::read_dir(&self.root) else {
-            return Vec::new();
+            return Listing::default();
         };
         let mut names: Vec<(String, jiff::Timestamp)> = entries
             .flatten()
@@ -204,11 +222,14 @@ impl BodyLog {
             })
             .collect();
         names.sort_by(|a, b| b.0.cmp(&a.0));
-        names
-            .into_iter()
-            .take(limit)
-            .map(|(name, at)| self.summary(name, at))
-            .collect()
+        Listing {
+            total: names.len(),
+            entries: names
+                .into_iter()
+                .take(limit)
+                .map(|(name, at)| self.summary(name, at))
+                .collect(),
+        }
     }
 
     fn summary(&self, name: String, at: jiff::Timestamp) -> EntrySummary {
@@ -270,6 +291,7 @@ impl BodyLog {
     /// Deletes every entry; returns how many went. Other names are left alone.
     pub fn remove_all(&self) -> usize {
         self.list(usize::MAX)
+            .entries
             .iter()
             .filter(|entry| self.remove(&entry.name).unwrap_or(false))
             .count()
@@ -407,6 +429,7 @@ impl Recorder {
                 RelayOutcome::Complete => "complete".to_owned(),
                 RelayOutcome::UpstreamError(error) => format!("upstream_error: {error}"),
                 RelayOutcome::ClientDisconnected => "client_disconnected".to_owned(),
+                RelayOutcome::Stopped => "stopped".to_owned(),
             },
             response_bytes: self.response.len(),
             duration_ms: self.started.elapsed().as_millis() as u64,
@@ -429,7 +452,8 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         if self.meta.end.is_none() {
-            self.record(&RelayOutcome::ClientDisconnected);
+            let outcome = RelayOutcome::dropped(&self.cut);
+            self.record(&outcome);
         }
     }
 }
@@ -528,7 +552,7 @@ mod tests {
         }
         std::fs::create_dir(dir.path().join("unrelated")).unwrap();
 
-        let entries = log.list(10);
+        let entries = log.list(10).entries;
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(
             names,
@@ -547,7 +571,12 @@ mod tests {
         assert_eq!(newest.prompt.as_deref(), Some("Read it"));
         assert_eq!(newest.session.as_deref(), Some("s-1"));
         assert!(newest.bytes > 2);
-        assert_eq!(log.list(1).len(), 1);
+        let newest_only = log.list(1);
+        assert_eq!(newest_only.entries.len(), 1);
+        assert_eq!(
+            newest_only.total, 2,
+            "the count covers what the limit left out"
+        );
 
         assert!(
             log.file("20260911T100000.000Z-rtr_old", "meta.json")
@@ -568,7 +597,7 @@ mod tests {
         assert!(log.remove("20260911T100000.000Z-rtr_old").unwrap());
         assert!(!log.remove("20260911T100000.000Z-rtr_old").unwrap());
         assert_eq!(log.remove_all(), 1);
-        assert!(log.list(10).is_empty());
+        assert_eq!(log.list(10), Listing::default());
         assert!(dir.path().join("unrelated").exists());
     }
 

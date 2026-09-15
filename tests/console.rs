@@ -652,6 +652,7 @@ async fn recordings_can_be_listed_read_and_deleted() {
     }
     let entries = listing["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2, "{listing}");
+    assert_eq!(listing["total"], 2, "{listing}");
     assert_eq!(entries[0]["request_id"], ids[1].as_str(), "newest first");
     assert_eq!(entries[0]["model"], "smart");
     assert_eq!(entries[0]["status"], 200);

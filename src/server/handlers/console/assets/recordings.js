@@ -28,6 +28,9 @@ const VIEWS = [["sections", "Sections"], ["raw", "Raw"]];
 const REMINDER = /<system-reminder>([\s\S]*?)<\/system-reminder>/g;
 /// How a reminder carrying a message the user sent mid-turn begins.
 const QUEUED = "The user sent a new message while you were working:";
+/// Text blocks Claude Code adds to a user message when the user stops a turn;
+/// the prompt that follows comes in the same message.
+const INTERRUPTED = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"];
 const utf8 = new TextEncoder();
 
 // ---------------------------------------------------------------- list
@@ -101,7 +104,8 @@ function recordings(view, opened) {
     });
     label();
     replace(list,
-      h("p", { class: "note" }, `${data.entries.length} recording(s) in `, h("code", null, data.dir), `, kept for ${data.retention}. They hold whole conversations.`),
+      h("p", { class: "note" }, `${fmt.int(data.total)} recording(s) in `, h("code", null, data.dir), `, ${kept(data.retention)}. They hold whole conversations.`,
+        data.total > data.entries.length ? ` The newest ${fmt.int(data.entries.length)} are listed.` : ""),
       drawn,
       moreLine);
   };
@@ -211,6 +215,12 @@ async function inspect(target, name, files, neighbors, listed) {
       recordedFile(name, "request.json"),
       firstRecordedFile(name, responses),
     ]);
+    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Close");
+    if (!meta && !request && !response) {
+      replace(target, panel(`Recording ${name}`, [close],
+        banner("There is no such recording: it was deleted, pruned after its retention, or recorded by another router.", "info")));
+      return;
+    }
     const exchange = {
       name,
       files: { meta, request, response },
@@ -242,7 +252,6 @@ async function inspect(target, name, files, neighbors, listed) {
       title: entry ? entry.prompt || entry.request_id : null,
       onclick: () => go("recordings", entry.name),
     }, label);
-    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Close");
     const title = exchange.meta ? exchange.meta.request_id : name;
     replace(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
       summaryFacts(exchange),
@@ -539,7 +548,7 @@ function openaiCall(call) {
 
 /// The user's last prompt as `{ position, text, queued }`: `position` in
 /// `messages` of the last user message with text of its own beside system
-/// reminders, or with a reminder through which Claude Code delivers a message
+/// reminders and interruption notices, or with a reminder through which Claude Code delivers a message
 /// the user sent while the model was working (`queued`); null when there is
 /// neither.
 function lastPrompt(messages) {
@@ -548,7 +557,7 @@ function lastPrompt(messages) {
     let text = "";
     let queued = false;
     for (const b of messages[position].blocks) {
-      if (b.kind !== "text") continue;
+      if (b.kind !== "text" || isInterruption(b)) continue;
       let at = 0;
       for (const match of [...b.text.matchAll(REMINDER), null]) {
         const own = b.text.slice(at, match ? match.index : undefined);
@@ -569,6 +578,10 @@ function lastPrompt(messages) {
     if (text.trim()) return { position, text: text.trim(), queued };
   }
   return null;
+}
+
+function isInterruption(b) {
+  return b.kind === "text" && INTERRUPTED.includes(b.text.trim());
 }
 
 /// Where each tool call and its result sit, so either can lead to the other.
@@ -845,6 +858,7 @@ function blockKinds(blocks, ctx) {
     if (b.kind === "tool_use") label = `→ ${b.name}`;
     if (b.kind === "tool_result") label = `← ${(ctx.calls.get(b.id) || {}).name || "result"}${b.isError ? " (error)" : ""}`;
     if (b.kind === "text" && b.text.includes("<system-reminder>")) label = b.text.replace(REMINDER, "").trim() ? "text + reminder" : "reminder";
+    if (isInterruption(b)) label = "interrupted";
     counts.set(label, (counts.get(label) || 0) + 1);
   }
   return [...counts].map(([label, n]) => (n > 1 ? `${label} ×${n}` : label)).join(" · ");
@@ -852,7 +866,7 @@ function blockKinds(blocks, ctx) {
 
 function messagePreview(blocks) {
   for (const b of blocks) {
-    if (b.kind === "text") {
+    if (b.kind === "text" && !isInterruption(b)) {
       const own = b.text.replace(REMINDER, "").trim();
       if (own) return firstLine(own);
     }

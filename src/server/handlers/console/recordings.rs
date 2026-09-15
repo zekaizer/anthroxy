@@ -18,16 +18,17 @@ const LISTED: usize = 500;
 
 pub async fn list(Extension(snapshot): Extension<Arc<Snapshot>>) -> Response {
     let Some(log) = snapshot.body_log.clone() else {
-        return live(&json!({"dir": null, "entries": []}));
+        return live(&json!({"dir": null, "total": 0, "entries": []}));
     };
     let dir = log.root().display().to_string();
-    let entries = tokio::task::spawn_blocking(move || log.list(LISTED))
+    let listing = tokio::task::spawn_blocking(move || log.list(LISTED))
         .await
         .expect("listing does not panic");
     live(&json!({
         "dir": dir,
         "retention": crate::config::view::duration_text(snapshot.config.logging.body_retention),
-        "entries": entries,
+        "total": listing.total,
+        "entries": listing.entries,
     }))
 }
 

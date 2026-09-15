@@ -519,7 +519,8 @@ async fn streams_sse_chunks_as_they_arrive() {
 
 /// A stop must not wait on a response that is still streaming: Claude Code
 /// holds some open for minutes, and a service restart would wait with it.
-/// What it cuts is cut before it returns, and recorded.
+/// What it cuts is cut before it returns, and recorded as cut by the stop,
+/// not as a client that left.
 #[tokio::test]
 async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
     let upstream = MockUpstream::start(|_| {
@@ -589,16 +590,11 @@ async fn a_stop_waits_for_a_stream_only_as_long_as_the_grace_period() {
         .path();
     let meta: Value =
         serde_json::from_slice(&std::fs::read(entry.join("meta.json")).unwrap()).unwrap();
-    assert!(
-        meta["outcome"].is_string(),
-        "the cut stream's record was never finished: {meta}"
-    );
+    assert_eq!(meta["outcome"], "stopped", "{meta}");
     assert!(entry.join("response.sse").is_file());
-    let lines = std::fs::read_dir(&stats)
-        .unwrap()
-        .map(|file| std::fs::read_to_string(file.unwrap().path()).unwrap())
-        .collect::<String>();
-    assert_eq!(lines.lines().count(), 1, "{lines}");
+    let lines = stats_lines(&stats);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["outcome"], "error", "{}", lines[0]);
 
     let rest = tokio::time::timeout(Duration::from_secs(1), async {
         while let Some(Ok(_)) = stream.next().await {}
@@ -648,8 +644,23 @@ async fn a_connection_that_sends_no_complete_request_head_is_closed() {
     assert_eq!(res.status(), 200, "a prompt request is still served");
 }
 
+/// Every statistics line written under `dir`, parsed.
+fn stats_lines(dir: &std::path::Path) -> Vec<Value> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flat_map(|file| {
+            std::fs::read_to_string(file.unwrap().path())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect::<Vec<Value>>()
+        })
+        .collect()
+}
+
 /// A request still waiting for the backend's headers when the grace period
-/// ends is answered, not dropped: the client can tell to send it again.
+/// ends is answered, not dropped: the client can tell to send it again. It is
+/// recorded as cut by the stop.
 #[tokio::test]
 async fn a_stop_answers_a_request_still_waiting_for_its_backend_with_a_503() {
     let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -660,8 +671,17 @@ async fn a_stop_answers_a_request_still_waiting_for_its_backend_with_a_503() {
             sockets.push(socket);
         }
     });
+    let dir = tempfile::tempdir().unwrap();
+    let (bodies, stats) = (dir.path().join("bodies"), dir.path().join("stats"));
     let config = anthroxy::config::Config::parse(
-        &config_with_backend(&backend, "\n[stats]\nenabled = false\n"),
+        &config_with_backend(
+            &backend,
+            &format!(
+                "\n[logging]\nbody_dir = {:?}\n[stats]\ndir = {:?}\n",
+                bodies.display().to_string(),
+                stats.display().to_string()
+            ),
+        ),
         anthroxy::config::process_env,
     )
     .unwrap();
@@ -705,6 +725,20 @@ async fn a_stop_answers_a_request_still_waiting_for_its_backend_with_a_503() {
         .expect("serve returned")
         .unwrap();
     held.abort();
+
+    let entry = std::fs::read_dir(&bodies)
+        .unwrap()
+        .next()
+        .expect("the request was recorded")
+        .unwrap()
+        .path();
+    let meta: Value =
+        serde_json::from_slice(&std::fs::read(entry.join("meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["outcome"], "stopped", "{meta}");
+    let lines = stats_lines(&stats);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["outcome"], "error", "{}", lines[0]);
+    assert_eq!(lines[0]["status"], 503, "{}", lines[0]);
 }
 
 #[tokio::test]

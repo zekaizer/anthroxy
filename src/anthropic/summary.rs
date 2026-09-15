@@ -21,6 +21,12 @@ const REMINDER_OPEN: &str = "<system-reminder>";
 const REMINDER_CLOSE: &str = "</system-reminder>";
 /// How a reminder carrying a message the user sent mid-turn begins.
 const QUEUED: &str = "The user sent a new message while you were working:";
+/// Text blocks Claude Code adds to a user message when the user stops a turn;
+/// the prompt that follows comes in the same message.
+const INTERRUPTED: [&str; 2] = [
+    "[Request interrupted by user]",
+    "[Request interrupted by user for tool use]",
+];
 
 #[derive(Deserialize)]
 struct Body {
@@ -49,8 +55,8 @@ pub fn summarize(body: &[u8]) -> RequestSummary {
 
 /// The prompt a user message carries: its own text beside system reminders,
 /// or the text of a later reminder through which Claude Code delivers a
-/// message the user sent while the model was working. Tool results and other
-/// blocks carry none.
+/// message the user sent while the model was working. Tool results, other
+/// blocks and interruption notices carry none.
 fn prompt_in(content: Option<&Value>) -> Option<String> {
     let texts: Vec<&str> = match content {
         Some(Value::String(text)) => vec![text],
@@ -58,6 +64,7 @@ fn prompt_in(content: Option<&Value>) -> Option<String> {
             .iter()
             .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
             .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .filter(|text| !INTERRUPTED.contains(&text.trim()))
             .collect(),
         _ => Vec::new(),
     };
