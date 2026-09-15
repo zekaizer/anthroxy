@@ -425,11 +425,24 @@ function go(tab, arg) {
   else location.hash = hash;
 }
 
+/// Functions taking a new argument for the tab drawn in a view element, for
+/// tabs that return one.
+const retargets = new WeakMap();
+
 function route() {
   if (!state.token) return;
-  const [tab, arg] = location.hash.slice(1).split("/");
-  state.tab = TABS.some(([id]) => id === tab) ? tab : "overview";
-  state.arg = arg ? decodeURIComponent(arg) : null;
+  const [hashTab, hashArg] = location.hash.slice(1).split("/");
+  const tab = TABS.some(([id]) => id === hashTab) ? hashTab : "overview";
+  const arg = hashArg ? decodeURIComponent(hashArg) : null;
+  const view = document.getElementById("view");
+  // The same hash again rebuilds the tab, which is how a tab is reloaded.
+  if (tab === state.tab && arg !== state.arg && retargets.has(view)) {
+    state.arg = arg;
+    retargets.get(view)(arg);
+    return;
+  }
+  state.tab = tab;
+  state.arg = arg;
   replace(header.nav, TABS.map(([id, label]) =>
     h("button", {
       type: "button",
@@ -442,10 +455,11 @@ function route() {
   state.reloadNotice = null;
   every(10000, refreshHeader);
   every(1000, tick);
-  const view = document.getElementById("view");
   view.replaceChildren();
   const views = { overview, requests, stats, tools, recordings };
-  views[state.tab](view, state.arg);
+  const retarget = views[state.tab](view, state.arg);
+  if (retarget) retargets.set(view, retarget);
+  else retargets.delete(view);
 }
 
 window.addEventListener("hashchange", route);

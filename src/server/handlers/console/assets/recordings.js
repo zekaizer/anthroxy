@@ -4,6 +4,8 @@
 // sections or as its files exactly as recorded. Loaded before app.js; it only
 // defines functions, which use app.js's helpers when they run.
 
+/// Rows the list draws at first, and adds per "Show more".
+const LIST_PAGE = 100;
 /// Displays at most this much of a recorded file as raw text.
 const SHOWN_BYTES = 2 * 1024 * 1024;
 /// Messages after the last prompt up to this size start unfolded.
@@ -30,6 +32,8 @@ const utf8 = new TextEncoder();
 
 // ---------------------------------------------------------------- list
 
+/// Returns the function that opens entry `name`, or closes the open one for
+/// null, without redrawing the list.
 function recordings(view, opened) {
   const filter = h("input", { type: "text", placeholder: "Filter by prompt, session, model, backend, id, status or outcome", value: state.recordingsFilter });
   const list = h("div");
@@ -37,14 +41,44 @@ function recordings(view, opened) {
   const refresh = h("button", { type: "button" }, "Refresh");
   const removeAll = h("button", { type: "button", class: "danger" }, "Delete all");
   let data = null;
+  let limit = LIST_PAGE;
+  const rows = new Map();
 
   const shown = () => {
     const needle = filter.value.trim().toLowerCase();
     return data.entries.filter((e) => !needle || [e.name, e.prompt, e.session, e.model, e.backend, e.status, e.outcome, e.path]
       .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle)));
   };
+  const row = (e) => {
+    const remove = h("button", { type: "button", class: "small danger" }, "Delete");
+    remove.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (!confirm(`Delete recording ${e.name}?`)) return;
+      remove.disabled = true;
+      try {
+        await api(`/api/recordings/${encodeURIComponent(e.name)}`, { method: "DELETE" });
+        await load();
+        if (opened === e.name) go("recordings");
+      } catch (error) {
+        if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
+      }
+    });
+    const tr = h("tr", { class: `clickable ${e.name === opened ? "selected" : ""}`, onclick: () => go("recordings", e.name) },
+      h("td", { class: "nowrap" }, fmt.time(e.at)),
+      h("td", { class: "prompt-cell" },
+        e.prompt ? h("div", { class: "clamp" }, e.prompt) : h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own"),
+        h("div", { class: "sub" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; refilter(); }))),
+      h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
+      h("td", null, statusBadge(e.status)),
+      h("td", null, entryOutcome(e)),
+      h("td", { class: "num" }, fmt.bytes(e.bytes)),
+      h("td", null, remove));
+    rows.set(e.name, tr);
+    return tr;
+  };
   const draw = () => {
     if (!data) return;
+    rows.clear();
     if (!data.dir) {
       removeAll.disabled = true;
       replace(list, banner(["Body recording is off. Set ", h("code", null, "logging.body_dir"), " or pass ", h("code", null, "--body-dir"), " to record each exchange."], "info"));
@@ -52,51 +86,63 @@ function recordings(view, opened) {
     }
     const needle = filter.value.trim();
     const entries = shown();
+    const more = h("button", { type: "button", class: "small" });
+    const moreLine = h("p", { class: "note" }, more);
+    const label = () => {
+      moreLine.hidden = limit >= entries.length;
+      replace(more, `Show ${Math.min(LIST_PAGE, entries.length - limit)} more of ${entries.length - limit} not shown`);
+    };
+    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], entries.slice(0, limit).map(row),
+      { empty: needle ? "No recording matches." : "No recording yet." });
+    more.addEventListener("click", () => {
+      append(drawn.querySelector("tbody"), entries.slice(limit, limit + LIST_PAGE).map(row));
+      limit += LIST_PAGE;
+      label();
+    });
+    label();
     replace(list,
       h("p", { class: "note" }, `${data.entries.length} recording(s) in `, h("code", null, data.dir), `, kept for ${data.retention}. They hold whole conversations.`),
-      table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], entries.map((e) => {
-        const remove = h("button", { type: "button", class: "small danger" }, "Delete");
-        remove.addEventListener("click", async (event) => {
-          event.stopPropagation();
-          if (!confirm(`Delete recording ${e.name}?`)) return;
-          remove.disabled = true;
-          try {
-            await api(`/api/recordings/${encodeURIComponent(e.name)}`, { method: "DELETE" });
-            if (opened === e.name) go("recordings");
-            else await load();
-          } catch (error) {
-            if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
-          }
-        });
-        return h("tr", { class: `clickable ${e.name === opened ? "selected" : ""}`, onclick: () => go("recordings", e.name) },
-          h("td", { class: "nowrap" }, fmt.time(e.at)),
-          h("td", { class: "prompt-cell" },
-            e.prompt ? h("div", { class: "clamp" }, e.prompt) : h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own"),
-            h("div", { class: "sub" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; draw(); }))),
-          h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
-          h("td", null, statusBadge(e.status)),
-          h("td", null, entryOutcome(e)),
-          h("td", { class: "num" }, fmt.bytes(e.bytes)),
-          h("td", null, remove));
-      }), { empty: needle ? "No recording matches." : "No recording yet." }));
+      drawn,
+      moreLine);
+  };
+  const refilter = () => {
+    limit = LIST_PAGE;
+    draw();
+  };
+  // Whether the entry named in the hash was opened once the list arrived.
+  let openedShown = false;
+
+  // A box per opening, so an earlier opening still loading fills nothing shown.
+  const open = (name) => {
+    rows.get(opened)?.classList.remove("selected");
+    opened = name;
+    rows.get(opened)?.classList.add("selected");
+    const box = h("div");
+    replace(inspector, box);
+    if (!opened || !data) return;
+    openedShown = true;
+    // Newer and older follow the list as filtered, or the whole list when
+    // the filter hides the opened entry.
+    const filtered = shown();
+    const entries = filtered.some((e) => e.name === opened) ? filtered : data.entries;
+    const at = entries.findIndex((e) => e.name === opened);
+    inspect(box, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] }, data.entries);
   };
 
-  let openedShown = false;
   const load = async () => {
     data = await api("/api/recordings");
     draw();
-    if (opened && !openedShown) {
-      openedShown = true;
-      // Newer and older follow the list as filtered, or the whole list when
-      // the filter hides the opened entry.
-      const filtered = shown();
-      const entries = filtered.some((e) => e.name === opened) ? filtered : data.entries;
-      const at = entries.findIndex((e) => e.name === opened);
-      inspect(inspector, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] }, data.entries);
-    }
+    if (opened && !openedShown) open(opened);
   };
 
-  filter.addEventListener("input", () => { state.recordingsFilter = filter.value; draw(); });
+  let typing = null;
+  filter.addEventListener("input", () => {
+    clearTimeout(typing);
+    typing = setTimeout(() => {
+      state.recordingsFilter = filter.value;
+      refilter();
+    }, 150);
+  });
   refresh.addEventListener("click", () => guarded(list, load));
   removeAll.addEventListener("click", async () => {
     if (!confirm("Delete every recording? This cannot be undone.")) return;
@@ -116,6 +162,7 @@ function recordings(view, opened) {
     inspector,
     panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list));
   guarded(list, load);
+  return open;
 }
 
 /// How the entry ended, as the Requests tab judges it: a recorded relay that
