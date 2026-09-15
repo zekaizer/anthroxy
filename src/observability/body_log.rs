@@ -199,11 +199,18 @@ pub struct EntrySummary {
     pub session: Option<String>,
 }
 
+/// The newest entries and how many there are in all.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Listing {
+    pub total: usize,
+    pub entries: Vec<EntrySummary>,
+}
+
 impl BodyLog {
     /// Entries, newest first, at most `limit`.
-    pub fn list(&self, limit: usize) -> Vec<EntrySummary> {
+    pub fn list(&self, limit: usize) -> Listing {
         let Ok(entries) = std::fs::read_dir(&self.root) else {
-            return Vec::new();
+            return Listing::default();
         };
         let mut names: Vec<(String, jiff::Timestamp)> = entries
             .flatten()
@@ -215,11 +222,14 @@ impl BodyLog {
             })
             .collect();
         names.sort_by(|a, b| b.0.cmp(&a.0));
-        names
-            .into_iter()
-            .take(limit)
-            .map(|(name, at)| self.summary(name, at))
-            .collect()
+        Listing {
+            total: names.len(),
+            entries: names
+                .into_iter()
+                .take(limit)
+                .map(|(name, at)| self.summary(name, at))
+                .collect(),
+        }
     }
 
     fn summary(&self, name: String, at: jiff::Timestamp) -> EntrySummary {
@@ -281,6 +291,7 @@ impl BodyLog {
     /// Deletes every entry; returns how many went. Other names are left alone.
     pub fn remove_all(&self) -> usize {
         self.list(usize::MAX)
+            .entries
             .iter()
             .filter(|entry| self.remove(&entry.name).unwrap_or(false))
             .count()
@@ -541,7 +552,7 @@ mod tests {
         }
         std::fs::create_dir(dir.path().join("unrelated")).unwrap();
 
-        let entries = log.list(10);
+        let entries = log.list(10).entries;
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(
             names,
@@ -560,7 +571,12 @@ mod tests {
         assert_eq!(newest.prompt.as_deref(), Some("Read it"));
         assert_eq!(newest.session.as_deref(), Some("s-1"));
         assert!(newest.bytes > 2);
-        assert_eq!(log.list(1).len(), 1);
+        let newest_only = log.list(1);
+        assert_eq!(newest_only.entries.len(), 1);
+        assert_eq!(
+            newest_only.total, 2,
+            "the count covers what the limit left out"
+        );
 
         assert!(
             log.file("20260911T100000.000Z-rtr_old", "meta.json")
@@ -581,7 +597,7 @@ mod tests {
         assert!(log.remove("20260911T100000.000Z-rtr_old").unwrap());
         assert!(!log.remove("20260911T100000.000Z-rtr_old").unwrap());
         assert_eq!(log.remove_all(), 1);
-        assert!(log.list(10).is_empty());
+        assert_eq!(log.list(10), Listing::default());
         assert!(dir.path().join("unrelated").exists());
     }
 

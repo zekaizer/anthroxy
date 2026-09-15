@@ -104,7 +104,8 @@ function recordings(view, opened) {
     });
     label();
     replace(list,
-      h("p", { class: "note" }, `${data.entries.length} recording(s) in `, h("code", null, data.dir), `, ${kept(data.retention)}. They hold whole conversations.`),
+      h("p", { class: "note" }, `${fmt.int(data.total)} recording(s) in `, h("code", null, data.dir), `, ${kept(data.retention)}. They hold whole conversations.`,
+        data.total > data.entries.length ? ` The newest ${fmt.int(data.entries.length)} are listed.` : ""),
       drawn,
       moreLine);
   };
