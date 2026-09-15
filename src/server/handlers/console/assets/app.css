@@ -302,7 +302,7 @@ details.item > .item-body { padding: 0 0.6rem 0.5rem; }
 details.item.group { border: none; }
 details.item.group > summary { padding-left: 0; }
 details.item.group > .item-body { padding: 0; }
-details.item.reminder, details.item.thinking { background: var(--bg); }
+details.item.reminder, details.item.notice, details.item.thinking { background: var(--bg); }
 details.message.flash { outline: 2px solid var(--accent); }
 mark { background: var(--warn-soft); color: inherit; outline: 1px solid var(--warn); border-radius: 2px; }
 summary .kinds { white-space: nowrap; font-size: 12px; color: var(--muted); }

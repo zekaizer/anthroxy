@@ -28,9 +28,30 @@ const VIEWS = [["sections", "Sections"], ["raw", "Raw"]];
 const REMINDER = /<system-reminder>([\s\S]*?)<\/system-reminder>/g;
 /// How a reminder carrying a message the user sent mid-turn begins.
 const QUEUED = "The user sent a new message while you were working:";
-/// Text blocks Claude Code adds to a user message when the user stops a turn;
-/// the prompt that follows comes in the same message.
+/// Text blocks Claude Code adds to a user message when the user stops a turn.
 const INTERRUPTED = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"];
+/// How user text Claude Code writes itself begins, and what it is. Matched at
+/// the start only, so the user's own words that mention one stay text. Kept
+/// in step with `anthropic::summary` on the router.
+const NOTICES = [
+  ["<local-command-caveat>", "command output"],
+  ["<local-command-stdout>", "command output"],
+  ["<local-command-stderr>", "command output"],
+  ["<bash-stdout>", "shell output"],
+  ["<bash-stderr>", "shell output"],
+  ["<task-notification>", "task notification"],
+  ["<ide_opened_file>", "ide context"],
+  ["<ide_selection>", "ide context"],
+  ["Stop hook feedback:", "hook feedback"],
+  ["Goal check-in:", "goal check-in"],
+  ["A session-scoped Stop hook is now active", "goal set"],
+  ["This session is being continued from a previous conversation", "compaction summary"],
+  ["Base directory for this skill:", "skill"],
+  ["Another Claude session sent a message:", "agent message"],
+  ["Continue from where you left off.", "continue"],
+  ["[Your previous response had no visible output.", "continue"],
+  ["[Image: original ", "image note"],
+];
 const utf8 = new TextEncoder();
 
 // ---------------------------------------------------------------- list
@@ -38,7 +59,7 @@ const utf8 = new TextEncoder();
 /// Returns the function that opens entry `name`, or closes the open one for
 /// null, without redrawing the list.
 function recordings(view, opened) {
-  const filter = h("input", { type: "text", placeholder: "Filter by prompt, session, model, backend, id, status or outcome", value: state.recordingsFilter });
+  const filter = h("input", { type: "text", placeholder: "Filter by prompt, tool, session, model, backend, id, status or outcome", value: state.recordingsFilter });
   const list = h("div");
   const inspector = h("div");
   const refresh = h("button", { type: "button" }, "Refresh");
@@ -49,7 +70,7 @@ function recordings(view, opened) {
 
   const shown = () => {
     const needle = filter.value.trim().toLowerCase();
-    return data.entries.filter((e) => !needle || [e.name, e.prompt, e.session, e.model, e.backend, e.status, e.outcome, e.path]
+    return data.entries.filter((e) => !needle || [e.name, e.prompt, e.step, e.session, e.model, e.backend, e.status, e.outcome, e.path]
       .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle)));
   };
   const row = (e) => {
@@ -69,7 +90,7 @@ function recordings(view, opened) {
     const tr = h("tr", { class: `clickable ${e.name === opened ? "selected" : ""}`, onclick: () => go("recordings", e.name) },
       h("td", { class: "nowrap" }, fmt.time(e.at)),
       h("td", { class: "prompt-cell" },
-        e.prompt ? h("div", { class: "clamp" }, e.prompt) : h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own"),
+        entryPrompt(e),
         h("div", { class: "sub" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; refilter(); }))),
       h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
       h("td", null, statusBadge(e.status)),
@@ -182,6 +203,14 @@ function entryOutcome(e) {
   if (e.status >= 400) return badge("error", "err");
   if (e.outcome === "complete") return badge("complete", "ok");
   return badge(e.outcome, "err");
+}
+
+/// The entry's prompt; for a later request of a turn, what it sends with the
+/// turn's prompt under it.
+function entryPrompt(e) {
+  if (e.step) return [h("div", { class: "mono" }, e.step), e.prompt ? h("div", { class: "sub one-line", title: e.prompt }, e.prompt) : null];
+  if (e.prompt) return h("div", { class: "clamp" }, e.prompt);
+  return h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own");
 }
 
 /// Message count, session and request id under an entry's prompt; the
@@ -445,7 +474,7 @@ function readRequest(body, dialect) {
         const fn = t.function || {};
         return indexed({ name: fn.name || t.type || "?", description: fn.description || "", schema: fn.parameters, extra: omit(t, ["type", "function"]) }, t);
       }),
-      messages: messages.slice(lead).map((m, i) => indexed({ index: lead + i, role: m.role, blocks: openaiMessage(m) }, m)),
+      messages: messages.slice(lead).map((m, i) => indexed({ index: lead + i, role: m.role, blocks: markNotices(m.role, openaiMessage(m)) }, m)),
     };
   }
   const system = typeof body.system === "string" ? [{ type: "text", text: body.system }] : Array.isArray(body.system) ? body.system : [];
@@ -453,7 +482,7 @@ function readRequest(body, dialect) {
     params,
     system: system.map((b, i) => indexed({ label: `system[${i}]`, blocks: [anthropicBlock(b)] }, b)),
     tools: tools.map((t) => indexed({ name: t.name || t.type || "?", description: t.description || "", schema: t.input_schema, extra: omit(t, ["name", "description", "input_schema"]) }, t)),
-    messages: messages.map((m, i) => indexed({ index: i, role: m.role, blocks: anthropicContent(m.content) }, m)),
+    messages: messages.map((m, i) => indexed({ index: i, role: m.role, blocks: markNotices(m.role, anthropicContent(m.content)) }, m)),
   };
 }
 
@@ -547,24 +576,25 @@ function openaiCall(call) {
 }
 
 /// The user's last prompt as `{ position, text, queued }`: `position` in
-/// `messages` of the last user message with text of its own beside system
-/// reminders and interruption notices, or with a reminder through which Claude Code delivers a message
-/// the user sent while the model was working (`queued`); null when there is
-/// neither.
+/// `messages` of the last user message with text the user typed beside system
+/// reminders and Claude Code's notices, or with a reminder through which
+/// Claude Code delivers a message the user sent while the model was working
+/// (`queued`); null when there is neither.
 function lastPrompt(messages) {
   for (let position = messages.length - 1; position >= 0; position--) {
     if (messages[position].role !== "user") continue;
     let text = "";
     let queued = false;
+    const pieces = typedPieces(messages[position].blocks);
     for (const b of messages[position].blocks) {
-      if (b.kind !== "text" || isInterruption(b)) continue;
+      if (b.kind !== "text") continue;
       let at = 0;
       for (const match of [...b.text.matchAll(REMINDER), null]) {
-        const own = b.text.slice(at, match ? match.index : undefined);
-        if (own.trim()) {
+        const typed = pieces.shift();
+        if (typed) {
           if (queued) text = "";
           queued = false;
-          text += `${own.trim()}\n\n`;
+          text += `${typed}\n\n`;
         }
         if (!match) break;
         const inner = match[1].trim();
@@ -580,8 +610,72 @@ function lastPrompt(messages) {
   return null;
 }
 
-function isInterruption(b) {
-  return b.kind === "text" && INTERRUPTED.includes(b.text.trim());
+/// What a trimmed stretch of user text outside reminders is: `{ prompt }` for
+/// text the user typed, `{ prompt, command: true }` for a slash or shell
+/// command read as typed, `{ notice }` for Claude Code's own; null when empty.
+function classifyText(text) {
+  if (!text) return null;
+  if (INTERRUPTED.includes(text)) return { notice: "interrupted" };
+  const found = NOTICES.find(([start]) => text.startsWith(start));
+  if (found) return { notice: found[1] };
+  const name = text.startsWith("<command-name>") || text.startsWith("<command-message>") ? tagged(text, "command-name") : null;
+  if (name !== null) return { prompt: `${name} ${tagged(text, "command-args") || ""}`.trim(), command: true };
+  const shell = text.startsWith("<bash-input>") ? tagged(text, "bash-input") : null;
+  if (shell !== null) return { prompt: `! ${shell}`, command: true };
+  return { prompt: text };
+}
+
+/// A user message's text blocks cut at their reminders, in order, each as
+/// what the user typed or null: notices, and the text a slash command expands
+/// to (right after the command, before any notice), are null.
+function typedPieces(blocks) {
+  const pieces = [];
+  let command = false;
+  for (const b of blocks) {
+    if (b.kind !== "text") continue;
+    let at = 0;
+    for (const match of [...b.text.matchAll(REMINDER), null]) {
+      const piece = classifyText(b.text.slice(at, match ? match.index : undefined).trim());
+      if (!piece) pieces.push(null);
+      else if (piece.notice || (command && !piece.command)) {
+        command = false;
+        pieces.push(null);
+      } else {
+        command = Boolean(piece.command);
+        pieces.push(piece.prompt);
+      }
+      if (!match) break;
+      at = match.index + match[0].length;
+    }
+  }
+  return pieces;
+}
+
+/// The trimmed text between the first `<tag>` and its closing tag, or null.
+function tagged(text, tag) {
+  const open = `<${tag}>`;
+  const start = text.indexOf(open);
+  if (start < 0) return null;
+  const end = text.indexOf(`</${tag}>`, start + open.length);
+  return end < 0 ? null : text.slice(start + open.length, end).trim();
+}
+
+/// Marks each text block of a user message that is one of Claude Code's
+/// notices with its `notice`, and a slash or shell command with `command`;
+/// blocks inside tool results are left alone.
+function markNotices(role, blocks) {
+  if (role !== "user") return blocks;
+  let command = false;
+  for (const b of blocks) {
+    if (b.kind !== "text" || b.text.includes("<system-reminder>")) continue;
+    const piece = classifyText(b.text.trim());
+    if (!piece) continue;
+    if (piece.notice) b.notice = piece.notice;
+    else if (command && !piece.command) b.notice = "command text";
+    else if (piece.command) b.command = true;
+    command = Boolean(piece.command);
+  }
+  return blocks;
 }
 
 /// Where each tool call and its result sit, so either can lead to the other.
@@ -858,7 +952,8 @@ function blockKinds(blocks, ctx) {
     if (b.kind === "tool_use") label = `→ ${b.name}`;
     if (b.kind === "tool_result") label = `← ${(ctx.calls.get(b.id) || {}).name || "result"}${b.isError ? " (error)" : ""}`;
     if (b.kind === "text" && b.text.includes("<system-reminder>")) label = b.text.replace(REMINDER, "").trim() ? "text + reminder" : "reminder";
-    if (isInterruption(b)) label = "interrupted";
+    if (b.notice) label = b.notice;
+    if (b.command) label = "command";
     counts.set(label, (counts.get(label) || 0) + 1);
   }
   return [...counts].map(([label, n]) => (n > 1 ? `${label} ×${n}` : label)).join(" · ");
@@ -866,11 +961,13 @@ function blockKinds(blocks, ctx) {
 
 function messagePreview(blocks) {
   for (const b of blocks) {
-    if (b.kind === "text" && !isInterruption(b)) {
-      const own = b.text.replace(REMINDER, "").trim();
-      if (own) return firstLine(own);
+    if (b.kind === "text" && !b.notice) {
+      const piece = classifyText(b.text.replace(REMINDER, "").trim());
+      if (piece && piece.prompt) return firstLine(piece.prompt);
     }
   }
+  const notice = blocks.find((b) => b.notice);
+  if (notice) return firstLine(notice.text);
   const call = blocks.find((b) => b.kind === "tool_use");
   if (call) return firstLine(typeof call.input === "string" ? call.input : JSON.stringify(call.input));
   const result = blocks.find((b) => b.kind === "tool_result");
@@ -888,6 +985,11 @@ function blockView(b, ctx) {
   const cache = b.cache ? badge("cache breakpoint", "info") : null;
   switch (b.kind) {
     case "text":
+      if (b.notice) {
+        return lazyDetails({ class: "item notice" },
+          [badge(b.notice, "warn"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
+          () => h("div", { class: "text" }, marked(b.text, needle)), contains(b.text, needle));
+      }
       return h("div", { class: "block" }, cache, textView(b.text, needle));
     case "thinking":
       return lazyDetails({ class: "item thinking" },

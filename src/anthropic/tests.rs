@@ -329,6 +329,7 @@ fn summary_names_the_last_prompt_without_reminders_or_tool_results() {
         RequestSummary {
             messages: 4,
             prompt: Some("What is in hostname.txt?".to_owned()),
+            step: Some("← Read".to_owned()),
         }
     );
 }
@@ -348,7 +349,8 @@ fn summary_prompt_is_one_cut_line_and_absent_without_user_text() {
         summarize(body.to_string().as_bytes()),
         RequestSummary {
             messages: 1,
-            prompt: None
+            prompt: None,
+            step: Some("← tool".to_owned()),
         }
     );
     assert_eq!(summarize(b"not json"), RequestSummary::default());
@@ -368,10 +370,9 @@ fn summary_takes_a_message_sent_while_the_model_worked_as_the_prompt() {
             {"type": "text", "text": "<system-reminder>\nThe user sent a new message while you were working:\nAlso run the tests.\n</system-reminder>"}
         ]}
     ]});
-    assert_eq!(
-        summarize(body.to_string().as_bytes()).prompt.as_deref(),
-        Some("Also run the tests.")
-    );
+    let summary = summarize(body.to_string().as_bytes());
+    assert_eq!(summary.prompt.as_deref(), Some("Also run the tests."));
+    assert_eq!(summary.step, None, "the request carries its prompt");
 }
 
 /// Claude Code sends its interruption notice as a text block of the user
@@ -389,19 +390,242 @@ fn summary_leaves_out_the_notice_of_an_interrupted_request() {
             {"type": "text", "text": "Then commit."}
         ]}
     ]});
+    let summary = summarize(body.to_string().as_bytes());
     assert_eq!(
-        summarize(body.to_string().as_bytes()).prompt.as_deref(),
+        summary.prompt.as_deref(),
         Some("Run it on this branch. Then commit.")
     );
+    assert_eq!(summary.step, None);
 
     let body = json!({"model": "m", "messages": [
         {"role": "user", "content": "Fix the build."},
         {"role": "assistant", "content": "Working on it."},
         {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}
     ]});
+    let summary = summarize(body.to_string().as_bytes());
+    assert_eq!(summary.prompt.as_deref(), Some("Fix the build."));
+    assert_eq!(summary.step.as_deref(), Some("interrupted"));
+}
+
+/// Every request of a turn after the first answers tool calls; it keeps the
+/// turn's prompt and says what it sends instead.
+#[test]
+fn summary_tells_a_request_that_returns_tool_results_from_the_one_that_asks() {
+    let turn = |last: Value| {
+        json!({"model": "m", "messages": [
+            {"role": "user", "content": "Fix the build."},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "Looking."},
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+                {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}},
+                {"type": "tool_use", "id": "t3", "name": "Read", "input": {}}
+            ]},
+            last
+        ]})
+    };
+    let summary = summarize(
+        turn(json!({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "a"},
+            {"type": "tool_result", "tool_use_id": "t2", "content": "b"},
+            {"type": "tool_result", "tool_use_id": "t3", "content": "c"},
+            {"type": "tool_result", "tool_use_id": "unknown", "content": "d"},
+            {"type": "text", "text": "<system-reminder>A reminder.</system-reminder>"}
+        ]}))
+        .to_string()
+        .as_bytes(),
+    );
+    assert_eq!(summary.prompt.as_deref(), Some("Fix the build."));
+    assert_eq!(summary.step.as_deref(), Some("← Read ×2, Bash, tool"));
+
+    let summary = summarize(
+        turn(json!({"role": "assistant", "content": "Partial"}))
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(summary.step.as_deref(), Some("assistant prefill"));
+
+    let summary = summarize(
+        turn(json!({"role": "user", "content": [
+            {"type": "text", "text": "<system-reminder>Only this.</system-reminder>"}
+        ]}))
+        .to_string()
+        .as_bytes(),
+    );
+    assert_eq!(summary.step.as_deref(), Some("system reminder"));
+}
+
+/// A tool result is named by its call and a hint from the call's input, so
+/// the requests of one turn read apart.
+#[test]
+fn summary_names_tool_results_by_what_each_call_did() {
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "Fix the build."},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "cargo test --all", "description": "Run the tests"}},
+            {"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "/work/anthroxy/src/anthropic/summary.rs"}},
+            {"type": "tool_use", "id": "t3", "name": "Grep", "input": {"pattern": "fn summarize"}},
+            {"type": "tool_use", "id": "t4", "name": "Bash", "input": {"command": "git status\n--short"}},
+            {"type": "tool_use", "id": "t5", "name": "TodoWrite", "input": {"todos": []}}
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+            {"type": "tool_result", "tool_use_id": "t2", "content": "ok"},
+            {"type": "tool_result", "tool_use_id": "t3", "content": "ok"},
+            {"type": "tool_result", "tool_use_id": "t4", "content": "ok"},
+            {"type": "tool_result", "tool_use_id": "t5", "content": "ok"}
+        ]}
+    ]});
     assert_eq!(
-        summarize(body.to_string().as_bytes()).prompt.as_deref(),
-        Some("Fix the build.")
+        summarize(body.to_string().as_bytes()).step.as_deref(),
+        Some("← Bash Run the tests, Read summary.rs, Grep fn summarize +2 more")
+    );
+
+    let body = json!({"model": "m", "messages": [
+        {"role": "user", "content": "Fix the build."},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git status\n--short"}}
+        ]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}
+    ]});
+    assert_eq!(
+        summarize(body.to_string().as_bytes()).step.as_deref(),
+        Some("← Bash git status")
+    );
+}
+
+/// Claude Code sends slash and shell commands, their output, background task
+/// notices, hook feedback and a compaction summary as user text. A command the
+/// user typed is a prompt; the rest is not.
+#[test]
+fn summary_reads_claude_code_notices_as_what_they_are() {
+    let body = |messages: Value| {
+        summarize(
+            json!({"model": "m", "messages": messages})
+                .to_string()
+                .as_bytes(),
+        )
+    };
+
+    let summary = body(json!([
+        {"role": "user", "content": [
+            {"type": "text", "text": "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands.</local-command-caveat>"},
+            {"type": "text", "text": "<command-name>/goal</command-name>\n            <command-message>goal</command-message>\n            <command-args>ship the release</command-args>"},
+            {"type": "text", "text": "<local-command-stdout>Goal set: ship the release</local-command-stdout>"},
+            {"type": "text", "text": "A session-scoped Stop hook is now active with condition: \"ship the release\"."}
+        ]}
+    ]));
+    assert_eq!(summary.prompt.as_deref(), Some("/goal ship the release"));
+    assert_eq!(summary.step, None);
+
+    // A prompt command's text follows it in the same message; a local
+    // command's output ends the command, and what the user typed next stays.
+    let summary = body(json!([
+        {"role": "user", "content": [
+            {"type": "text", "text": "<command-message>simplify</command-message>\n<command-name>/simplify</command-name>\n<command-args>code size</command-args>"},
+            {"type": "text", "text": "Review target: `code size`\n\nYou are improving the quality of the changed code."}
+        ]}
+    ]));
+    assert_eq!(summary.prompt.as_deref(), Some("/simplify code size"));
+    assert_eq!(summary.step, None);
+    let summary = body(json!([
+        {"role": "user", "content": [
+            {"type": "text", "text": "<local-command-caveat>Caveat: local commands.</local-command-caveat>"},
+            {"type": "text", "text": "<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>high</command-args>"},
+            {"type": "text", "text": "<local-command-stdout>Set effort level to high</local-command-stdout>"},
+            {"type": "text", "text": "Now fix it."}
+        ]}
+    ]));
+    assert_eq!(summary.prompt.as_deref(), Some("/effort high Now fix it."));
+
+    let summary = body(json!([
+        {"role": "user", "content": "<command-name>/clear</command-name>\n <command-message>clear</command-message>\n <command-args></command-args>"}
+    ]));
+    assert_eq!(summary.prompt.as_deref(), Some("/clear"));
+
+    let summary = body(json!([
+        {"role": "user", "content": [
+            {"type": "text", "text": "<bash-input> git status</bash-input>"},
+            {"type": "text", "text": "<bash-stdout>clean</bash-stdout><bash-stderr></bash-stderr>"}
+        ]}
+    ]));
+    assert_eq!(summary.prompt.as_deref(), Some("! git status"));
+    assert_eq!(summary.step, None);
+
+    for (notice, label) in [
+        (
+            "Stop hook feedback:\n[ship it]: not done yet",
+            "hook feedback",
+        ),
+        ("Goal check-in: «ship it» is still active", "goal check-in"),
+        (
+            "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>",
+            "task notification",
+        ),
+        (
+            "<local-command-stdout>Set effort level to high</local-command-stdout>",
+            "command output",
+        ),
+        (
+            "This session is being continued from a previous conversation that ran out of context.\n\nSummary: ...",
+            "compaction summary",
+        ),
+        (
+            "Base directory for this skill: /home/u/.claude/skills/diagnose\n\n# Diagnose",
+            "skill",
+        ),
+        (
+            "Another Claude session sent a message:\n<agent-message from=\"a1\">\n[Subagent hand-back] report",
+            "agent message",
+        ),
+        ("Continue from where you left off.", "continue"),
+        (
+            "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
+            "continue",
+        ),
+        (
+            "[Image: original 1400x2175, displayed at 1287x2000. Multiply coordinates by 1.09 to map to original image.]",
+            "image note",
+        ),
+        (
+            "<ide_opened_file>The user opened the file /w/CLAUDE.md in the IDE.</ide_opened_file>",
+            "ide context",
+        ),
+        (
+            "<ide_selection>The user selected lines 1 to 3.</ide_selection>",
+            "ide context",
+        ),
+    ] {
+        let summary = body(json!([
+            {"role": "user", "content": "Fix the build."},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": notice}
+        ]));
+        assert_eq!(
+            summary.prompt.as_deref(),
+            Some("Fix the build."),
+            "{notice}"
+        );
+        assert_eq!(summary.step.as_deref(), Some(label), "{notice}");
+    }
+
+    let summary = body(json!([
+        {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context."},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+            {"type": "text", "text": "<task-notification>\n<status>completed</status>\n</task-notification>"}
+        ]}
+    ]));
+    assert_eq!(summary.prompt, None, "a compaction summary is no prompt");
+    assert_eq!(summary.step.as_deref(), Some("← Edit · task notification"));
+
+    let summary = body(json!([
+        {"role": "user", "content": "please explain what <task-notification> means"}
+    ]));
+    assert_eq!(
+        summary.prompt.as_deref(),
+        Some("please explain what <task-notification> means"),
+        "a tag inside the user's own words is text"
     );
 }
 
@@ -433,6 +657,7 @@ fn summary_reads_past_messages_and_blocks_it_cannot_make_sense_of() {
         RequestSummary {
             messages: 4,
             prompt: Some("the prompt".to_owned()),
+            step: None,
         }
     );
 }

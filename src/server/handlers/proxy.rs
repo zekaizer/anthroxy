@@ -384,6 +384,7 @@ fn request_record(
         request_headers: headers_for_record(headers),
         messages: summary.messages,
         prompt: summary.prompt,
+        step: summary.step,
     }
 }
 

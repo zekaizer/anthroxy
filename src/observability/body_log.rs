@@ -40,6 +40,10 @@ pub struct RequestRecord {
     /// The client's last prompt, as [`crate::anthropic::RequestSummary`] cuts it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// What the request sends instead of a prompt, as
+    /// [`crate::anthropic::RequestSummary`] words it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -195,6 +199,9 @@ pub struct EntrySummary {
     pub outcome: Option<String>,
     pub messages: Option<u64>,
     pub prompt: Option<String>,
+    /// Absent for a request that carries its prompt, and in entries recorded
+    /// before the field existed.
+    pub step: Option<String>,
     /// Claude Code's `x-claude-code-session-id` request header.
     pub session: Option<String>,
 }
@@ -262,6 +269,7 @@ impl BodyLog {
             outcome: text("outcome"),
             messages: meta.get("messages").and_then(|v| v.as_u64()),
             prompt: text("prompt"),
+            step: text("step"),
             session: meta
                 .pointer("/request_headers/x-claude-code-session-id")
                 .and_then(|v| v.as_str())
@@ -544,7 +552,7 @@ mod tests {
             std::fs::create_dir(&entry).unwrap();
             std::fs::write(
                 entry.join("meta.json"),
-                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "messages": 3, "prompt": "Read it", "request_headers": {{"x-claude-code-session-id": "s-1"}}}}"#),
+                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "messages": 3, "prompt": "Read it", "step": "← Read", "request_headers": {{"x-claude-code-session-id": "s-1"}}}}"#),
             )
             .unwrap();
             std::fs::write(entry.join("request.json"), "{}").unwrap();
@@ -569,6 +577,7 @@ mod tests {
         assert_eq!(newest.model.as_deref(), Some("fast"));
         assert_eq!(newest.messages, Some(3));
         assert_eq!(newest.prompt.as_deref(), Some("Read it"));
+        assert_eq!(newest.step.as_deref(), Some("← Read"));
         assert_eq!(newest.session.as_deref(), Some("s-1"));
         assert!(newest.bytes > 2);
         let newest_only = log.list(1);
