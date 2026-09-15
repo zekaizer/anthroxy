@@ -104,7 +104,7 @@ function recordings(view, opened) {
     });
     label();
     replace(list,
-      h("p", { class: "note" }, `${data.entries.length} recording(s) in `, h("code", null, data.dir), `, kept for ${data.retention}. They hold whole conversations.`),
+      h("p", { class: "note" }, `${data.entries.length} recording(s) in `, h("code", null, data.dir), `, ${kept(data.retention)}. They hold whole conversations.`),
       drawn,
       moreLine);
   };
