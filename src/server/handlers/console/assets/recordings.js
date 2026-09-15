@@ -215,6 +215,12 @@ async function inspect(target, name, files, neighbors, listed) {
       recordedFile(name, "request.json"),
       firstRecordedFile(name, responses),
     ]);
+    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Close");
+    if (!meta && !request && !response) {
+      replace(target, panel(`Recording ${name}`, [close],
+        banner("There is no such recording: it was deleted, pruned after its retention, or recorded by another router.", "info")));
+      return;
+    }
     const exchange = {
       name,
       files: { meta, request, response },
@@ -246,7 +252,6 @@ async function inspect(target, name, files, neighbors, listed) {
       title: entry ? entry.prompt || entry.request_id : null,
       onclick: () => go("recordings", entry.name),
     }, label);
-    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Close");
     const title = exchange.meta ? exchange.meta.request_id : name;
     replace(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
       summaryFacts(exchange),
