@@ -330,10 +330,12 @@ td.model .sub { white-space: nowrap; }
 
 /* One shape per kind of thing, so a state, a status code, a classification
    and an annotation on recorded content are told apart before they are read. */
+/* Inline-block, not inline-flex: a flex box takes its baseline from its
+   first item, and the state dot has none, so the chip rode above the words
+   it sits among. This way the baseline is the chip's own text, which is what
+   lines up with the text beside it. */
 .badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
+  display: inline-block;
   font-size: var(--text-xs);
   line-height: 1.5;
   white-space: nowrap;
@@ -345,7 +347,17 @@ td.model .sub { white-space: nowrap; }
 }
 /* What something is doing or how it ended. */
 .badge.state { border-radius: var(--radius-pill); padding: 1px var(--space-2); font-weight: 600; }
-.badge.state::before { content: ""; width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; flex: none; }
+.badge.state::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  margin-right: var(--space-1);
+  /* Level with the middle of the lower-case letters beside it. */
+  vertical-align: 0.1em;
+}
 /* A status code is a value, not a state. */
 .badge.http { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 /* A classification carries no judgement, so it carries no colour. */
