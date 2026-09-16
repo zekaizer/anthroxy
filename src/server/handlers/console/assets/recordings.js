@@ -219,6 +219,9 @@ function recordings(view, opened) {
     opened = name;
     reveals.get(name)?.();
     rows.get(opened)?.classList.add("selected");
+    // The inspector needs the width the list is using, and a conversation
+    // drawn above the list used to push it off the page entirely.
+    listPanel.hidden = Boolean(opened);
     const box = h("div");
     replace(inspector, box);
     if (!opened || !data) return;
@@ -267,9 +270,8 @@ function recordings(view, opened) {
     }
   });
 
-  view.append(
-    inspector,
-    panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list));
+  const listPanel = panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list);
+  view.append(inspector, listPanel);
   guarded(list, load);
   return open;
 }
@@ -340,7 +342,7 @@ async function inspect(target, name, files, neighbors, listed) {
       recordedFile(name, "request.json"),
       firstRecordedFile(name, responses),
     ]);
-    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Close");
+    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Back to the list");
     if (!meta && !request && !response) {
       replace(target, panel(`Recording ${name}`, [close],
         banner("There is no such recording: it was deleted, pruned after its retention, or recorded by another router.", "info")));
@@ -366,7 +368,7 @@ async function inspect(target, name, files, neighbors, listed) {
 
     const partSwitch = h("span", { class: "segmented", role: "group", "aria-label": "File" });
     const viewSwitch = h("span", { class: "segmented", role: "group", "aria-label": "View" });
-    const body = h("div");
+    const body = h("div", { class: "recording-body" });
     const facts = h("div");
     const draw = () => {
       // The summary too: a big response is folded for the view that shows
@@ -1164,6 +1166,29 @@ function blockView(b, ctx) {
   }
 }
 
+/// Past this a stretch of text is folded behind a control: one file a tool
+/// read is otherwise taller than everything after it put together.
+const CAP_LINES = 12;
+const CAP_CHARS = 1200;
+
+/// `text` as it reads, cut short with a way to see the rest when it is long
+/// enough to bury what follows it.
+function capped(text, needle) {
+  const body = h("div", { class: "text" }, marked(text, needle));
+  const lines = text.split("\n").length;
+  if (lines <= CAP_LINES && text.length <= CAP_CHARS) return body;
+  const box = h("div", { class: "capped" }, body);
+  const more = h("button", { type: "button", class: "small" },
+    `Show all ${fmt.int(lines)} line(s) · ${fmt.bytes(byteSize(text))}`);
+  const fade = h("div", { class: "fade" }, more);
+  more.addEventListener("click", () => {
+    box.classList.remove("capped");
+    fade.remove();
+  });
+  box.append(fade);
+  return box;
+}
+
 /// Text with each system reminder folded under its first line; a reminder
 /// holding the Find needle starts unfolded.
 function textView(text, needle) {
@@ -1171,7 +1196,7 @@ function textView(text, needle) {
   let at = 0;
   for (const match of text.matchAll(REMINDER)) {
     const before = text.slice(at, match.index);
-    if (before.trim()) pieces.push(h("div", { class: "text" }, marked(before.replace(/^\n+|\n+$/g, ""), needle)));
+    if (before.trim()) pieces.push(capped(before.replace(/^\n+|\n+$/g, ""), needle));
     const inner = match[1].replace(/^\n+|\n+$/g, "");
     pieces.push(lazyDetails({ class: "item reminder" },
       [tag("system reminder"), h("span", { class: "preview" }, marked(firstLine(inner), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(match[0])))],
@@ -1179,7 +1204,7 @@ function textView(text, needle) {
     at = match.index + match[0].length;
   }
   const rest = text.slice(at);
-  if (rest.trim() || !pieces.length) pieces.push(h("div", { class: "text" }, marked(at ? rest.replace(/^\n+|\n+$/g, "") : rest, needle)));
+  if (rest.trim() || !pieces.length) pieces.push(capped(at ? rest.replace(/^\n+|\n+$/g, "") : rest, needle));
   return pieces;
 }
 
