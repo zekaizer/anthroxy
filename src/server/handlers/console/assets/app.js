@@ -176,6 +176,21 @@ function tag(text) {
   return h("span", { class: "badge tag" }, text);
 }
 
+const HEALTH_KIND = { ok: "ok", attention: "warn", trouble: "err" };
+
+/// The header's standing answer to "is anything wrong", on every tab, and the
+/// way to the account of it.
+function healthPill(health) {
+  if (!health) return null;
+  const count = health.problems.length;
+  return h("button", {
+    type: "button",
+    class: `badge state ${HEALTH_KIND[health.level] || ""}`,
+    title: count ? health.problems.map((problem) => problem.summary).join("\n") : "Nothing to report",
+    onclick: () => go("overview"),
+  }, count ? `${fmt.int(count)} need${count === 1 ? "s" : ""} attention` : "All backends ready");
+}
+
 function panel(title, actions, ...content) {
   return h("section", { class: "panel", "data-key": String(title) },
     h("div", { class: "panel-head" },
@@ -510,6 +525,7 @@ async function refreshHeader() {
     state.status = status;
     noteServerTime(status.now);
     replace(header.meta,
+      healthPill(status.health),
       h("span", null, status.version),
       h("span", null, "up ", since(status.started_at, "uptime")),
       h("span", null, status.listen));
@@ -688,6 +704,7 @@ function overviewContent(status, reload) {
       h("td", { class: "nowrap" }, rel(name.last_seen))));
 
   return [
+    attentionPanel(status.health),
     panel("Router", null, cards),
     panel("Reloads", reloadButton, reloadResult,
       table(["When", "Trigger", "Result", "Detail"], reloads)),
@@ -706,6 +723,22 @@ function overviewContent(status, reload) {
       h("p", { class: "note" }, "Secrets are redacted. ", h("code", null, "${ENV}"), " references are shown expanded."),
       h("details", null, h("summary", null, "Show"), h("pre", null, JSON.stringify(status.config, null, 2)))),
   ];
+}
+
+/// The account behind the header's pill. Absent when there is nothing to
+/// say, so its presence is the news.
+function attentionPanel(health) {
+  if (!health || !health.problems.length) return null;
+  return panel("Needs attention", null,
+    health.problems.map((problem) =>
+      h("div", { class: "problem" },
+        badge(problem.backend || problem.kind, HEALTH_KIND[problem.level] || ""),
+        h("div", null,
+          problem.summary,
+          problem.detail ? h("div", { class: "sub mono wrap-anywhere" }, problem.detail) : null),
+        problem.kind === "errors"
+          ? h("button", { type: "button", class: "small", onclick: () => { state.errorsOnly = true; go("requests"); } }, "Show the requests")
+          : null)));
 }
 
 /// A retention as the configuration spells it; "0s" turns pruning off.

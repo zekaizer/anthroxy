@@ -722,3 +722,77 @@ async fn recordings_can_be_listed_read_and_deleted() {
     assert_eq!(removed["removed"], 1);
     assert_eq!(api(&router, "/api/recordings").await["entries"], json!([]));
 }
+
+/// The header's one job is to say whether anything is wrong, so `/api/status`
+/// has to answer that without the reader opening a table.
+#[tokio::test]
+async fn health_names_a_backend_whose_credential_is_not_in_hand() {
+    let upstream = MockUpstream::start(backend).await;
+    let router = TestRouter::start(&format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.mock]
+url = "{url}"
+credential = {{ kind = "command", command = "sh -c 'echo no credential today >&2; exit 3'" }}
+
+[[models]]
+id = "fast"
+backend = "mock"
+upstream_model = "mock-fast-v1"
+"#,
+        url = upstream.url()
+    ))
+    .await;
+
+    // Nothing has asked for the credential yet: that is unknown, not broken.
+    let health = &api(&router, "/api/status").await["health"];
+    assert_eq!(health["level"], "attention");
+    assert_eq!(health["problems"][0]["kind"], "credential");
+    assert_eq!(health["problems"][0]["backend"], "mock");
+
+    // One request runs the command, which fails; now it is broken.
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_server_error() || res.status().is_client_error());
+
+    let health = &api(&router, "/api/status").await["health"];
+    assert_eq!(health["level"], "trouble");
+    let problem = &health["problems"][0];
+    assert_eq!(problem["kind"], "credential");
+    assert_eq!(problem["backend"], "mock");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("exit"),
+        "the reason the command gave is missing: {problem}"
+    );
+}
+
+/// A backend that works and a router that has served nothing is healthy, and
+/// a request that failed a moment ago is worth raising.
+#[tokio::test]
+async fn health_raises_a_request_that_failed_a_moment_ago() {
+    let upstream =
+        MockUpstream::start(|_| json_response(500, json!({"error": "upstream is out"}))).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+
+    let health = &api(&router, "/api/status").await["health"];
+    assert_eq!(health["level"], "ok");
+    assert_eq!(health["problems"], json!([]));
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 500);
+
+    let health = &api(&router, "/api/status").await["health"];
+    assert_eq!(health["level"], "attention");
+    assert_eq!(health["problems"][0]["kind"], "errors");
+    assert_eq!(health["problems"][0]["count"], 1);
+}
