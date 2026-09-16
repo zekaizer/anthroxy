@@ -66,7 +66,7 @@ const utf8 = new TextEncoder();
 function recordings(view, opened) {
   const filter = h("input", { type: "text", placeholder: "Filter by prompt, tool, session, model, backend, id, status or outcome", value: state.recordingsFilter });
   const list = h("div");
-  const inspector = h("div");
+  const inspector = h("div", { class: "inspector" });
   const refresh = h("button", { type: "button" }, "Refresh");
   const removeAll = h("button", { type: "button", class: "danger" }, "Delete all");
   let data = null;
@@ -404,7 +404,8 @@ async function inspect(target, name, files, neighbors, listed) {
       h("div", { class: "controls" }, partSwitch, viewSwitch),
       body));
     draw();
-    target.scrollIntoView({ block: "nearest" });
+    // Clear of the sticky header, which "nearest" would leave it under.
+    target.scrollIntoView({ block: "start" });
   });
 }
 
