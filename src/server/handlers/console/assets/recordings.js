@@ -494,6 +494,7 @@ function summaryFacts(exchange) {
       m.duration_ms !== undefined ? `, total ${fmt.ms(m.duration_ms)}` : ""]),
     fact("Size", `request ${fmt.bytes(exchange.files.request ? exchange.files.request.bytes : null)}, response ${fmt.bytes(m.response_bytes)}`),
     usage ? fact("Tokens", usage) : null,
+    usage ? cacheFact(response.usage) : null,
     heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is read in Sections")) : null);
 }
 
@@ -539,11 +540,13 @@ function requestView(exchange) {
     // are counted under Messages, so they show their own count instead of a
     // second tally of the same hits.
     { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], filters: false, render: (ctx) => promptSection(doc, prompt, ctx) },
+    // Second, not last: where this request stops repeating the one before it
+    // is what decides whether the backend read the prompt from its cache.
+    { id: "compare", label: "Cache prefix", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
     { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
     { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
     { id: "params", label: "Parameters", count: doc.params.length, items: doc.params, render: (ctx) => paramsSection(matching(doc.params, ctx.needle), ctx) },
-    { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
   ];
   const total = sum(doc.messages) + sum(doc.system) + sum(doc.tools) + sum(doc.params) || 1;
   const find = h("input", { type: "text", placeholder: "Find in this request", "aria-label": "Find in the request", value: state.requestFind });
@@ -949,7 +952,7 @@ function paramsSection(shown, ctx) {
 function compareSection(exchange, doc, ctx) {
   const box = h("div");
   if (!exchange.earlier.length) {
-    replace(box, h("p", { class: "note" }, "No earlier recording of this Claude Code session to compare with."));
+    replace(box, h("p", { class: "note" }, "No earlier recording of this Claude Code session to compare with. Where a request stops repeating the one before it is where the backend stops reading the prompt from its cache."));
     return box;
   }
   replace(box, h("p", { class: "note" }, "Reading the session's earlier requests…"));
@@ -1445,6 +1448,23 @@ function openaiDocument(doc) {
     // the backend sent more.
     choices: choices.length,
   };
+}
+
+/// How much of the prompt the backend read from its cache, in the fields
+/// either dialect names it by; nothing when it reported neither.
+function cacheFact(usage) {
+  const details = usage.prompt_tokens_details || {};
+  const read = usage.cache_read_input_tokens ?? details.cached_tokens;
+  if (typeof read !== "number") return null;
+  const prompt = typeof usage.input_tokens === "number"
+    ? usage.input_tokens + read + (usage.cache_creation_input_tokens || 0)
+    : usage.prompt_tokens;
+  if (!prompt) return null;
+  return fact("Prompt cache", [
+    h("strong", null, fmt.pct(read / prompt)),
+    ` of the prompt was read from cache (${fmt.int(read)} of ${fmt.int(prompt)} tokens).`,
+    " Cache prefix says where it stopped.",
+  ]);
 }
 
 /// Usage fields as the backend named them; nested counts are dotted.
