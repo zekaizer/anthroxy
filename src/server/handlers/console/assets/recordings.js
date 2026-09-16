@@ -250,8 +250,12 @@ function recordings(view, opened) {
     removeAll.disabled = true;
     try {
       const result = await api("/api/recordings", { method: "DELETE" });
-      replace(inspector, banner(`Deleted ${result.removed} recording(s).`, "info"));
+      // Closed first: the open recording is one of the deleted ones, and a
+      // reload would otherwise open it again to say it is not there.
+      open(null);
+      history.replaceState(null, "", "#recordings");
       await load();
+      replace(inspector, banner(`Deleted ${result.removed} recording(s).`, "info"));
     } catch (error) {
       if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
     } finally {
@@ -1020,7 +1024,9 @@ function diffView(now, before, diff, ctx) {
     : `#${now.messages[0].index}–#${now.messages[diff.messages - 1].index} repeat`;
   const newer = now.messages.slice(diff.messages);
   const dropped = before.messages.length - diff.messages;
-  const messageText = [badge(dropped ? "changed" : "extended", dropped ? "warn" : "ok"),
+  // Nothing dropped and nothing new is the same list, not an extension of it.
+  const messageLabel = dropped ? "changed" : newer.length ? "extended" : "same";
+  const messageText = [badge(messageLabel, dropped ? "warn" : "ok"),
     ` ${repeated}, ${newer.length} new`, dropped ? `, ${dropped} of the earlier request's differ or are gone` : ""];
   return [
     h("dl", { class: "facts" },
