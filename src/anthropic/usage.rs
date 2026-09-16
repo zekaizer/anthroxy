@@ -14,6 +14,26 @@ pub struct TokenUsage {
     pub output: u64,
     pub cache_read: u64,
     pub cache_creation: u64,
+    /// The backend said something about caching, even if it said zero. A
+    /// backend that says nothing is not one that cached nothing, and the
+    /// difference decides whether a hit rate can be quoted at all.
+    /// Absent from lines written before the field existed, where a non-zero
+    /// count is itself the answer; [`TokenUsage::cache_known`] reads both.
+    #[serde(default)]
+    pub cache_reported: bool,
+}
+
+impl TokenUsage {
+    /// Whether anything is known about caching for this exchange.
+    pub fn cache_known(&self) -> bool {
+        self.cache_reported || self.cache_read > 0 || self.cache_creation > 0
+    }
+
+    /// Prompt tokens in all: what was sent fresh, read from the cache and
+    /// written to it.
+    pub fn prompt(&self) -> u64 {
+        self.input + self.cache_read + self.cache_creation
+    }
 }
 
 /// What a scan found once the body ended.
@@ -140,6 +160,24 @@ impl UsageScanner {
                 *slot = count;
             }
         }
+        // The flat total is the sum of the nested breakdown, so the nested one
+        // counts only where there is no flat field to count instead.
+        if !fields.contains_key("cache_creation_input_tokens")
+            && let Some(nested) = fields.get("cache_creation").and_then(Value::as_object)
+        {
+            totals.cache_creation = nested.values().filter_map(Value::as_u64).sum();
+        }
+        // Naming a cache field is the answer, whatever the number in it.
+        if [
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_creation",
+        ]
+        .iter()
+        .any(|key| fields.contains_key(*key))
+        {
+            totals.cache_reported = true;
+        }
     }
 }
 
@@ -175,6 +213,62 @@ mod tests {
     }
 
     #[test]
+    fn a_nested_cache_creation_counts_when_there_is_no_flat_total() {
+        // The API sends the flat total and the per-lifetime breakdown
+        // together, and the flat one is their sum. An Anthropic-compatible
+        // backend that sends only the breakdown still wrote those tokens.
+        let nested = br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":1000,"output_tokens":40,"cache_read_input_tokens":24000,"cache_creation":{"ephemeral_5m_input_tokens":400,"ephemeral_1h_input_tokens":100}}}"#;
+        assert_eq!(
+            scan(None, &[nested]).usage,
+            Some(TokenUsage {
+                input: 1000,
+                output: 40,
+                cache_read: 24000,
+                cache_creation: 500,
+                cache_reported: true,
+            })
+        );
+        // Both present: the flat total is the sum, so counting both doubles it.
+        let both = br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":1000,"output_tokens":40,"cache_read_input_tokens":24000,"cache_creation_input_tokens":500,"cache_creation":{"ephemeral_5m_input_tokens":400,"ephemeral_1h_input_tokens":100}}}"#;
+        assert_eq!(
+            scan(None, &[both]).usage,
+            Some(TokenUsage {
+                input: 1000,
+                output: 40,
+                cache_read: 24000,
+                cache_creation: 500,
+                cache_reported: true,
+            })
+        );
+    }
+
+    #[test]
+    fn saying_nothing_about_caching_differs_from_saying_zero() {
+        let quiet = br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":1000,"output_tokens":40}}"#;
+        assert_eq!(
+            scan(None, &[quiet]).usage,
+            Some(TokenUsage {
+                input: 1000,
+                output: 40,
+                cache_read: 0,
+                cache_creation: 0,
+                cache_reported: false,
+            })
+        );
+        let told = br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":1000,"output_tokens":40,"cache_read_input_tokens":0}}"#;
+        assert_eq!(
+            scan(None, &[told]).usage,
+            Some(TokenUsage {
+                input: 1000,
+                output: 40,
+                cache_read: 0,
+                cache_creation: 0,
+                cache_reported: true,
+            })
+        );
+    }
+
+    #[test]
     fn a_stream_takes_the_start_usage_and_the_final_output_count() {
         let body = [
             event(
@@ -201,7 +295,8 @@ mod tests {
                 input: 10,
                 output: 42,
                 cache_read: 500,
-                cache_creation: 20
+                cache_creation: 20,
+                cache_reported: true,
             })
         );
         assert_eq!(scan.error, None);
@@ -227,7 +322,8 @@ mod tests {
                 input: 12,
                 output: 34,
                 cache_read: 7,
-                cache_creation: 0
+                cache_creation: 0,
+                cache_reported: true,
             })
         );
     }
@@ -260,7 +356,8 @@ mod tests {
                 input: 5,
                 output: 7,
                 cache_read: 300,
-                cache_creation: 0
+                cache_creation: 0,
+                cache_reported: true,
             })
         );
 

@@ -13,16 +13,23 @@ pub fn stop_reason_name(reason: StopReason) -> &'static str {
     }
 }
 
-/// Anthropic usage: cache and thinking counters only when there are any,
-/// so a backend that reports none yields the plain two-field shape.
+/// Anthropic usage. The cache counters appear whenever the backend said
+/// anything about caching, a zero included, so that a backend which reported
+/// no hits is told apart from one that was never asked; a backend that said
+/// nothing yields the plain two-field shape. Thinking appears only when
+/// there is any.
 pub fn usage_json(usage: &Usage) -> Value {
     let mut out = Map::new();
     out.insert("input_tokens".into(), json!(usage.input_tokens));
     out.insert("output_tokens".into(), json!(usage.output_tokens));
-    if usage.cache_read_tokens > 0 {
+    if usage.cache_reported {
         out.insert(
             "cache_read_input_tokens".into(),
             json!(usage.cache_read_tokens),
+        );
+        out.insert(
+            "cache_creation_input_tokens".into(),
+            json!(usage.cache_creation_tokens),
         );
     }
     if usage.thinking_tokens > 0 {

@@ -4,8 +4,6 @@
 // sections or as its files exactly as recorded. Loaded before app.js; it only
 // defines functions, which use app.js's helpers when they run.
 
-/// Rows the list draws at first, and adds per "Show more".
-const LIST_PAGE = 100;
 /// Requests this far apart are never one request tried again.
 const RETRY_WINDOW_MS = 10 * 60 * 1000;
 /// Past this many characters a recorded response is folded only for the view
@@ -66,7 +64,7 @@ const utf8 = new TextEncoder();
 function recordings(view, opened) {
   const filter = h("input", { type: "text", placeholder: "Filter by prompt, tool, session, model, backend, id, status or outcome", value: state.recordingsFilter });
   const list = h("div");
-  const inspector = h("div");
+  const inspector = h("div", { class: "inspector" });
   const refresh = h("button", { type: "button" }, "Refresh");
   const removeAll = h("button", { type: "button", class: "danger" }, "Delete all");
   let data = null;
@@ -155,19 +153,10 @@ function recordings(view, opened) {
         if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
       }
     });
-    // A row opens a recording, so it is reachable and operable by keyboard;
-    // the buttons inside it keep their own handling.
-    const tr = h("tr", {
+    const tr = openRow({
       class: `clickable ${e.name === opened ? "selected" : ""}`,
-      tabindex: 0,
       "aria-label": `Recording ${e.request_id}`,
-      onclick: () => go("recordings", e.name),
-      onkeydown: (event) => {
-        if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
-        event.preventDefault();
-        go("recordings", e.name);
-      },
-    },
+    }, () => go("recordings", e.name),
       h("td", { class: "nowrap" }, fmt.time(e.at)),
       h("td", { class: "prompt-cell" },
         entryPrompt(e),
@@ -228,6 +217,9 @@ function recordings(view, opened) {
     opened = name;
     reveals.get(name)?.();
     rows.get(opened)?.classList.add("selected");
+    // The inspector needs the width the list is using, and a conversation
+    // drawn above the list used to push it off the page entirely.
+    listPanel.hidden = Boolean(opened);
     const box = h("div");
     replace(inspector, box);
     if (!opened || !data) return;
@@ -239,8 +231,14 @@ function recordings(view, opened) {
     inspect(box, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] }, data.entries);
   };
 
+  let drawn = null;
   const load = async () => {
     data = await api("/api/recordings");
+    // A redraw rebuilds the rows and reads the open recording's files again,
+    // so a poll that found nothing new leaves the page alone.
+    const signature = JSON.stringify(data);
+    if (signature === drawn) return;
+    drawn = signature;
     draw();
     // Every load rebuilds the rows, so the open recording is opened again:
     // its row is re-selected, an attempt it folds under is revealed, and what
@@ -256,7 +254,7 @@ function recordings(view, opened) {
       refilter();
     }, 150);
   });
-  refresh.addEventListener("click", () => guarded(list, load));
+  refresh.addEventListener("click", () => poll());
   removeAll.addEventListener("click", async () => {
     if (!confirm("Delete every recording? This cannot be undone.")) return;
     removeAll.disabled = true;
@@ -276,10 +274,13 @@ function recordings(view, opened) {
     }
   });
 
-  view.append(
-    inspector,
-    panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list));
-  guarded(list, load);
+  const listPanel = panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list);
+  view.append(inspector, listPanel);
+  const poll = polled(list, load);
+  poll();
+  // Only while the list is what is on screen: re-reading it under an open
+  // recording would fetch that recording's files again every few seconds.
+  every(5000, () => { if (!opened) poll(); });
   return open;
 }
 
@@ -349,7 +350,7 @@ async function inspect(target, name, files, neighbors, listed) {
       recordedFile(name, "request.json"),
       firstRecordedFile(name, responses),
     ]);
-    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Close");
+    const close = h("button", { type: "button", class: "small", onclick: () => go("recordings") }, "Back to the list");
     if (!meta && !request && !response) {
       replace(target, panel(`Recording ${name}`, [close],
         banner("There is no such recording: it was deleted, pruned after its retention, or recorded by another router.", "info")));
@@ -401,7 +402,8 @@ async function inspect(target, name, files, neighbors, listed) {
       h("div", { class: "controls" }, partSwitch, viewSwitch),
       body));
     draw();
-    target.scrollIntoView({ block: "nearest" });
+    // Clear of the sticky header, which "nearest" would leave it under.
+    target.scrollIntoView({ block: "start" });
   });
 }
 
@@ -491,6 +493,7 @@ function summaryFacts(exchange) {
       m.duration_ms !== undefined ? `, total ${fmt.ms(m.duration_ms)}` : ""]),
     fact("Size", `request ${fmt.bytes(exchange.files.request ? exchange.files.request.bytes : null)}, response ${fmt.bytes(m.response_bytes)}`),
     usage ? fact("Tokens", usage) : null,
+    usage ? cacheFact(response.usage) : null,
     heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is read in Sections")) : null);
 }
 
@@ -503,7 +506,7 @@ function rawView(exchange, file) {
   return [
     h("p", { class: "note" }, h("code", null, file.name), `, ${fmt.bytes(file.bytes)}, exactly as recorded.`),
     cut ? banner(`Showing the first ${fmt.int(SHOWN_CHARS)} of ${fmt.int(file.text.length)} characters.`, "info") : null,
-    h("pre", null, file.name.endsWith(".json") && !cut ? prettyJson(shown) : shown),
+    capPre(file.name.endsWith(".json") && !cut ? prettyJson(shown) : shown, ""),
   ];
 }
 
@@ -536,11 +539,13 @@ function requestView(exchange) {
     // are counted under Messages, so they show their own count instead of a
     // second tally of the same hits.
     { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], filters: false, render: (ctx) => promptSection(doc, prompt, ctx) },
+    // Second, not last: where this request stops repeating the one before it
+    // is what decides whether the backend read the prompt from its cache.
+    { id: "compare", label: "Cache prefix", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
     { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
     { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
     { id: "params", label: "Parameters", count: doc.params.length, items: doc.params, render: (ctx) => paramsSection(matching(doc.params, ctx.needle), ctx) },
-    { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
   ];
   const total = sum(doc.messages) + sum(doc.system) + sum(doc.tools) + sum(doc.params) || 1;
   const find = h("input", { type: "text", placeholder: "Find in this request", "aria-label": "Find in the request", value: state.requestFind });
@@ -853,7 +858,7 @@ function promptSection(doc, prompt, ctx) {
     return open && unfolded++ < UNFOLDED_MATCHES;
   };
   return [
-    h("div", { class: "prompt text" }, marked(prompt.text, ctx.needle)),
+    capBlock(h("div", { class: "prompt text" }, marked(prompt.text, ctx.needle)), prompt.text),
     h("p", { class: "note" }, `${told.join(", ")}.`),
     messageItem(m, ctx, opens(m, prompt.queued && m.bytes <= OPEN_BYTES)),
     after.map((next) => messageItem(next, ctx, opens(next, next.bytes <= OPEN_BYTES))),
@@ -877,7 +882,7 @@ function systemSection(doc, shown, ctx) {
   return shown.map((s, i) => {
     const text = s.blocks.filter((b) => b.kind === "text").map((b) => b.text).join("\n");
     return lazyDetails({ class: "item" },
-      [h("span", { class: "mono muted" }, s.label), s.blocks.some((b) => b.cache) ? badge("cache", "info") : null,
+      [h("span", { class: "mono muted" }, s.label), s.blocks.some((b) => b.cache) ? tag("cache") : null,
         h("span", { class: "preview" }, marked(firstLine(text), ctx.needle)), h("span", { class: "size" }, fmt.bytes(s.bytes))],
       () => s.blocks.map((b) => blockView(b, ctx)), Boolean(ctx.needle) && i < UNFOLDED_MATCHES);
   });
@@ -925,8 +930,8 @@ function toolItem(tool, prefix, ctx, open) {
       h("span", { class: "size" }, fmt.bytes(tool.bytes))],
     () => [
       tool.description ? h("div", { class: "text" }, marked(tool.description, ctx.needle)) : null,
-      tool.schema !== undefined ? [h("h4", null, "Input schema"), h("pre", null, marked(JSON.stringify(tool.schema, null, 2), ctx.needle))] : null,
-      tool.extra ? [h("h4", null, "Other fields"), h("pre", null, marked(JSON.stringify(tool.extra, null, 2), ctx.needle))] : null,
+      tool.schema !== undefined ? [h("h4", null, "Input schema"), capPre(JSON.stringify(tool.schema, null, 2), ctx.needle)] : null,
+      tool.extra ? [h("h4", null, "Other fields"), capPre(JSON.stringify(tool.extra, null, 2), ctx.needle)] : null,
     ], open);
 }
 
@@ -946,7 +951,7 @@ function paramsSection(shown, ctx) {
 function compareSection(exchange, doc, ctx) {
   const box = h("div");
   if (!exchange.earlier.length) {
-    replace(box, h("p", { class: "note" }, "No earlier recording of this Claude Code session to compare with."));
+    replace(box, h("p", { class: "note" }, "No earlier recording of this Claude Code session to compare with. Where a request stops repeating the one before it is where the backend stops reading the prompt from its cache."));
     return box;
   }
   replace(box, h("p", { class: "note" }, "Reading the session's earlier requests…"));
@@ -1130,30 +1135,30 @@ const NO_CONTEXT = { calls: new Map(), results: new Map(), reveal: null, needle:
 
 function blockView(b, ctx) {
   const needle = ctx.needle;
-  const cache = b.cache ? badge("cache breakpoint", "info") : null;
+  const cache = b.cache ? tag("cache breakpoint") : null;
   switch (b.kind) {
     case "text":
       if (b.notice) {
         return lazyDetails({ class: "item notice" },
-          [badge(b.notice, "warn"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
+          [tag(b.notice), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
           () => h("div", { class: "text" }, marked(b.text, needle)), contains(b.text, needle));
       }
       return h("div", { class: "block" }, cache, textView(b.text, needle));
     case "thinking":
       return lazyDetails({ class: "item thinking" },
-        [badge("thinking"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
+        [tag("thinking"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
         () => h("div", { class: "text" }, marked(b.text, needle)), contains(b.text, needle));
     case "redacted_thinking":
-      return h("div", { class: "block" }, badge("redacted thinking"), cache);
+      return h("div", { class: "block" }, tag("redacted thinking"), cache);
     case "router_label":
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("added by the router"), h("span", { class: "muted" }, b.text)));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag("added by the router"), h("span", { class: "muted" }, b.text)));
     case "tool_use": {
       const result = ctx.reveal ? ctx.results.get(b.id) : undefined;
       return h("div", { class: "block tool-use" },
         h("div", { class: "block-head" }, badge("tool call", "info"), h("strong", { class: "mono" }, marked(b.name || "?", needle)),
           h("span", { class: "mono muted" }, b.id || ""), cache,
           result !== undefined ? h("button", { type: "button", class: "link small", onclick: () => ctx.reveal(result) }, `result in #${result}`) : null),
-        h("pre", null, marked(typeof b.input === "string" ? b.input : JSON.stringify(b.input, null, 2), needle)));
+        capPre(typeof b.input === "string" ? b.input : JSON.stringify(b.input, null, 2), needle));
     }
     case "tool_result": {
       const call = ctx.calls.get(b.id);
@@ -1164,13 +1169,48 @@ function blockView(b, ctx) {
         b.content.length ? b.content.map((inner) => blockView(inner, ctx)) : h("span", { class: "muted" }, "empty"));
     }
     case "image":
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("image"), cache), imageView(b));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag("image"), cache), imageView(b));
     case "document":
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("document"), b.title || "", cache,
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag("document"), b.title || "", cache,
         h("span", { class: "muted" }, b.source ? `${b.source.media_type || b.source.type || ""}, ${fmt.bytes(byteSize(b.source))}` : "")));
     default:
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge(b.type), cache), h("pre", null, marked(JSON.stringify(b.raw, null, 2), needle)));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag(b.type), cache), capPre(JSON.stringify(b.raw, null, 2), needle));
   }
+}
+
+/// Past this a stretch of text is folded behind a control: one file a tool
+/// read is otherwise taller than everything after it put together.
+const CAP_LINES = 12;
+const CAP_CHARS = 1200;
+
+/// `text` as it reads, cut short with a way to see the rest when it is long
+/// enough to bury what follows it.
+function capped(text, needle) {
+  return capBlock(h("div", { class: "text" }, marked(text, needle)), text);
+}
+
+/// `node` as it is when `text` is short, and clipped with a way to see the
+/// rest when it is not. Nothing here is given a scrollbar of its own: a
+/// scroll inside a scroll takes the wheel away from the page, and leaves the
+/// page's own scrollbar moving a distance that means nothing.
+function capBlock(node, text) {
+  const lines = text.split("\n").length;
+  if (lines <= CAP_LINES && text.length <= CAP_CHARS) return node;
+  const box = h("div", { class: "capped" }, node);
+  const more = h("button", { type: "button", class: "small" },
+    `Show all ${fmt.int(lines)} line(s) · ${fmt.bytes(byteSize(text))}`);
+  const fade = h("div", { class: "fade" }, more);
+  more.addEventListener("click", () => {
+    box.classList.remove("capped");
+    fade.remove();
+  });
+  box.append(fade);
+  return box;
+}
+
+/// A `<pre>` that grows with its content rather than scrolling inside itself.
+function capPre(text, needle) {
+  return capBlock(h("pre", null, marked(text, needle)), text);
 }
 
 /// Text with each system reminder folded under its first line; a reminder
@@ -1180,15 +1220,15 @@ function textView(text, needle) {
   let at = 0;
   for (const match of text.matchAll(REMINDER)) {
     const before = text.slice(at, match.index);
-    if (before.trim()) pieces.push(h("div", { class: "text" }, marked(before.replace(/^\n+|\n+$/g, ""), needle)));
+    if (before.trim()) pieces.push(capped(before.replace(/^\n+|\n+$/g, ""), needle));
     const inner = match[1].replace(/^\n+|\n+$/g, "");
     pieces.push(lazyDetails({ class: "item reminder" },
-      [badge("system reminder", "warn"), h("span", { class: "preview" }, marked(firstLine(inner), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(match[0])))],
+      [tag("system reminder"), h("span", { class: "preview" }, marked(firstLine(inner), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(match[0])))],
       () => h("div", { class: "text" }, marked(inner, needle)), contains(inner, needle)));
     at = match.index + match[0].length;
   }
   const rest = text.slice(at);
-  if (rest.trim() || !pieces.length) pieces.push(h("div", { class: "text" }, marked(at ? rest.replace(/^\n+|\n+$/g, "") : rest, needle)));
+  if (rest.trim() || !pieces.length) pieces.push(capped(at ? rest.replace(/^\n+|\n+$/g, "") : rest, needle));
   return pieces;
 }
 
@@ -1421,6 +1461,67 @@ function openaiDocument(doc) {
   };
 }
 
+/// How much of the prompt the backend read from its cache, in the fields
+/// either dialect names it by; nothing when it reported neither.
+function cacheFact(usage) {
+  const cache = cacheCounts(usage);
+  if (!cache) return null;
+  const { read, prompt } = cache;
+  // A backend that contradicts itself is worth saying so about, rather than
+  // quoting a share above the whole: vLLM has over-reported cached tokens
+  // in disaggregated prefill/decode more than once.
+  if (read > prompt) {
+    return fact("Prompt cache", h("span", { class: "error-text" },
+      `The backend reported ${fmt.int(read)} tokens read from cache out of a prompt of ${fmt.int(prompt)}, which cannot both be true.`));
+  }
+  return fact("Prompt cache", [
+    h("strong", null, fmt.pct(read / prompt)),
+    ` of the prompt was read from cache (${fmt.int(read)} of ${fmt.int(prompt)} tokens).`,
+    " Cache prefix says where it stopped.",
+  ]);
+}
+
+/// Cached and total prompt tokens out of a recorded `usage`, in whichever
+/// dialect and under whichever name the backend wrote them; null when it
+/// wrote none, which is not the same as a cache that never hit.
+///
+/// The two dialects disagree about the main count, and telling them apart is
+/// the whole of this: Anthropic's `input_tokens` EXCLUDES what was cached,
+/// while `prompt_tokens` everywhere else INCLUDES it — LiteLLM even sends
+/// Anthropic's field names beside an inclusive `prompt_tokens`. The presence
+/// of `input_tokens` is what decides, as LiteLLM's own reader does.
+function cacheCounts(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const details = usage.prompt_tokens_details || {};
+  const num = (...values) => {
+    const found = values.filter((v) => typeof v === "number");
+    return found.length ? Math.max(...found) : null;
+  };
+  const read = num(usage.cache_read_input_tokens, details.cached_tokens,
+    usage.prompt_cache_hit_tokens, usage.cached_tokens);
+  const write = num(usage.cache_creation_input_tokens, details.cache_write_tokens,
+    details.created_cache_tokens, details.cache_creation_tokens,
+    nestedCreation(usage.cache_creation));
+  if (read === null && write === null) return null;
+  if (typeof usage.input_tokens === "number") {
+    // Anthropic: the parts are disjoint, so the prompt is their sum.
+    const prompt = usage.input_tokens + (read || 0) + (write || 0);
+    return prompt ? { read: read || 0, prompt, dialect: "anthropic" } : null;
+  }
+  // Everywhere else: the cached tokens are already inside prompt_tokens.
+  const prompt = usage.prompt_tokens;
+  return typeof prompt === "number" && prompt
+    ? { read: read || 0, prompt, dialect: "openai" }
+    : null;
+}
+
+/// The per-lifetime breakdown Anthropic sends beside the flat total.
+function nestedCreation(creation) {
+  if (!creation || typeof creation !== "object") return null;
+  const counts = Object.values(creation).filter((v) => typeof v === "number");
+  return counts.length ? counts.reduce((a, b) => a + b, 0) : null;
+}
+
 /// Usage fields as the backend named them; nested counts are dotted.
 function usageText(usage) {
   const parts = [];
@@ -1447,7 +1548,7 @@ function metaView(exchange) {
     h("tr", null,
       h("td", { class: "mono nowrap" }, x.name),
       h("td", { class: "mono wrap-anywhere" }, x.value),
-      h("td", null, badge(x.source)))),
+      h("td", null, kindBadge(x.source)))),
   { empty: "None recorded." });
   const shown = new Set(["request_headers", "dropped_headers", "response_headers"]);
   return [
@@ -1469,7 +1570,7 @@ function metaView(exchange) {
         h("tr", null,
           h("td", { class: "mono nowrap" }, x.name),
           h("td", { class: "mono wrap-anywhere" }, x.value),
-          h("td", null, badge(dropLabel(x.reason), CHOSEN_DROPS.includes(x.reason) ? "info" : null))))),
+          h("td", null, CHOSEN_DROPS.includes(x.reason) ? badge(dropLabel(x.reason), "info") : kindBadge(dropLabel(x.reason)))))),
     ] : null,
     h("h3", null, "Response headers"),
     headers(m.response_headers),
@@ -1520,7 +1621,7 @@ function jsonValue(value, needle) {
   const line = JSON.stringify(value);
   if (line === undefined) return "";
   if (line.length <= 100) return marked(line, needle);
-  return h("pre", null, marked(JSON.stringify(value, null, 2), needle));
+  return capPre(JSON.stringify(value, null, 2), needle);
 }
 
 function firstLine(text) {

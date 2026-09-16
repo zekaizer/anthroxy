@@ -113,6 +113,7 @@ async fn a_streamed_exchange_is_tracked_and_persisted_with_its_usage() {
         output: 9,
         cache_read: 300,
         cache_creation: 4,
+        cache_reported: true,
     });
     assert_eq!(view.usage, usage);
 

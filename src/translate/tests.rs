@@ -339,6 +339,8 @@ fn streaming_and_document_paths_produce_the_same_message() {
                 input_tokens: 3,
                 output_tokens: 4,
                 cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_reported: false,
                 thinking_tokens: 0,
             }),
             Event::Done,

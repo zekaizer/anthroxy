@@ -402,6 +402,8 @@ fn finish_reasons_usage_done_and_errors() {
             input_tokens: 12,
             output_tokens: 34,
             cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_reported: false,
             thinking_tokens: 0,
         })]
     );
@@ -436,6 +438,8 @@ fn a_usage_chunk_may_also_carry_a_delta() {
                 input_tokens: 1,
                 output_tokens: 2,
                 cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_reported: false,
                 thinking_tokens: 0,
             }),
         ]
@@ -502,6 +506,8 @@ fn completed_response_yields_the_stream_events() {
             input_tokens: 5,
             output_tokens: 7,
             cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_reported: false,
             thinking_tokens: 0,
         })
     );
@@ -732,6 +738,8 @@ fn cached_prompt_tokens_are_split_out_of_the_input_count() {
             input_tokens: 1000,
             output_tokens: 40,
             cache_read_tokens: 24000,
+            cache_creation_tokens: 0,
+            cache_reported: true,
             thinking_tokens: 0,
         })]
     );
@@ -743,6 +751,8 @@ fn cached_prompt_tokens_are_split_out_of_the_input_count() {
             input_tokens: 0,
             output_tokens: 1,
             cache_read_tokens: 50,
+            cache_creation_tokens: 0,
+            cache_reported: true,
             thinking_tokens: 0,
         })],
         "a cache count above the prompt count cannot go negative"
@@ -755,6 +765,8 @@ fn cached_prompt_tokens_are_split_out_of_the_input_count() {
             input_tokens: 40,
             output_tokens: 5,
             cache_read_tokens: 60,
+            cache_creation_tokens: 0,
+            cache_reported: true,
             thinking_tokens: 0,
         })),
         "{events:?}"
@@ -774,6 +786,8 @@ fn reasoning_tokens_and_refusals_are_carried() {
             input_tokens: 10,
             output_tokens: 30,
             cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_reported: false,
             thinking_tokens: 25,
         })]
     );
@@ -838,5 +852,124 @@ fn object_schemas_without_properties_get_an_empty_map() {
     assert_eq!(
         tools[2]["function"]["parameters"],
         json!({"type": "string"})
+    );
+}
+
+#[test]
+fn the_cached_prompt_count_is_read_wherever_a_backend_puts_it() {
+    // Every one of these reports a prompt of 25,000 tokens of which 24,000
+    // were read from a cache, and every one of them counts the cached tokens
+    // inside `prompt_tokens`; only the name and the place differ.
+    let cases = [
+        // OpenAI, Azure, vLLM, SGLang, Groq, OpenRouter, llama.cpp, Ollama.
+        json!({"prompt_tokens": 25000, "completion_tokens": 40,
+               "prompt_tokens_details": {"cached_tokens": 24000}}),
+        // DeepSeek names its own pair at the top level.
+        json!({"prompt_tokens": 25000, "completion_tokens": 40,
+               "prompt_cache_hit_tokens": 24000, "prompt_cache_miss_tokens": 1000}),
+        // Together reports it flat on some models.
+        json!({"prompt_tokens": 25000, "completion_tokens": 40, "cached_tokens": 24000}),
+        // LiteLLM proxying Anthropic keeps Anthropic's names at the top level
+        // while recomputing `prompt_tokens` to the OpenAI meaning.
+        json!({"prompt_tokens": 25000, "completion_tokens": 40,
+               "cache_read_input_tokens": 24000}),
+    ];
+    for usage in cases {
+        let body = json!({"id": "x", "choices": [], "usage": usage});
+        let mut d = ChunkDecoder::new();
+        d.decode(&chunk(json!({"role": "assistant"}), None))
+            .unwrap();
+        assert_eq!(
+            d.decode(&body.to_string()).unwrap(),
+            vec![Event::Usage(Usage {
+                input_tokens: 1000,
+                output_tokens: 40,
+                cache_read_tokens: 24000,
+                cache_creation_tokens: 0,
+                cache_reported: true,
+                thinking_tokens: 0,
+            })],
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_cache_write_is_kept_out_of_the_input_count() {
+    // A prompt of 25,500: 24,000 read from cache, 500 written to it, 1,000
+    // neither. Each backend names the write differently, and each counts it
+    // inside `prompt_tokens`.
+    let cases = [
+        // OpenAI, Azure, OpenRouter.
+        json!({"prompt_tokens": 25500, "completion_tokens": 40,
+               "prompt_tokens_details": {"cached_tokens": 24000, "cache_write_tokens": 500}}),
+        // vLLM's local prefix-cache write.
+        json!({"prompt_tokens": 25500, "completion_tokens": 40,
+               "prompt_tokens_details": {"cached_tokens": 24000, "created_cache_tokens": 500}}),
+        // LiteLLM, in the details object and again at the top level.
+        json!({"prompt_tokens": 25500, "completion_tokens": 40,
+               "prompt_tokens_details": {"cached_tokens": 24000, "cache_creation_tokens": 500},
+               "cache_read_input_tokens": 24000, "cache_creation_input_tokens": 500}),
+    ];
+    for usage in cases {
+        let body = json!({"id": "x", "usage": usage,
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]});
+        let events = decode_response(&serde_json::to_vec(&body).unwrap()).unwrap();
+        assert!(
+            events.contains(&Event::Usage(Usage {
+                input_tokens: 1000,
+                output_tokens: 40,
+                cache_read_tokens: 24000,
+                cache_creation_tokens: 500,
+                cache_reported: true,
+                thinking_tokens: 0,
+            })),
+            "{body}: {events:?}"
+        );
+    }
+}
+
+#[test]
+fn a_backend_that_says_nothing_about_caching_is_not_one_that_cached_nothing() {
+    // vLLM ships with prefix caching on and --enable-prompt-tokens-details
+    // off, and SGLang with --enable-cache-report off; both then omit the
+    // details object entirely. Reading that as a cache that never hit is how
+    // an operator is told their cache is broken when their flag is.
+    let quiet = [
+        json!({"prompt_tokens": 25000, "completion_tokens": 40}),
+        json!({"prompt_tokens": 25000, "completion_tokens": 40, "prompt_tokens_details": null}),
+    ];
+    for usage in quiet {
+        let body = json!({"id": "x", "usage": usage,
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]});
+        let events = decode_response(&serde_json::to_vec(&body).unwrap()).unwrap();
+        assert!(
+            events.contains(&Event::Usage(Usage {
+                input_tokens: 25000,
+                output_tokens: 40,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_reported: false,
+                thinking_tokens: 0,
+            })),
+            "{body}: {events:?}"
+        );
+    }
+    // A backend that answered the question with a zero did report.
+    let told = json!({"id": "x",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 25000, "completion_tokens": 40,
+                  "prompt_tokens_details": {"cached_tokens": 0}}});
+    let events = decode_response(&serde_json::to_vec(&told).unwrap()).unwrap();
+    assert!(
+        events.contains(&Event::Usage(Usage {
+            input_tokens: 25000,
+            output_tokens: 40,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cache_reported: true,
+            thinking_tokens: 0,
+        })),
+        "{events:?}"
     );
 }

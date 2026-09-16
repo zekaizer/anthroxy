@@ -13,6 +13,11 @@ const TABS = [
   ["recordings", "Recordings"],
 ];
 
+/// Rows a list draws at first, and adds per "Show more". Enough to see what
+/// the router has been doing without a page nine screens long; the filter is
+/// how a list of hundreds is searched, not the scrollbar.
+const LIST_PAGE = 25;
+
 const state = {
   token: null,
   status: null,
@@ -144,8 +149,51 @@ function table(headers, rows, options = {}) {
   return h("div", { class: "table-wrap" }, h("table", null, h("thead", null, head), h("tbody", null, body)));
 }
 
+/// A row that opens something: reachable and operable by keyboard, with the
+/// buttons inside it keeping their own handling.
+function openRow(props, open, ...cells) {
+  const tr = h("tr", {
+    ...props,
+    tabindex: 0,
+    onclick: open,
+    onkeydown: (event) => {
+      if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      open();
+    },
+  }, cells);
+  return tr;
+}
+
+/// What something is doing or how it ended.
 function badge(text, kind) {
-  return h("span", { class: `badge ${kind || ""}` }, text);
+  return h("span", { class: `badge state ${kind || ""}` }, text);
+}
+
+/// What kind of thing it is: a backend's dialect, a reload's trigger, where a
+/// header came from. A classification carries no judgement, so no colour.
+function kindBadge(text) {
+  return h("span", { class: "badge kind" }, text);
+}
+
+/// An annotation on something a client sent, not on the router's own state.
+function tag(text) {
+  return h("span", { class: "badge tag" }, text);
+}
+
+const HEALTH_KIND = { ok: "ok", attention: "warn", trouble: "err" };
+
+/// The header's standing answer to "is anything wrong", on every tab, and the
+/// way to the account of it.
+function healthPill(health) {
+  if (!health) return null;
+  const count = health.problems.length;
+  return h("button", {
+    type: "button",
+    class: `badge state ${HEALTH_KIND[health.level] || ""}`,
+    title: count ? health.problems.map((problem) => problem.summary).join("\n") : "Nothing to report",
+    onclick: () => go("overview"),
+  }, count ? `${fmt.int(count)} need${count === 1 ? "s" : ""} attention` : "All backends ready");
 }
 
 function panel(title, actions, ...content) {
@@ -219,6 +267,8 @@ const fmt = {
     if (!t) return "–";
     const diff = (new Date(t).getTime() - serverNow()) / 1000;
     const abs = Math.abs(diff);
+    // Inside the clocks' own disagreement, so neither "0s ago" nor "in 0s".
+    if (abs < 1.5) return "just now";
     const text = abs < 60 ? `${Math.round(abs)}s`
       : abs < 3600 ? `${Math.round(abs / 60)}m`
       : abs < 86400 ? `${(abs / 3600).toFixed(1)}h`
@@ -234,9 +284,16 @@ function outcomeBadge(view) {
   return badge("error", "err");
 }
 
+/// An attempt count is a number, not a state. Only an abnormal one is marked.
+function attemptsCell(attempts) {
+  if (!attempts || attempts <= 1) return fmt.int(attempts);
+  return h("strong", { class: "warn-text" }, `×${fmt.int(attempts)}`);
+}
+
 function statusBadge(status) {
-  if (status === null || status === undefined) return badge("–");
-  return badge(String(status), status >= 400 ? "err" : status >= 300 ? "warn" : "ok");
+  if (status === null || status === undefined) return h("span", { class: "muted" }, "–");
+  const kind = status >= 400 ? "err" : status >= 300 ? "warn" : "ok";
+  return h("span", { class: `badge http ${kind}` }, String(status));
 }
 
 // ---------------------------------------------------------------- API
@@ -334,6 +391,34 @@ async function guarded(target, load) {
   }
 }
 
+/// `load` as a poll: once something has been read, a later failure says above
+/// it how old the reading is instead of taking it away. A refresh that missed
+/// is not a reason to empty the page a reader is looking at.
+function polled(target, load) {
+  let fresh = null;
+  let notice = null;
+  return async () => {
+    try {
+      await load();
+      fresh = serverNow();
+      notice?.remove();
+      notice = null;
+    } catch (error) {
+      if (error instanceof SignedOut) return;
+      if (fresh === null) {
+        replace(target, banner(`Could not load: ${error.message}`));
+        return;
+      }
+      if (!notice) {
+        notice = h("div", { class: "banner warn", role: "status" });
+        target.parentNode.insertBefore(notice, target);
+      }
+      replace(notice, "Showing the last reading from ", rel(new Date(fresh).toISOString()),
+        `. The router did not answer the refresh: ${error.message}`);
+    }
+  };
+}
+
 function every(ms, task) {
   const id = setInterval(() => {
     if (!document.hidden) task();
@@ -420,7 +505,21 @@ async function renderShell() {
       h("span", { class: "spacer" }),
       signOutButton),
     header.nav);
-  const main = h("main", { id: "view" });
+  // The roles above promise the tab pattern; these keys are the rest of it.
+  // One tab is in the tab order and the arrows move between them, as a screen
+  // reader announcing a tablist tells its user they will.
+  header.nav.addEventListener("keydown", (event) => {
+    const moves = { ArrowLeft: -1, ArrowRight: 1, Home: -TABS.length, End: TABS.length };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    const at = TABS.findIndex(([id]) => id === state.tab);
+    const next = Math.min(TABS.length - 1, Math.max(0, at + moves[event.key]));
+    // The hash change rebuilds the tabs, so the focus has to wait for it or it
+    // lands on a button that is about to be replaced.
+    focusTabAfterRoute = true;
+    go(TABS[next][0]);
+  });
+  const main = h("main", { id: "view", role: "tabpanel" });
   root.replaceChildren(top, main);
   // Tabs read the model list from the first status, so it comes first.
   await refreshHeader();
@@ -433,6 +532,10 @@ async function refreshHeader() {
     state.status = status;
     noteServerTime(status.now);
     replace(header.meta,
+      healthPill(status.health),
+      // Every tab refreshes itself; this says whether what is on screen is
+      // still being fed, which nothing did.
+      h("span", null, "read ", rel(new Date(serverNow()).toISOString())),
       h("span", null, status.version),
       h("span", null, "up ", since(status.started_at, "uptime")),
       h("span", null, status.listen));
@@ -450,6 +553,9 @@ function go(tab, arg) {
 /// Functions taking a new argument for the tab drawn in a view element, for
 /// tabs that return one.
 const retargets = new WeakMap();
+
+/// Set when the arrow keys chose the tab, so the new one takes the focus.
+let focusTabAfterRoute = false;
 
 function route() {
   if (!state.token) return;
@@ -469,9 +575,18 @@ function route() {
     h("button", {
       type: "button",
       role: "tab",
+      id: `tab-${id}`,
+      "aria-controls": "view",
       "aria-selected": id === state.tab ? "true" : "false",
+      // Roving: the tablist holds one tab stop, and the arrows move within it.
+      tabindex: id === state.tab ? 0 : -1,
       onclick: () => go(id),
     }, label)));
+  view.setAttribute("aria-labelledby", `tab-${state.tab}`);
+  if (focusTabAfterRoute) {
+    focusTabAfterRoute = false;
+    header.nav.children[TABS.findIndex(([id]) => id === state.tab)].focus();
+  }
   clearTimers();
   document.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
   state.reloadNotice = null;
@@ -509,22 +624,23 @@ function overview(view) {
     drawn = signature;
     rerender(body, overviewContent(status, () => {
       drawn = null;
-      return guarded(body, load);
+      return refresh();
     }));
   };
-  guarded(body, load);
-  every(5000, () => guarded(body, load));
+  const refresh = polled(body, load);
+  refresh();
+  every(5000, refresh);
 }
 
 function overviewContent(status, reload) {
   const lastReload = status.reloads[status.reloads.length - 1];
   const cards = h("div", { class: "cards" },
-    card("Version", status.version, true),
+    card("Version", status.version, { small: true }),
     card("Uptime", since(status.started_at, "uptime")),
-    card("Listening on", status.listen, true),
-    card("Configuration", status.config_path || "built in memory", true),
-    card("Statistics", status.stats ? `${status.stats.dir} (${kept(status.stats.retention)})` : "off", true),
-    card("Body recording", status.body_log ? `${status.body_log.dir} (${kept(status.body_log.retention)})` : "off", true));
+    card("Listening on", status.listen, { small: true }),
+    card("Configuration", status.config_path || "built in memory", { small: true }),
+    card("Statistics", status.stats ? `${status.stats.dir} (${kept(status.stats.retention)})` : "off", { small: true }),
+    card("Body recording", status.body_log ? `${status.body_log.dir} (${kept(status.body_log.retention)})` : "off", { small: true }));
 
   const reloadButton = h("button", { type: "button" }, "Reload configuration");
   reloadButton.addEventListener("click", async () => {
@@ -546,7 +662,7 @@ function overviewContent(status, reload) {
   const reloads = [...status.reloads].reverse().map((event) =>
     h("tr", null,
       h("td", { class: "nowrap" }, fmt.time(event.at), h("div", { class: "sub" }, rel(event.at))),
-      h("td", null, badge(event.trigger)),
+      h("td", null, kindBadge(event.trigger)),
       h("td", null, event.result === "applied" ? badge("applied", "ok") : badge("rejected", "err")),
       h("td", { class: "wrap-anywhere" },
         event.result === "applied"
@@ -598,6 +714,7 @@ function overviewContent(status, reload) {
       h("td", { class: "nowrap" }, rel(name.last_seen))));
 
   return [
+    attentionPanel(status.health),
     panel("Router", null, cards),
     panel("Reloads", reloadButton, reloadResult,
       table(["When", "Trigger", "Result", "Detail"], reloads)),
@@ -618,15 +735,35 @@ function overviewContent(status, reload) {
   ];
 }
 
+/// The account behind the header's pill. Absent when there is nothing to
+/// say, so its presence is the news.
+function attentionPanel(health) {
+  if (!health || !health.problems.length) return null;
+  return panel("Needs attention", null,
+    health.problems.map((problem) =>
+      h("div", { class: "problem" },
+        badge(problem.backend || problem.kind, HEALTH_KIND[problem.level] || ""),
+        h("div", null,
+          problem.summary,
+          problem.detail ? h("div", { class: "sub mono wrap-anywhere" }, problem.detail) : null),
+        problem.kind === "errors"
+          ? h("button", { type: "button", class: "small", onclick: () => { state.errorsOnly = true; go("requests"); } }, "Show the requests")
+          : null)));
+}
+
 /// A retention as the configuration spells it; "0s" turns pruning off.
 function kept(retention) {
   return retention === "0s" ? "kept indefinitely" : `kept for ${retention}`;
 }
 
-function card(label, value, small) {
+/// A stat tile: one label, one value, and a sub-line when the number needs
+/// its denominator or a caveat. `small` is for a value that is a path or a
+/// sentence rather than a number.
+function card(label, value, { small, sub } = {}) {
   return h("div", { class: "card" },
     h("div", { class: "label" }, label),
-    h("div", { class: `value ${small ? "small" : ""}` }, value));
+    h("div", { class: `value ${small ? "small" : ""}` }, value),
+    sub ? h("div", { class: "sub" }, sub) : null);
 }
 
 function aliasesSnippet(status) {
@@ -643,10 +780,14 @@ function requests(view, selected) {
   const filter = h("input", { type: "text", placeholder: "Filter by model, backend, id or status", value: state.requestsFilter });
   const errorsOnly = h("input", { type: "checkbox" });
   errorsOnly.checked = state.errorsOnly;
-  const inFlight = h("div");
+  const inFlight = h("div", { class: "strip" });
   const recent = h("div");
-  const detail = h("div");
+  const detail = h("aside", { class: "detail" });
+  const master = h("div", { class: "master" });
   let data = null;
+  /// Rows the table draws, kept across the two-second poll so a refresh does
+  /// not fold back what the reader asked to see.
+  let shown = LIST_PAGE;
 
   const draw = () => {
     if (!data) return;
@@ -657,37 +798,60 @@ function requests(view, selected) {
       return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
-    rerender(inFlight, table(
-      ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
-      data.in_flight.filter(matches).map((v) =>
-        h("tr", { class: "clickable", onclick: () => go("requests", v.id) },
-          h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub mono" }, v.id)),
-          h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
-          h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
-          h("td", null, statusBadge(v.status)),
-          h("td", { class: "num" }, since(v.received_at, "ms")),
-          h("td", { class: "num" }, v.ttfb_ms === null ? h("span", { class: "muted" }, "waiting") : fmt.ms(v.ttfb_ms)),
-          h("td", { class: "num" }, fmt.bytes(v.bytes)))),
-      { empty: "No request in flight." }));
+    const running = data.in_flight.filter(matches);
+    // Nothing in flight is the usual state, and a table header over an empty
+    // row is a third of the first screen spent saying so.
+    rerender(inFlight, running.length
+      ? table(
+        ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
+        running.map((v) =>
+          openRow({ class: "clickable", "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
+            h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub mono" }, v.id)),
+            h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
+            h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
+            h("td", null, statusBadge(v.status)),
+            h("td", { class: "num" }, since(v.received_at, "ms")),
+            h("td", { class: "num" }, v.ttfb_ms === null ? h("span", { class: "muted" }, "waiting") : fmt.ms(v.ttfb_ms)),
+            h("td", { class: "num" }, fmt.bytes(v.bytes)))))
+      : h("p", { class: "idle" }, badge("idle", "ok"), " Nothing in flight.",
+        data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null));
+
+    const rows = [];
+    let day = null;
+    const matching = data.recent.filter(matches);
+    for (const v of matching.slice(0, shown)) {
+      // A clock alone is ambiguous once the router has run past midnight, and
+      // a date on every row is the same date seventeen times.
+      const at = new Date(v.received_at).toDateString();
+      if (at !== day) {
+        day = at;
+        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 9 }, dayLabel(v.received_at))));
+      }
+      rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
+        h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub" }, rel(v.received_at))),
+        h("td", { class: "mono model" }, modelCell(v), pathNote(v),
+          v.source === "console" ? h("div", null, kindBadge("console")) : null),
+        h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
+        h("td", null, statusBadge(v.status), v.attempts > 1 ? [" ", attemptsCell(v.attempts)] : null),
+        h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
+        h("td", { class: "num" }, fmt.ms(v.duration_ms)),
+        h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
+          v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
+        h("td", { class: "num" }, v.usage && cacheKnown(v.usage) ? fmt.int(v.usage.cache_read) : "–",
+          cacheShare(v.usage) ? h("div", { class: "sub" }, cacheShare(v.usage)) : null),
+        h("td", null, outcomeBadge(v),
+          v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
+          v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null)));
+    }
+    const hidden = matching.length - Math.min(shown, matching.length);
+    const more = h("button", { type: "button", class: "small" },
+      `Show ${fmt.int(Math.min(LIST_PAGE, hidden))} more of ${fmt.int(hidden)} not shown`);
+    more.addEventListener("click", () => { shown += LIST_PAGE; draw(); });
     rerender(recent, table(
-      ["Time", "Model", "Backend / upstream", "Status", "Attempts", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
-      data.recent.filter(matches).map((v) =>
-        h("tr", { class: `clickable ${v.id === selected ? "selected" : ""}`, onclick: () => go("requests", v.id) },
-          h("td", { class: "nowrap" }, fmt.clock(v.received_at),
-            h("div", { class: "sub" }, v.source === "console" ? badge("console", "info") : v.peer || "")),
-          h("td", { class: "mono wrap-anywhere" }, modelCell(v), pathNote(v)),
-          h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
-          h("td", null, statusBadge(v.status)),
-          h("td", { class: "num" }, v.attempts > 1 ? badge(String(v.attempts), "warn") : fmt.int(v.attempts)),
-          h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
-          h("td", { class: "num" }, fmt.ms(v.duration_ms)),
-          h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
-            v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
-          h("td", { class: "num" }, v.usage ? fmt.int(v.usage.cache_read) : "–"),
-          h("td", null, outcomeBadge(v),
-            v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
-            v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null))),
-      { empty: "No finished request since the router started." }));
+      ["Time", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
+      rows,
+      { empty: "No finished request since the router started." }),
+      hidden ? h("p", { class: "note" }, more) : null);
   };
 
   let drawn = null;
@@ -705,23 +869,69 @@ function requests(view, selected) {
       in_flight: fresh.in_flight.map(({ elapsed_ms, ...rest }) => rest),
       recent: fresh.recent,
     });
+    // An exchange still running keeps changing, so its detail is read again
+    // with the list rather than frozen at the moment it was opened.
+    if (selected && data && data.in_flight.some((v) => v.id === selected)) showRequest(detail, selected, false);
     if (signature === drawn) return;
     drawn = signature;
     data = fresh;
     draw();
+    if (selected) showRequest(detail, selected, false);
   };
-  filter.addEventListener("input", () => { state.requestsFilter = filter.value; draw(); });
-  errorsOnly.addEventListener("change", () => { state.errorsOnly = errorsOnly.checked; draw(); });
+  filter.addEventListener("input", () => { state.requestsFilter = filter.value; shown = LIST_PAGE; draw(); });
+  errorsOnly.addEventListener("change", () => { state.errorsOnly = errorsOnly.checked; shown = LIST_PAGE; draw(); });
 
-  view.append(
-    detail,
-    panel("In flight", null, inFlight),
+  replace(master,
     panel("Recent", h("span", { class: "muted" }, "newest first; kept in memory until restart"),
       h("div", { class: "controls" }, filter, h("label", null, errorsOnly, " Errors only")),
-      recent));
-  guarded(recent, load);
-  every(2000, () => guarded(recent, load));
-  if (selected) showRequest(detail, selected);
+      recent),
+    detail);
+  view.append(inFlight, master);
+
+  /// Opens `id` beside the list, or closes what is open for null. The list
+  /// stays where it is: a detail drawn above it sent every click back to the
+  /// top of the page.
+  const open = (id) => {
+    selected = id;
+    draw();
+    master.classList.toggle("open", Boolean(id));
+    if (id) showRequest(detail, id, true);
+    else replace(detail);
+  };
+
+  const refresh = polled(recent, load);
+  refresh();
+  every(2000, refresh);
+  open(selected);
+  return open;
+}
+
+/// "Today", "Yesterday", or the date.
+function dayLabel(at) {
+  const day = new Date(at);
+  const today = new Date(serverNow());
+  const days = Math.round((today.setHours(0, 0, 0, 0) - new Date(day).setHours(0, 0, 0, 0)) / 86400000);
+  const date = day.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  if (days === 0) return `Today — ${date}`;
+  if (days === 1) return `Yesterday — ${date}`;
+  return date;
+}
+
+/// How much of the prompt the backend read from its cache, which is the
+/// number the raw count is usually being compared against. A backend that
+/// said nothing about caching gets no number: it is not a backend that
+/// cached nothing, and saying 0% would be an answer it never gave.
+function cacheShare(usage) {
+  if (!usage) return null;
+  if (!cacheKnown(usage)) return h("span", { class: "faint", title: "The backend reported no cache counters" }, "not reported");
+  const prompt = usage.input + usage.cache_read + usage.cache_creation;
+  return prompt ? fmt.pct(usage.cache_read / prompt) : null;
+}
+
+/// Whether anything is known about caching, by the same rule the router
+/// uses: a line written before the flag existed answers with its counts.
+function cacheKnown(usage) {
+  return Boolean(usage.cache_reported || usage.cache_read > 0 || usage.cache_creation > 0);
 }
 
 /// Everything but a Messages request says what it was.
@@ -736,14 +946,14 @@ function modelCell(v) {
   return [v.requested_model, h("div", { class: "sub" }, `→ ${v.model} (${v.matched})`)];
 }
 
-async function showRequest(target, id) {
+async function showRequest(target, id, scroll) {
   await guarded(target, async () => {
     const v = await api(`/api/requests/${encodeURIComponent(id)}`);
     const close = h("button", { type: "button", class: "small", onclick: () => go("requests") }, "Close");
     const recording = v.recording
       ? h("button", { type: "button", class: "small", onclick: () => go("recordings", v.recording) }, "Open recording")
       : null;
-    replace(target, panel(`Request ${v.id}`, [recording, close],
+    rerender(target, panel(`Request ${v.id}`, [recording, close],
       h("dl", { class: "facts" },
         fact("Received", `${fmt.time(v.received_at)} from ${v.peer || "–"}${v.source === "console" ? " (console test)" : ""}`),
         fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
@@ -753,8 +963,11 @@ async function showRequest(target, id) {
         fact("Timing", `headers ${fmt.ms(v.latency_ms)}, first byte ${fmt.ms(v.ttfb_ms)}, total ${fmt.ms(v.duration_ms)}`),
         fact("Body", fmt.bytes(v.bytes)),
         fact("Tokens", v.usage
-          ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}, cache read ${fmt.int(v.usage.cache_read)}, cache write ${fmt.int(v.usage.cache_creation)}`
+          ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}`
           : "not reported"),
+        v.usage ? fact("Prompt cache", cacheKnown(v.usage)
+          ? `${fmt.pct(v.usage.cache_read / (v.usage.input + v.usage.cache_read + v.usage.cache_creation))} read from cache — ${fmt.int(v.usage.cache_read)} read, ${fmt.int(v.usage.cache_creation)} written, of ${fmt.int(v.usage.input + v.usage.cache_read + v.usage.cache_creation)} prompt tokens`
+          : h("span", { class: "muted" }, "the backend reported no cache counters")) : null,
         // Measured only on streamed answers that complete.
         v.output_tokens_per_second ? fact("Output speed", fmt.rate(v.output_tokens_per_second)) : null,
         fact("Outcome", outcomeBadge(v))),
@@ -762,7 +975,7 @@ async function showRequest(target, id) {
       v.hints.length ? [h("h3", null, "Hints"), v.hints.map((hint) =>
         h("div", { class: "hint" }, hint.summary, hint.snippet ? snippet(hint.snippet) : null))] : null,
       v.error_body ? [h("h3", null, "Upstream error body"), h("pre", null, prettyJson(v.error_body))] : null));
-    target.scrollIntoView({ block: "nearest" });
+    if (scroll) target.scrollIntoView({ block: "nearest" });
   });
 }
 
@@ -787,7 +1000,7 @@ function stats(view) {
     h("button", {
       type: "button",
       "aria-pressed": state.statsRange === id ? "true" : "false",
-      onclick: () => { state.statsRange = id; drawRanges(); guarded(body, load); },
+      onclick: () => { state.statsRange = id; drawRanges(); refresh(); },
     }, label)));
   let drawn = null;
   const load = async () => {
@@ -804,10 +1017,11 @@ function stats(view) {
     body.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
     rerender(body, statsContent(data));
   };
+  const refresh = polled(body, load);
   drawRanges();
   view.append(panel("Statistics", ranges, body));
-  guarded(body, load);
-  every(30000, () => guarded(body, load));
+  refresh();
+  every(30000, refresh);
 }
 
 function statsContent(data) {
@@ -824,7 +1038,11 @@ function statsContent(data) {
     card("Credential re-sends", fmt.int(total.credential_refreshed)),
     card("Input tokens", fmt.int(total.input_tokens)),
     card("Output tokens", fmt.int(total.output_tokens)),
-    card("Cache hit rate", fmt.pct(total.cache_hit_rate)),
+    card("Cache hit rate", fmt.pct(total.cache_hit_rate), {
+      sub: total.cache_silent
+        ? `${fmt.int(total.cache_silent)} request(s) reported no cache counters`
+        : null,
+    }),
     card("Output speed", fmt.rate(total.output_tokens_per_second)));
   const modelRows = report.models.map((row) => statsRow(row, h("td", null, h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))));
   const dayRows = report.days.map((row) => statsRow(row, h("td", { class: "nowrap mono" }, row.key)));
@@ -851,7 +1069,10 @@ function statsContent(data) {
     h("h3", null, "By day (UTC)"),
     table(headers("Date"), dayRows, { empty: "No request in this range." }),
     h("p", { class: "note" },
-      "Latency percentiles count successful, complete requests only; speed is output tokens over the time after the first byte of streamed answers. Files: ",
+      "Latency percentiles count successful, complete requests only; speed is output tokens over the time after the first byte of streamed answers. ",
+      "A hit rate counts only the requests whose backend reported cache counters at all — vLLM ships with prefix caching on and ",
+      h("code", null, "--enable-prompt-tokens-details"), " off, and SGLang with ",
+      h("code", null, "--enable-cache-report"), " off, so a silent backend is not one that never hit. Files: ",
       h("code", null, data.dir), "."),
   ];
 }
@@ -870,7 +1091,8 @@ function statsRow(row, first) {
     h("td", { class: "num" }, fmt.int(row.output_tokens)),
     h("td", { class: "num" }, fmt.int(row.cache_read_tokens)),
     h("td", { class: "num" }, fmt.int(row.cache_creation_tokens)),
-    h("td", { class: "num" }, fmt.pct(row.cache_hit_rate)),
+    h("td", { class: "num" }, fmt.pct(row.cache_hit_rate),
+      row.cache_silent ? h("div", { class: "sub" }, `${fmt.int(row.cache_silent)} silent`) : null),
     h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second)));
 }
 
@@ -1324,7 +1546,7 @@ function probeContent(probe) {
       const sent = backend.request.headers;
       const received = models && models.headers ? models.headers : [];
       return h("div", null,
-        h("h3", null, backend.name, " ", badge(backend.kind), " ", h("span", { class: "muted mono" }, backend.url)),
+        h("h3", null, backend.name, " ", kindBadge(backend.kind), " ", h("span", { class: "muted mono" }, backend.url)),
         h("dl", { class: "facts" },
           fact("Credential", backend.credential.ok ? backend.credential.text : h("span", { class: "error-text" }, backend.credential.text)),
           fact("Route", backend.proxy ? ["through proxy ", h("code", null, backend.proxy)] : "direct"),
@@ -1332,7 +1554,7 @@ function probeContent(probe) {
         sent.length ? h("details", null, h("summary", null, `Request headers (${sent.length})`),
           h("p", { class: "note" }, "Every header the backend receives. Backend-forced values and the credential are masked."),
           table(["Header", "Value", "From"], sent.map((x) =>
-            h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value), h("td", null, badge(x.source)))))) : null,
+            h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value), h("td", null, kindBadge(x.source)))))) : null,
         received.length ? h("details", null, h("summary", null, `Response headers (${received.length})`),
           table(["Header", "Value"], received.map((x) =>
             h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value))))) : null,

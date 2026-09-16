@@ -81,7 +81,8 @@ async fn a_streamed_exchange_moves_from_in_flight_to_recent_with_its_usage() {
             input: 9,
             output: 5,
             cache_read: 90,
-            cache_creation: 0
+            cache_creation: 0,
+            cache_reported: true,
         })
     );
     assert_eq!(

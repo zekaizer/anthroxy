@@ -113,24 +113,60 @@ pub(super) fn stop_reason(finish_reason: &str) -> StopReason {
     }
 }
 
+/// Where a backend speaking this wire format puts the count of prompt
+/// tokens it read from a cache. Every one of them counts those tokens inside
+/// `prompt_tokens`, so the IR subtracts them to reach the Anthropic meaning.
+const CACHE_READ: [&str; 4] = [
+    // OpenAI, Azure, vLLM, SGLang, Groq, OpenRouter, llama.cpp, Ollama.
+    "prompt_tokens_details.cached_tokens",
+    // DeepSeek, whose `prompt_tokens` is documented as hit + miss.
+    "prompt_cache_hit_tokens",
+    // Together, on the models that report it flat.
+    "cached_tokens",
+    // LiteLLM proxying Anthropic keeps Anthropic's name while recomputing
+    // `prompt_tokens` to the OpenAI meaning, so this is still inclusive.
+    "cache_read_input_tokens",
+];
+
+/// The same for tokens written to a cache, which are likewise inside
+/// `prompt_tokens` here and outside `input_tokens` in the Anthropic sense.
+const CACHE_WRITE: [&str; 4] = [
+    // OpenAI, Azure, OpenRouter.
+    "prompt_tokens_details.cache_write_tokens",
+    // vLLM's local prefix-cache write.
+    "prompt_tokens_details.created_cache_tokens",
+    // LiteLLM.
+    "prompt_tokens_details.cache_creation_tokens",
+    "cache_creation_input_tokens",
+];
+
 /// `prompt_tokens` counts cached tokens too; the IR keeps them apart, as
 /// the Anthropic API does.
 pub(super) fn usage_event(root: &Map<String, Value>) -> Option<Event> {
     let usage = root.get("usage")?.as_object()?;
     let count = |field: &str| usage.get(field).and_then(Value::as_u64).unwrap_or(0);
-    let detail = |group: &str, field: &str| {
-        usage
-            .get(group)
-            .and_then(|g| g.get(field))
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
+    let at = |path: &str| -> Option<u64> {
+        let mut value = usage.get(path.split('.').next()?)?;
+        for step in path.split('.').skip(1) {
+            value = value.get(step)?;
+        }
+        value.as_u64()
     };
-    let cache_read_tokens = detail("prompt_tokens_details", "cached_tokens");
+    // The largest of the names a backend might use, not their sum: LiteLLM
+    // sends the same count twice, once in each dialect's name.
+    let largest = |paths: &[&str]| paths.iter().filter_map(|path| at(path)).max();
+    let cache_read_tokens = largest(&CACHE_READ);
+    let cache_creation_tokens = largest(&CACHE_WRITE);
+    let cached = cache_read_tokens.unwrap_or(0) + cache_creation_tokens.unwrap_or(0);
     Some(Event::Usage(Usage {
-        input_tokens: count("prompt_tokens").saturating_sub(cache_read_tokens),
+        input_tokens: count("prompt_tokens").saturating_sub(cached),
         output_tokens: count("completion_tokens"),
-        cache_read_tokens,
-        thinking_tokens: detail("completion_tokens_details", "reasoning_tokens"),
+        cache_read_tokens: cache_read_tokens.unwrap_or(0),
+        cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
+        // A backend that named none of these said nothing about caching,
+        // which is not the same as saying it cached nothing.
+        cache_reported: cache_read_tokens.is_some() || cache_creation_tokens.is_some(),
+        thinking_tokens: at("completion_tokens_details.reasoning_tokens").unwrap_or(0),
     }))
 }
 

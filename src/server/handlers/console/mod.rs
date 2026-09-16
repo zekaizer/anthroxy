@@ -3,6 +3,7 @@
 
 mod assets;
 mod env;
+mod health;
 mod probe;
 mod recordings;
 mod reload;

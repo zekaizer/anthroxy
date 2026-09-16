@@ -70,6 +70,7 @@ pub async fn status(
             "dir": stats.dir().display().to_string(),
             "retention": view::duration_text(config.stats.retention),
         })),
+        "health": super::health::report(&snapshot, &app.activity, now),
         "names": app.activity.names(),
         "config": view::masked(config),
     }))
