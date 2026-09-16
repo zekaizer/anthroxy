@@ -4,7 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use super::view::redacted_url;
-use super::{BackendKind, Config, ConfigError, CredentialConfig, origin};
+use super::{
+    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, origin,
+};
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut problems = Vec::new();
@@ -91,6 +93,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
         }
+        check_drop_headers(name, backend, &mut problems);
         for path in &backend.drop_fields {
             if path == "model" {
                 problems.push(format!(
@@ -247,6 +250,62 @@ fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
         }
         Ok(_) => {}
         Err(e) => problems.push(format!("{field}: `{url}` is not a valid URL ({e})")),
+    }
+}
+
+/// Headers the router itself never forwards, so naming one to drop says
+/// nothing.
+const ALREADY_DROPPED: [&str; 6] = [
+    "host",
+    "content-length",
+    "authorization",
+    "x-api-key",
+    "accept-encoding",
+    "connection",
+];
+
+/// Headers the backend needs to read the request the router sends it.
+const REQUIRED: [(&str, &str); 1] = [("content-type", "says what the body is")];
+
+/// An entry must be a pattern, and must not take back what the rest of the
+/// backend says: a header it forces, one the router drops anyway, or one the
+/// request cannot be read without.
+fn check_drop_headers(name: &str, backend: &BackendConfig, problems: &mut Vec<String>) {
+    let field = format!("backends.{name}.drop_headers");
+    for entry in &backend.drop_headers {
+        let patterns = match HeaderPattern::parse(entry) {
+            Ok(patterns) => patterns,
+            Err(problem) => {
+                problems.push(format!("{field}: {problem}"));
+                continue;
+            }
+        };
+        let shown = entry.escape_debug();
+        let hits = |header: &str| patterns.iter().any(|pattern| pattern.matches(header));
+        // A pattern says which header it caught; a name is already the name.
+        let caught = |header: &str| match entry.eq_ignore_ascii_case(header) {
+            true => String::new(),
+            false => format!(" (`{header}`)"),
+        };
+        if let Some(forced) = backend
+            .headers
+            .keys()
+            .find(|k| hits(&k.to_ascii_lowercase()))
+        {
+            problems.push(format!(
+                "{field}: `{shown}` is set in `headers` for this backend{}; a header is forced or dropped, not both",
+                caught(&forced.to_ascii_lowercase())
+            ));
+        }
+        if let Some(header) = ALREADY_DROPPED.iter().find(|header| hits(header)) {
+            problems.push(format!(
+                "{field}: `{shown}` never reaches a backend anyway{}",
+                caught(header)
+            ));
+        }
+        if let Some((header, why)) = REQUIRED.iter().find(|(header, _)| hits(header)) {
+            problems.push(format!("{field}: `{shown}` {why}{}", caught(header)));
+        }
     }
 }
 

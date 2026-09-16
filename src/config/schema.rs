@@ -183,6 +183,11 @@ pub struct BackendConfig {
     /// Beta flags merged into the client's `anthropic-beta` header.
     #[serde(default)]
     pub anthropic_beta: Vec<String>,
+    /// Client headers this backend never sees: a header name, a `*` pattern
+    /// (`x-stainless-*`), or `@claude-code` for what Claude Code adds to name
+    /// itself. For a gateway that refuses headers it does not know.
+    #[serde(default)]
+    pub drop_headers: Vec<String>,
     /// Request body fields removed before forwarding, as dot-separated paths
     /// (`context_management`, `metadata.user_id`), for a backend that rejects
     /// parameters it does not know.

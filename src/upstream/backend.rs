@@ -1,6 +1,6 @@
 use http::{HeaderMap, HeaderName, HeaderValue};
 
-use crate::config::{BackendConfig, BackendKind};
+use crate::config::{BackendConfig, BackendKind, DropHeaders};
 use crate::credential::{self, CredentialError, CredentialSource};
 
 /// A configured backend with its resolved credential source.
@@ -17,6 +17,8 @@ pub struct Backend {
     pub headers: HeaderMap,
     /// Beta flags merged into `anthropic-beta`.
     pub anthropic_beta: Vec<String>,
+    /// Client headers this backend never sees.
+    pub drop_headers: DropHeaders,
     /// Body paths removed before forwarding.
     pub drop_fields: Vec<String>,
 }
@@ -52,6 +54,7 @@ impl Backend {
             credential,
             headers,
             anthropic_beta: config.anthropic_beta.clone(),
+            drop_headers: DropHeaders::new(&config.drop_headers),
             drop_fields: config.drop_fields.clone(),
         })
     }

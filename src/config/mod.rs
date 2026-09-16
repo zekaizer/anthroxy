@@ -7,6 +7,7 @@
 mod byte_size;
 pub mod client_env;
 mod credential_header;
+mod drop_headers;
 mod env;
 mod error;
 pub mod example;
@@ -22,6 +23,7 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 pub use credential_header::{CredentialHeader, X_API_KEY};
+pub use drop_headers::{CLAUDE_CODE_PRESET, DropHeaders, HeaderPattern, PatternError};
 pub use error::ConfigError;
 pub use origin::origin;
 pub use schema::{

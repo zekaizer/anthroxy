@@ -84,6 +84,12 @@ credential = { kind = "none" }
 # # Request body fields this backend rejects as unknown, removed before
 # # forwarding. Dot-separated paths reach into objects (not arrays).
 # drop_fields = ["context_management", "metadata.user_id"]
+# # Client headers this backend never sees, for a gateway that refuses what it
+# # does not know. A name, a `*` pattern, or `@claude-code` for the headers
+# # Claude Code adds to name itself and its SDK (x-stainless-*, x-app,
+# # anthropic-dangerous-direct-browser-access, x-claude-code-session-id).
+# # user-agent is not among them; name it to drop it too.
+# drop_headers = ["@claude-code", "x-app-version"]
 
 # A server that speaks the OpenAI Chat Completions API. Requests are
 # translated to /v1/chat/completions and answers back to Messages events;
