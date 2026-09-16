@@ -378,7 +378,7 @@ async function inspect(target, name, files, neighbors, listed) {
 
     const partSwitch = h("span", { class: "segmented", role: "group", "aria-label": "File" });
     const viewSwitch = h("span", { class: "segmented", role: "group", "aria-label": "View" });
-    const body = h("div", { class: "recording-body" });
+    const body = h("div");
     const facts = h("div");
     const draw = () => {
       // The summary too: a big response is folded for the view that shows
@@ -508,7 +508,7 @@ function rawView(exchange, file) {
   return [
     h("p", { class: "note" }, h("code", null, file.name), `, ${fmt.bytes(file.bytes)}, exactly as recorded.`),
     cut ? banner(`Showing the first ${fmt.int(SHOWN_CHARS)} of ${fmt.int(file.text.length)} characters.`, "info") : null,
-    h("pre", null, file.name.endsWith(".json") && !cut ? prettyJson(shown) : shown),
+    capPre(file.name.endsWith(".json") && !cut ? prettyJson(shown) : shown, ""),
   ];
 }
 
@@ -860,7 +860,7 @@ function promptSection(doc, prompt, ctx) {
     return open && unfolded++ < UNFOLDED_MATCHES;
   };
   return [
-    h("div", { class: "prompt text" }, marked(prompt.text, ctx.needle)),
+    capBlock(h("div", { class: "prompt text" }, marked(prompt.text, ctx.needle)), prompt.text),
     h("p", { class: "note" }, `${told.join(", ")}.`),
     messageItem(m, ctx, opens(m, prompt.queued && m.bytes <= OPEN_BYTES)),
     after.map((next) => messageItem(next, ctx, opens(next, next.bytes <= OPEN_BYTES))),
@@ -932,8 +932,8 @@ function toolItem(tool, prefix, ctx, open) {
       h("span", { class: "size" }, fmt.bytes(tool.bytes))],
     () => [
       tool.description ? h("div", { class: "text" }, marked(tool.description, ctx.needle)) : null,
-      tool.schema !== undefined ? [h("h4", null, "Input schema"), h("pre", null, marked(JSON.stringify(tool.schema, null, 2), ctx.needle))] : null,
-      tool.extra ? [h("h4", null, "Other fields"), h("pre", null, marked(JSON.stringify(tool.extra, null, 2), ctx.needle))] : null,
+      tool.schema !== undefined ? [h("h4", null, "Input schema"), capPre(JSON.stringify(tool.schema, null, 2), ctx.needle)] : null,
+      tool.extra ? [h("h4", null, "Other fields"), capPre(JSON.stringify(tool.extra, null, 2), ctx.needle)] : null,
     ], open);
 }
 
@@ -1160,7 +1160,7 @@ function blockView(b, ctx) {
         h("div", { class: "block-head" }, badge("tool call", "info"), h("strong", { class: "mono" }, marked(b.name || "?", needle)),
           h("span", { class: "mono muted" }, b.id || ""), cache,
           result !== undefined ? h("button", { type: "button", class: "link small", onclick: () => ctx.reveal(result) }, `result in #${result}`) : null),
-        h("pre", null, marked(typeof b.input === "string" ? b.input : JSON.stringify(b.input, null, 2), needle)));
+        capPre(typeof b.input === "string" ? b.input : JSON.stringify(b.input, null, 2), needle));
     }
     case "tool_result": {
       const call = ctx.calls.get(b.id);
@@ -1176,7 +1176,7 @@ function blockView(b, ctx) {
       return h("div", { class: "block" }, h("div", { class: "block-head" }, tag("document"), b.title || "", cache,
         h("span", { class: "muted" }, b.source ? `${b.source.media_type || b.source.type || ""}, ${fmt.bytes(byteSize(b.source))}` : "")));
     default:
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag(b.type), cache), h("pre", null, marked(JSON.stringify(b.raw, null, 2), needle)));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag(b.type), cache), capPre(JSON.stringify(b.raw, null, 2), needle));
   }
 }
 
@@ -1188,10 +1188,17 @@ const CAP_CHARS = 1200;
 /// `text` as it reads, cut short with a way to see the rest when it is long
 /// enough to bury what follows it.
 function capped(text, needle) {
-  const body = h("div", { class: "text" }, marked(text, needle));
+  return capBlock(h("div", { class: "text" }, marked(text, needle)), text);
+}
+
+/// `node` as it is when `text` is short, and clipped with a way to see the
+/// rest when it is not. Nothing here is given a scrollbar of its own: a
+/// scroll inside a scroll takes the wheel away from the page, and leaves the
+/// page's own scrollbar moving a distance that means nothing.
+function capBlock(node, text) {
   const lines = text.split("\n").length;
-  if (lines <= CAP_LINES && text.length <= CAP_CHARS) return body;
-  const box = h("div", { class: "capped" }, body);
+  if (lines <= CAP_LINES && text.length <= CAP_CHARS) return node;
+  const box = h("div", { class: "capped" }, node);
   const more = h("button", { type: "button", class: "small" },
     `Show all ${fmt.int(lines)} line(s) · ${fmt.bytes(byteSize(text))}`);
   const fade = h("div", { class: "fade" }, more);
@@ -1201,6 +1208,11 @@ function capped(text, needle) {
   });
   box.append(fade);
   return box;
+}
+
+/// A `<pre>` that grows with its content rather than scrolling inside itself.
+function capPre(text, needle) {
+  return capBlock(h("pre", null, marked(text, needle)), text);
 }
 
 /// Text with each system reminder folded under its first line; a reminder
@@ -1567,7 +1579,7 @@ function jsonValue(value, needle) {
   const line = JSON.stringify(value);
   if (line === undefined) return "";
   if (line.length <= 100) return marked(line, needle);
-  return h("pre", null, marked(JSON.stringify(value, null, 2), needle));
+  return capPre(JSON.stringify(value, null, 2), needle);
 }
 
 function firstLine(text) {
