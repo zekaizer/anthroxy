@@ -266,6 +266,7 @@ function recordings(view, opened) {
       // reload would otherwise open it again to say it is not there.
       open(null);
       history.replaceState(null, "", "#recordings");
+      state.arg = null;
       await load();
       replace(inspector, banner(`Deleted ${result.removed} recording(s).`, "info"));
     } catch (error) {
@@ -361,10 +362,12 @@ async function inspect(target, name, files, neighbors, listed) {
       parsed: {},
     };
     if (exchange.meta instanceof Error) exchange.meta = null;
-    exchange.dialect = dialectOf(
-      exchange.meta && exchange.meta.path,
-      request ? parseJson(request.text) : null,
-    );
+    // The body is read only when there is no path to go by: parsing a large
+    // `request.json` is what the Request view is for.
+    const recorded = exchange.meta && exchange.meta.path;
+    exchange.dialect = recorded
+      ? dialectOf(recorded)
+      : dialectOf(null, request ? parseJson(request.text) : null);
     const session = exchange.meta && exchange.meta.session;
     exchange.earlier = session
       ? listed.filter((e) => e.session === session && e.name < name && e.path === exchange.meta.path).slice(0, COMPARED)
@@ -468,11 +471,16 @@ function summaryFacts(exchange) {
   if (m.model && m.model !== m.requested_model) route.push(`→ ${m.model}`);
   if (m.upstream_model && m.upstream_model !== m.model) route.push(`→ ${m.upstream_model}`);
   // Folding a recorded stream costs a JSON.parse per event, too much to pay
-  // for one line of a summary; a big one is folded when the response is the
-  // part being read, and the tokens wait for that.
+  // for one line of a summary; a big one is folded for the view that reads
+  // it, and the tokens wait for that. Once folded it stays folded.
   const file = exchange.files.response;
-  const heavy = file && file.text.length > SUMMARY_FOLD_CHARS && state.recordingPart !== "response";
-  const response = file && !heavy ? parsedOnce(exchange, "response", () => foldResponse(file, exchange.dialect)) : null;
+  const foldable = file && file.name !== "response.bin";
+  const read = state.recordingPart === "response" && state.recordingView === "sections";
+  const heavy = foldable
+    && file.text.length > SUMMARY_FOLD_CHARS
+    && !read
+    && !("response" in exchange.parsed);
+  const response = foldable && !heavy ? parsedOnce(exchange, "response", () => foldResponse(file, exchange.dialect)) : null;
   const usage = response && !(response instanceof Error) && response.usage ? usageText(response.usage) : null;
   return h("dl", { class: "facts" },
     fact("Request", `${m.method} ${m.path}${m.stream ? " (stream)" : ""}, ${fmt.time(m.received_at)}`),
@@ -524,8 +532,9 @@ function requestView(exchange) {
   const sum = (items) => items.reduce((total, item) => total + item.bytes, 0);
   const matching = (items, needle) => (needle ? items.filter((item) => item.find.includes(needle)) : items);
   const sections = [
-    // `filters: false`: these two draw the same thing whatever Find says, so
-    // they keep their own count rather than claiming a number of hits.
+    // `filters: false`: Find reaches inside both of these, but their items
+    // are counted under Messages, so they show their own count instead of a
+    // second tally of the same hits.
     { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], filters: false, render: (ctx) => promptSection(doc, prompt, ctx) },
     { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
@@ -1266,14 +1275,25 @@ function sseData(text) {
   return frames;
 }
 
+/// A content block's index as the key it is kept under: a backend that
+/// numbers a block `0` and its deltas `"0"` means the same block.
+function blockKey(index) {
+  return String(index);
+}
+
 function foldAnthropicStream(frames) {
   const out = { blocks: [], stop: null, usage: null, model: null, error: null, events: new Map(), malformed: 0 };
   // Keyed by the index the stream gives, which is whatever the backend sent:
   // an array would let one frame ask for four billion slots.
   const open = new Map();
   for (const frame of frames) {
-    // Some Anthropic-compatible backends end the stream the OpenAI way.
-    if (frame.data === "[DONE]") continue;
+    // Some Anthropic-compatible backends end the stream the OpenAI way. It
+    // is not a frame that failed to read, and it is worth seeing that the
+    // backend sends it.
+    if (frame.data.trim() === "[DONE]") {
+      out.events.set("[DONE]", (out.events.get("[DONE]") || 0) + 1);
+      continue;
+    }
     const d = parseJson(frame.data);
     if (d instanceof Error || !d) {
       out.malformed++;
@@ -1284,18 +1304,18 @@ function foldAnthropicStream(frames) {
       out.model = d.message.model || null;
       out.usage = { ...(d.message.usage || {}) };
     } else if (d.type === "content_block_start") {
-      open.set(d.index, { ...d.content_block, partial: "" });
-    } else if (d.type === "content_block_delta" && open.has(d.index)) {
-      const block = open.get(d.index);
+      open.set(blockKey(d.index), { ...d.content_block, partial: "" });
+    } else if (d.type === "content_block_delta" && open.has(blockKey(d.index))) {
+      const block = open.get(blockKey(d.index));
       const delta = d.delta || {};
       // A delta without its text is a frame that says nothing, not one that
       // says "undefined".
       if (delta.type === "text_delta" && typeof delta.text === "string") block.text = (block.text || "") + delta.text;
       else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") block.thinking = (block.thinking || "") + delta.thinking;
       else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") block.partial += delta.partial_json;
-    } else if (d.type === "content_block_stop" && open.has(d.index)) {
-      out.blocks.push(closeBlock(open.get(d.index)));
-      open.delete(d.index);
+    } else if (d.type === "content_block_stop" && open.has(blockKey(d.index))) {
+      out.blocks.push(closeBlock(open.get(blockKey(d.index))));
+      open.delete(blockKey(d.index));
     } else if (d.type === "message_delta") {
       if (d.delta && d.delta.stop_reason) out.stop = d.delta.stop_reason;
       if (d.usage) out.usage = { ...(out.usage || {}), ...d.usage };
@@ -1441,9 +1461,10 @@ function metaView(exchange) {
     sent,
     (m.dropped_headers || []).length ? [
       h("h3", null, "Headers the backend never saw"),
-      h("p", { class: "note" }, "The client sent these; the router left them out. What this backend's configuration decided comes first: ",
-        h("code", null, "drop_headers"), " and ", h("code", null, "backend kind"),
-        ". The rest go on every request whatever the configuration says."),
+      h("p", { class: "note" }, "The client sent these; the backend saw none of them. What this backend's configuration decided comes first: ",
+        h("code", null, "drop_headers"), ", a value its ", h("code", null, "headers"),
+        " replaced, and what its ", h("code", null, "kind"),
+        " does not take. The rest go on every request whatever the configuration says."),
       table(["Header", "Value", "Why"], [...m.dropped_headers].sort(byDropReason).map((x) =>
         h("tr", null,
           h("td", { class: "mono nowrap" }, x.name),
@@ -1457,7 +1478,7 @@ function metaView(exchange) {
 
 /// Drops a backend's configuration decided, which is what someone reading
 /// this table came for; the others happen to every request.
-const CHOSEN_DROPS = ["drop_headers", "backend_kind"];
+const CHOSEN_DROPS = ["drop_headers", "overridden", "backend_kind"];
 
 function byDropReason(a, b) {
   const rank = (x) => (CHOSEN_DROPS.includes(x.reason) ? CHOSEN_DROPS.indexOf(x.reason) : CHOSEN_DROPS.length);
@@ -1469,6 +1490,7 @@ function byDropReason(a, b) {
 function dropLabel(reason) {
   if (reason === "client_credential") return "client credential";
   if (reason === "backend_kind") return "backend kind";
+  if (reason === "overridden") return "headers";
   return String(reason);
 }
 

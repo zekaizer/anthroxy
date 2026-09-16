@@ -404,7 +404,7 @@ fn request_record(
             body.len(),
             SecretView::Redacted,
         ),
-        dropped_headers: dropped_headers(client_headers, &route.backend, SecretView::Redacted),
+        dropped_headers: dropped_headers(client_headers, &route.backend),
         session: client_headers
             .get(SESSION_ID)
             .and_then(|value| value.to_str().ok())

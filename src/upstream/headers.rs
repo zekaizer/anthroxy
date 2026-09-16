@@ -108,10 +108,13 @@ pub enum DropReason {
     BackendKind,
     /// The backend's `drop_headers`.
     DropHeaders,
+    /// The backend's `headers` set this name, which replaces every value the
+    /// client sent under it.
+    Overridden,
 }
 
 /// Whether the client's `name` reaches `backend`, and why not.
-pub fn dropped(name: &HeaderName, backend: &Backend) -> Option<DropReason> {
+fn dropped(name: &HeaderName, backend: &Backend) -> Option<DropReason> {
     if is_hop_by_hop(name) || *name == HOST || *name == CONTENT_LENGTH {
         return Some(DropReason::Framing);
     }
@@ -140,21 +143,23 @@ pub struct DroppedHeader {
     pub reason: DropReason,
 }
 
-/// What [`upstream_headers`] left behind, for a report that has to say why a
-/// header is missing. The client's own credential is redacted whatever `view`
-/// says: it is the router's token, and it is dropped rather than forwarded.
-pub fn dropped_headers(
-    client: &HeaderMap,
-    backend: &Backend,
-    view: SecretView,
-) -> Vec<DroppedHeader> {
+/// Every value the client sent that the backend does not see: what
+/// [`upstream_headers`] filters out, and what its `headers` overwrite. Values
+/// are the client's own and are shown as sent, except its credential, which
+/// is the router's token and is of no use to any report.
+pub fn dropped_headers(client: &HeaderMap, backend: &Backend) -> Vec<DroppedHeader> {
     let mut out: Vec<DroppedHeader> = Vec::new();
     for (name, value) in client {
-        let Some(reason) = dropped(name, backend) else {
-            continue;
+        let reason = match dropped(name, backend) {
+            Some(reason) => reason,
+            // `anthropic_beta` merges the client's flags in rather than
+            // replacing them, so a beta header the backend adds to is not one
+            // it overrode.
+            None if backend.headers.contains_key(name) => DropReason::Overridden,
+            None => continue,
         };
         let value = match reason {
-            DropReason::ClientCredential => view.show(header_text(value)),
+            DropReason::ClientCredential => REDACTED.to_owned(),
             _ => header_text(value).to_owned(),
         };
         out.push(DroppedHeader {

@@ -216,8 +216,9 @@ pub struct EntrySummary {
     pub step: Option<String>,
     /// Claude Code's `x-claude-code-session-id` request header.
     pub session: Option<String>,
-    /// `meta.json` is there but does not read as JSON, so every field above it
-    /// filled is empty for want of a value, not because the router had none.
+    /// `meta.json` is there but does not read as JSON, so every field above
+    /// it fills is empty for want of a value, not because the router had
+    /// none. An entry still being written has no `meta.json` and is not this.
     pub unreadable: bool,
 }
 
@@ -264,10 +265,14 @@ impl BodyLog {
                 bytes += metadata.len();
             }
         }
-        let meta: serde_json::Value = std::fs::read(dir.join("meta.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        // An entry is written directory first, `meta.json` last, so one
+        // without it yet is being recorded, not broken.
+        let raw = std::fs::read(dir.join("meta.json")).ok();
+        let meta: serde_json::Value = raw
+            .as_ref()
+            .and_then(|raw| serde_json::from_slice(raw).ok())
             .unwrap_or_default();
+        let unreadable_meta = raw.is_some() && !meta.is_object();
         let text = |key: &str| meta.get(key).and_then(|v| v.as_str()).map(str::to_owned);
         EntrySummary {
             request_id: name.get(21..).unwrap_or_default().to_owned(),
@@ -287,9 +292,7 @@ impl BodyLog {
             prompt: text("prompt"),
             step: text("step"),
             session: text("session"),
-            // Also when there is no `meta.json` at all: an entry half written
-            // or half pruned says as little as one that does not parse.
-            unreadable: !meta.is_object(),
+            unreadable: unreadable_meta,
             name,
         }
     }
@@ -614,6 +617,13 @@ mod tests {
         assert_eq!(listed[0].outcome, None);
         assert!(listed[1..].iter().all(|e| !e.unreadable));
         std::fs::remove_dir_all(&broken).unwrap();
+
+        // An entry whose `meta.json` has not been written yet is not broken;
+        // it is the exchange in flight that is writing it.
+        let starting = dir.path().join("20260911T130000.000Z-rtr_starting");
+        std::fs::create_dir(&starting).unwrap();
+        assert!(!log.list(10).entries[0].unreadable);
+        std::fs::remove_dir_all(&starting).unwrap();
         let newest_only = log.list(1);
         assert_eq!(newest_only.entries.len(), 1);
         assert_eq!(
