@@ -216,6 +216,9 @@ pub struct EntrySummary {
     pub step: Option<String>,
     /// Claude Code's `x-claude-code-session-id` request header.
     pub session: Option<String>,
+    /// `meta.json` is there but does not read as JSON, so every field above it
+    /// filled is empty for want of a value, not because the router had none.
+    pub unreadable: bool,
 }
 
 /// The newest entries and how many there are in all.
@@ -261,9 +264,10 @@ impl BodyLog {
                 bytes += metadata.len();
             }
         }
-        let meta: serde_json::Value = std::fs::read(dir.join("meta.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_slice(&raw).ok())
+        let raw = std::fs::read(dir.join("meta.json")).ok();
+        let meta: serde_json::Value = raw
+            .as_ref()
+            .and_then(|raw| serde_json::from_slice(raw).ok())
             .unwrap_or_default();
         let text = |key: &str| meta.get(key).and_then(|v| v.as_str()).map(str::to_owned);
         EntrySummary {
@@ -284,6 +288,7 @@ impl BodyLog {
             prompt: text("prompt"),
             step: text("step"),
             session: text("session"),
+            unreadable: raw.is_some() && !meta.is_object(),
             name,
         }
     }
@@ -590,7 +595,19 @@ mod tests {
         assert_eq!(newest.step.as_deref(), Some("← Read"));
         assert_eq!(newest.stream, Some(true));
         assert_eq!(newest.session.as_deref(), Some("s-1"));
+        assert!(!newest.unreadable);
         assert!(newest.bytes > 2);
+
+        // A `meta.json` that does not read as JSON is said to be unreadable,
+        // rather than listed as an exchange that never finished.
+        let broken = dir.path().join("20260911T120000.000Z-rtr_broken");
+        std::fs::create_dir(&broken).unwrap();
+        std::fs::write(broken.join("meta.json"), "{not json").unwrap();
+        let listed = log.list(10).entries;
+        assert!(listed[0].unreadable, "{:?}", listed[0]);
+        assert_eq!(listed[0].outcome, None);
+        assert!(listed[1..].iter().all(|e| !e.unreadable));
+        std::fs::remove_dir_all(&broken).unwrap();
         let newest_only = log.list(1);
         assert_eq!(newest_only.entries.len(), 1);
         assert_eq!(

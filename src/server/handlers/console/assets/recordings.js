@@ -8,8 +8,11 @@
 const LIST_PAGE = 100;
 /// Requests this far apart are never one request tried again.
 const RETRY_WINDOW_MS = 10 * 60 * 1000;
-/// Displays at most this much of a recorded file as raw text.
-const SHOWN_BYTES = 2 * 1024 * 1024;
+/// Past this many characters a recorded response is folded only for the view
+/// that shows it, not for the summary above it.
+const SUMMARY_FOLD_CHARS = 1024 * 1024;
+/// Characters of a recorded file the raw view draws at most.
+const SHOWN_CHARS = 2 * 1024 * 1024;
 /// Messages after the last prompt up to this size start unfolded.
 const OPEN_BYTES = 4 * 1024;
 /// Earlier recordings of the same session a request is compared with, nearest
@@ -101,7 +104,9 @@ function recordings(view, opened) {
       show(folded[0].hidden);
     });
     draw();
-    lead.querySelector("td.prompt-cell .sub").append(" · ", toggle);
+    // The facts line, not the prompt above it: that one is clipped to a line,
+    // which would hide the toggle for an entry that shows a step.
+    lead.querySelector("td.prompt-cell .sub.entry-facts").append(" · ", toggle);
     for (const e of repeats) reveals.set(e.name, () => show(true));
     return [lead, ...folded];
   };
@@ -115,6 +120,12 @@ function recordings(view, opened) {
     const open = new Map();
     const out = [];
     for (const e of entries) {
+      // Without a session there is nothing saying one client sent both, and
+      // two clients asking the same thing are not one request tried again.
+      if (!e.session) {
+        out.push([e]);
+        continue;
+      }
       const id = key(e);
       const group = open.get(id);
       if (group && Math.abs(new Date(group[group.length - 1].at) - new Date(e.at)) <= RETRY_WINDOW_MS) {
@@ -139,6 +150,8 @@ function recordings(view, opened) {
         await load();
         if (opened === e.name) go("recordings");
       } catch (error) {
+        // The row survives a failed delete, so it takes another click.
+        remove.disabled = false;
         if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
       }
     });
@@ -146,7 +159,7 @@ function recordings(view, opened) {
       h("td", { class: "nowrap" }, fmt.time(e.at)),
       h("td", { class: "prompt-cell" },
         entryPrompt(e),
-        h("div", { class: "sub" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; refilter(); }))),
+        h("div", { class: "sub entry-facts" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; refilter(); }))),
       h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
       h("td", null, statusBadge(e.status)),
       h("td", null, entryOutcome(e)),
@@ -168,9 +181,11 @@ function recordings(view, opened) {
     const entries = shown();
     const more = h("button", { type: "button", class: "small" });
     const moreLine = h("p", { class: "note" }, more);
+    // A group is one row with its attempts; both counts are in groups, so
+    // "50 more" adds 50 rows.
     const label = () => {
       moreLine.hidden = limit >= grouped.length;
-      replace(more, `Show ${Math.min(LIST_PAGE, grouped.length - limit)} more of ${grouped.length - limit} not shown`);
+      replace(more, `Show ${fmt.int(Math.min(LIST_PAGE, grouped.length - limit))} more of ${fmt.int(grouped.length - limit)} not shown`);
     };
     const grouped = groups(entries);
     const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], grouped.slice(0, limit).flatMap(groupRows),
@@ -181,9 +196,13 @@ function recordings(view, opened) {
       label();
     });
     label();
+    // The rows can be fewer than the recordings twice over, so both say so.
+    const folded = entries.length - grouped.length;
     replace(list,
       h("p", { class: "note" }, `${fmt.int(data.total)} recording(s) in `, h("code", null, data.dir), `, ${kept(data.retention)}. They hold whole conversations.`,
-        data.total > data.entries.length ? ` The newest ${fmt.int(data.entries.length)} are listed.` : ""),
+        data.total > data.entries.length ? ` The newest ${fmt.int(data.entries.length)} are listed.` : "",
+        needle ? ` ${fmt.int(entries.length)} match(es) the filter.` : "",
+        folded ? ` ${fmt.int(folded)} grouped under a later attempt.` : ""),
       drawn,
       moreLine);
   };
@@ -191,9 +210,6 @@ function recordings(view, opened) {
     limit = LIST_PAGE;
     draw();
   };
-  // Whether the entry named in the hash was opened once the list arrived.
-  let openedShown = false;
-
   // A box per opening, so an earlier opening still loading fills nothing shown.
   const open = (name) => {
     rows.get(opened)?.classList.remove("selected");
@@ -203,7 +219,6 @@ function recordings(view, opened) {
     const box = h("div");
     replace(inspector, box);
     if (!opened || !data) return;
-    openedShown = true;
     // Newer and older follow the list as filtered, or the whole list when
     // the filter hides the opened entry.
     const filtered = shown();
@@ -215,7 +230,10 @@ function recordings(view, opened) {
   const load = async () => {
     data = await api("/api/recordings");
     draw();
-    if (opened && !openedShown) open(opened);
+    // Every load rebuilds the rows, so the open recording is opened again:
+    // its row is re-selected, an attempt it folds under is revealed, and what
+    // it shows is read from the entry as it now stands.
+    if (opened) open(opened);
   };
 
   let typing = null;
@@ -248,19 +266,24 @@ function recordings(view, opened) {
   return open;
 }
 
-/// How the entry ended, as the Requests tab judges it: a recorded relay that
-/// finished still failed the request when the status did. An upstream failure
-/// keeps its reason on one line; the inspector has it in full.
+/// How a recording ended: a relay that finished still failed the request when
+/// the status did. The list and the open recording read it the same way.
+function recordedOutcome(m) {
+  if (m.unreadable) return badge("unreadable", "warn");
+  if (!m.outcome) return badge("in progress", "info");
+  if (m.outcome.startsWith(UPSTREAM_ERROR)) return badge("error", "err");
+  if (m.outcome === "client_disconnected") return badge("client left", "warn");
+  if (m.status >= 400) return badge("error", "err");
+  if (m.outcome === "complete") return badge("complete", "ok");
+  return badge(m.outcome, "err");
+}
+
+/// The badge, plus an upstream failure's reason on one line; the open
+/// recording has it in full.
 function entryOutcome(e) {
-  if (!e.outcome) return h("span", { class: "muted" }, "in progress");
-  if (e.outcome.startsWith(UPSTREAM_ERROR)) {
-    const reason = e.outcome.slice(UPSTREAM_ERROR.length).trim();
-    return [badge("error", "err"), h("div", { class: "sub one-line", title: reason }, reason)];
-  }
-  if (e.outcome === "client_disconnected") return badge("client left", "warn");
-  if (e.status >= 400) return badge("error", "err");
-  if (e.outcome === "complete") return badge("complete", "ok");
-  return badge(e.outcome, "err");
+  if (!e.outcome || !e.outcome.startsWith(UPSTREAM_ERROR)) return recordedOutcome(e);
+  const reason = e.outcome.slice(UPSTREAM_ERROR.length).trim();
+  return [recordedOutcome(e), h("div", { class: "sub one-line", title: reason }, reason)];
 }
 
 /// The entry's prompt; for a later request of a turn, what it sends with the
@@ -282,7 +305,7 @@ function entryFacts(e, filterBy) {
       class: "link small mono",
       title: `Show only session ${e.session}`,
       onclick: (event) => { event.stopPropagation(); filterBy(e.session); },
-    }, `session ${e.session.slice(0, 8)}`));
+    }, `session ${e.session.length > 8 ? `${e.session.slice(0, 8)}…` : e.session}`));
   }
   if (e.stream !== null && e.stream !== undefined) facts.push(e.stream ? "stream" : "whole response");
   if (e.path && !/^\/v1\/(messages|chat\/completions)(\?|$)/.test(e.path)) facts.push(h("span", { class: "mono" }, e.path));
@@ -296,6 +319,12 @@ function entryFacts(e, filterBy) {
 /// tried. `neighbors` holds the listed entries just `newer` and `older`;
 /// `listed` is the whole list, where earlier requests of the session are found.
 async function inspect(target, name, files, neighbors, listed) {
+  // Find text belongs to the recording it was typed in: carried into another
+  // one it hides everything and reads as a recording with nothing in it.
+  if (state.inspected !== name) {
+    state.requestFind = "";
+    state.inspected = name;
+  }
   await guarded(target, async () => {
     const responses = (files || RESPONSE_FILES).filter((file) => file.startsWith("response."));
     const [meta, request, response] = await Promise.all([
@@ -316,7 +345,10 @@ async function inspect(target, name, files, neighbors, listed) {
       parsed: {},
     };
     if (exchange.meta instanceof Error) exchange.meta = null;
-    exchange.dialect = dialectOf(exchange.meta && exchange.meta.path);
+    exchange.dialect = dialectOf(
+      exchange.meta && exchange.meta.path,
+      request ? parseJson(request.text) : null,
+    );
     const session = exchange.meta && exchange.meta.session;
     exchange.earlier = session
       ? listed.filter((e) => e.session === session && e.name < name && e.path === exchange.meta.path).slice(0, COMPARED)
@@ -351,8 +383,17 @@ async function inspect(target, name, files, neighbors, listed) {
 }
 
 /// The request format an upstream path speaks.
-function dialectOf(path) {
-  return String(path || "").startsWith("/v1/chat/completions") ? "openai" : "anthropic";
+/// Which wire format the recorded files are in. `meta.json` names the path
+/// the router sent; without it the body says, since a Chat Completions
+/// request is the only one carrying `messages[].tool_calls` or a `tools[]`
+/// whose entries wrap a `function`. Guessing wrong reads an `openai`
+/// recording as Anthropic and drops every tool call from the view.
+function dialectOf(path, body) {
+  if (path) return String(path).startsWith("/v1/chat/completions") ? "openai" : "anthropic";
+  const openai = body && typeof body === "object"
+    && ((Array.isArray(body.tools) && body.tools.some((t) => t && t.function))
+      || (Array.isArray(body.messages) && body.messages.some((m) => m && (m.tool_calls || m.role === "tool"))));
+  return openai ? "openai" : "anthropic";
 }
 
 const RESPONSE_FILES = ["response.json", "response.sse", "response.bin"];
@@ -403,26 +444,34 @@ function summaryFacts(exchange) {
   const route = [m.requested_model];
   if (m.model && m.model !== m.requested_model) route.push(`→ ${m.model}`);
   if (m.upstream_model && m.upstream_model !== m.model) route.push(`→ ${m.upstream_model}`);
-  const response = exchange.files.response ? parsedOnce(exchange, "response", () => foldResponse(exchange.files.response, exchange.dialect)) : null;
+  // Folding a recorded stream costs a JSON.parse per event, too much to pay
+  // for one line of a summary; a big one is folded when the response is the
+  // part being read, and the tokens wait for that.
+  const file = exchange.files.response;
+  const heavy = file && file.text.length > SUMMARY_FOLD_CHARS && state.recordingPart !== "response";
+  const response = file && !heavy ? parsedOnce(exchange, "response", () => foldResponse(file, exchange.dialect)) : null;
   const usage = response && !(response instanceof Error) && response.usage ? usageText(response.usage) : null;
   return h("dl", { class: "facts" },
     fact("Request", `${m.method} ${m.path}${m.stream ? " (stream)" : ""}, ${fmt.time(m.received_at)}`),
     fact("Route", [h("span", { class: "mono" }, route.join(" ")), ` on ${m.backend}`]),
-    fact("Result", [statusBadge(m.status), " ", outcomeBadge(m), m.outcome && m.outcome !== "complete" ? ` ${m.outcome}` : "",
+    fact("Result", [statusBadge(m.status), " ", recordedOutcome(m), m.outcome && m.outcome !== "complete" ? ` ${m.outcome}` : "",
       m.attempts > 1 ? `, ${m.attempts} attempts` : "",
       m.latency_ms !== undefined ? `, headers ${fmt.ms(m.latency_ms)}` : "",
       m.duration_ms !== undefined ? `, total ${fmt.ms(m.duration_ms)}` : ""]),
     fact("Size", `request ${fmt.bytes(exchange.files.request ? byteSize(exchange.files.request.text) : null)}, response ${fmt.bytes(m.response_bytes)}`),
-    usage ? fact("Tokens", usage) : null);
+    usage ? fact("Tokens", usage) : null,
+    heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is opened")) : null);
 }
 
 function rawView(exchange, file) {
   if (!file) return missingFile(exchange);
-  const cut = file.text.length > SHOWN_BYTES;
-  const shown = cut ? file.text.slice(0, SHOWN_BYTES) : file.text;
+  // Cut by characters, said in characters: one byte count for the file is
+  // enough, and a multibyte file would make two of them disagree.
+  const cut = file.text.length > SHOWN_CHARS;
+  const shown = cut ? file.text.slice(0, SHOWN_CHARS) : file.text;
   return [
     h("p", { class: "note" }, h("code", null, file.name), `, ${fmt.bytes(byteSize(file.text))}, exactly as recorded.`),
-    cut ? banner(`Showing the first ${fmt.bytes(SHOWN_BYTES)} of ${fmt.bytes(file.text.length)}.`, "info") : null,
+    cut ? banner(`Showing the first ${fmt.int(SHOWN_CHARS)} of ${fmt.int(file.text.length)} characters.`, "info") : null,
     h("pre", null, file.name.endsWith(".json") && !cut ? prettyJson(shown) : shown),
   ];
 }
@@ -452,12 +501,14 @@ function requestView(exchange) {
   const sum = (items) => items.reduce((total, item) => total + item.bytes, 0);
   const matching = (items, needle) => (needle ? items.filter((item) => item.find.includes(needle)) : items);
   const sections = [
-    { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], render: (ctx) => promptSection(doc, prompt, ctx) },
+    // `filters: false`: these two draw the same thing whatever Find says, so
+    // they keep their own count rather than claiming a number of hits.
+    { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], filters: false, render: (ctx) => promptSection(doc, prompt, ctx) },
     { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
     { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
     { id: "params", label: "Parameters", count: doc.params.length, items: doc.params, render: (ctx) => paramsSection(matching(doc.params, ctx.needle), ctx) },
-    { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, render: (ctx) => compareSection(exchange, doc, ctx) },
+    { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
   ];
   const total = sum(doc.messages) + sum(doc.system) + sum(doc.tools) + sum(doc.params) || 1;
   const find = h("input", { type: "text", placeholder: "Find in this request", "aria-label": "Find in the request", value: state.requestFind });
@@ -469,11 +520,13 @@ function requestView(exchange) {
     state.requestSection = id;
     const needle = state.requestFind.trim().toLowerCase();
     const ctx = { ...links, needle, reveal };
-    replace(found, needle ? `${sections.slice(1).reduce((n, s) => n + matching(s.items, needle).length, 0)} matching item(s)` : "");
+    replace(found, needle
+      ? `${sections.reduce((n, s) => n + (s.filters === false ? 0 : matching(s.items, needle).length), 0)} matching item(s)`
+      : "");
     replace(nav, sections.map((s) => {
       const fill = h("span");
       fill.style.width = `${Math.min(100, (sum(s.items) / total) * 100)}%`;
-      const hits = needle ? matching(s.items, needle).length : null;
+      const hits = needle && s.filters !== false ? matching(s.items, needle).length : null;
       return h("button", { type: "button", class: hits === 0 ? "empty" : null, "aria-current": s.id === id ? "true" : null, onclick: () => show(s.id) },
         h("span", { class: "label" }, s.label),
         h("span", { class: "count" }, hits === null ? String(s.count) : `${hits} found`),
@@ -647,7 +700,6 @@ function lastPrompt(messages) {
     const pieces = typedPieces(messages[position].blocks);
     for (const b of messages[position].blocks) {
       if (b.kind !== "text") continue;
-      let at = 0;
       for (const match of [...b.text.matchAll(REMINDER), null]) {
         const typed = pieces.shift();
         if (typed) {
@@ -661,7 +713,6 @@ function lastPrompt(messages) {
           text = inner.slice(QUEUED.length).trim();
           queued = true;
         }
-        at = match.index + match[0].length;
       }
     }
     if (text.trim()) return { position, text: text.trim(), queued };
