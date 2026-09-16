@@ -4,6 +4,7 @@
 // never as markup.
 
 const TOKEN_KEY = "anthroxy.token";
+const SMOKE_MODEL_KEY = "anthroxy.smoke.model";
 const TABS = [
   ["overview", "Overview"],
   ["requests", "Requests"],
@@ -255,6 +256,25 @@ function saveToken(token, remember) {
     // Storage can be off; the token then lasts for this page only.
   }
 }
+
+/// What a form field keeps between visits. Storage can be off, and a choice
+/// that does not survive is only an inconvenience.
+const remembers = {
+  get(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // Nothing to remember by.
+    }
+  },
+};
 
 function clearToken() {
   try {
@@ -1179,6 +1199,9 @@ function tools(view) {
 function smokePanel(result) {
   const models = (state.status && state.status.models) || [];
   const model = h("select", { "aria-label": "Model" }, models.map((m) => h("option", { value: m.id }, `${m.id} (${m.backend})`)));
+  const remembered = remembers.get(SMOKE_MODEL_KEY);
+  if (models.some((m) => m.id === remembered)) model.value = remembered;
+  model.addEventListener("change", () => remembers.set(SMOKE_MODEL_KEY, model.value));
   const prompt = h("input", { type: "text", placeholder: "Reply with one short sentence.", "aria-label": "Prompt" });
   const stream = h("input", { type: "checkbox" });
   stream.checked = true;
@@ -1302,9 +1325,9 @@ function probeContent(probe) {
         h("dl", { class: "facts" },
           fact("Credential", backend.credential.ok ? backend.credential.text : h("span", { class: "error-text" }, backend.credential.text)),
           fact("Route", backend.proxy ? ["through proxy ", h("code", null, backend.proxy)] : "direct"),
-          fact("GET /v1/models", modelLine)),
+          fact(`GET ${backend.request.path}`, modelLine)),
         sent.length ? h("details", null, h("summary", null, `Request headers (${sent.length})`),
-          h("p", { class: "note" }, "Headers the router set; the HTTP client adds host and framing. Backend-forced values and the credential are masked."),
+          h("p", { class: "note" }, "Every header the backend receives. Backend-forced values and the credential are masked."),
           table(["Header", "Value", "From"], sent.map((x) =>
             h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value), h("td", null, badge(x.source)))))) : null,
         received.length ? h("details", null, h("summary", null, `Response headers (${received.length})`),

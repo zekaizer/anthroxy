@@ -105,7 +105,7 @@ pub async fn probe(
                 .and_then(|config| config.proxy.as_deref())
                 .map(crate::config::view::redacted_url),
             "credential": credential,
-            "request": {"method": "GET", "path": "/v1/models", "headers": request_headers},
+            "request": {"method": "GET", "path": backend.models_path, "headers": request_headers},
             "models": models,
         }));
     }

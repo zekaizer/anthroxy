@@ -14,6 +14,7 @@ use tokio::sync::watch;
 
 use crate::private_fs::{PendingWrite, create_dir_private, write_private};
 use crate::server::relay::RelayOutcome;
+use crate::upstream::SentHeader;
 
 #[derive(Debug, Clone)]
 pub struct BodyLog {
@@ -34,7 +35,8 @@ pub struct RequestRecord {
     pub upstream_model: String,
     pub backend: String,
     pub stream: bool,
-    pub request_headers: BTreeMap<String, String>,
+    /// Every header the backend received, each saying where it came from.
+    pub request_headers: Vec<SentHeader>,
     /// `messages` in the client's body.
     pub messages: usize,
     /// The client's last prompt, as [`crate::anthropic::RequestSummary`] cuts it.
@@ -274,10 +276,7 @@ impl BodyLog {
             messages: meta.get("messages").and_then(|v| v.as_u64()),
             prompt: text("prompt"),
             step: text("step"),
-            session: meta
-                .pointer("/request_headers/x-claude-code-session-id")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned),
+            session: recorded_header(&meta, "x-claude-code-session-id"),
             name,
         }
     }
@@ -470,6 +469,17 @@ impl Drop for Recorder {
     }
 }
 
+/// Value of one recorded request header, by name.
+fn recorded_header(meta: &serde_json::Value, name: &str) -> Option<String> {
+    meta.get("request_headers")?
+        .as_array()?
+        .iter()
+        .find(|header| header.get("name").and_then(|v| v.as_str()) == Some(name))?
+        .get("value")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// Header map as JSON-able strings; sensitive values are redacted.
 pub fn headers_for_record(headers: &HeaderMap) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
@@ -556,7 +566,7 @@ mod tests {
             std::fs::create_dir(&entry).unwrap();
             std::fs::write(
                 entry.join("meta.json"),
-                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "stream": true, "messages": 3, "prompt": "Read it", "step": "← Read", "request_headers": {{"x-claude-code-session-id": "s-1"}}}}"#),
+                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "stream": true, "messages": 3, "prompt": "Read it", "step": "← Read", "request_headers": [{{"name": "x-claude-code-session-id", "value": "s-1", "source": "default"}}]}}"#),
             )
             .unwrap();
             std::fs::write(entry.join("request.json"), "{}").unwrap();

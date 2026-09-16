@@ -230,6 +230,10 @@ impl CredentialSource for CommandCredential {
         true
     }
 
+    fn header(&self) -> Option<CredentialHeader> {
+        Some(self.header.clone())
+    }
+
     fn describe(&self) -> String {
         format!(
             "command `{}` ({}refresh {}, timeout {})",

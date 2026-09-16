@@ -17,7 +17,7 @@ use crate::activity::hints::{self, UpstreamFailure};
 use crate::activity::{Exchange, Source};
 use crate::anthropic;
 use crate::config::BackendKind;
-use crate::observability::body_log::headers_for_record;
+use crate::config::view::REDACTED;
 use crate::observability::{Recorder, RequestRecord};
 use crate::server::annotate::annotate_upstream_error;
 use crate::server::buffered::read_all;
@@ -29,8 +29,9 @@ use crate::stats::StatsRecord;
 use crate::text::short;
 use crate::translate;
 use crate::upstream::{
-    UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL,
-    header_value, is_event_stream, response_headers, upstream_headers,
+    SecretView, UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL,
+    X_ROUTER_UPSTREAM_MODEL, header_value, is_event_stream, response_headers, sent_headers,
+    upstream_headers,
 };
 
 pub async fn proxy(
@@ -163,6 +164,7 @@ async fn handle(
             &parts.method,
             path_and_query,
             &headers,
+            &body,
             &requested_model,
             route,
             peek.stream,
@@ -358,14 +360,18 @@ fn record_failure(recorder: Option<Recorder>, error: &impl std::fmt::Display) {
     }
 }
 
-/// Snapshot for the body log. `headers` are the ones going upstream; the
-/// credential is added at send time and never written.
+/// Snapshot for the body log. The recorded header set is every header the
+/// backend receives, including the credential and the two the HTTP client
+/// adds; no secret is written, so the credential is named but its value is
+/// not. A credential re-acquired mid-send (ADR-0015) does not change what is
+/// named here.
 #[allow(clippy::too_many_arguments)]
 fn request_record(
     request_id: &RequestId,
     method: &http::Method,
     path_and_query: &str,
     headers: &http::HeaderMap,
+    body: &Bytes,
     requested_model: &str,
     route: &crate::routing::Route,
     stream: bool,
@@ -381,7 +387,18 @@ fn request_record(
         upstream_model: route.upstream_model.clone(),
         backend: route.backend.name.clone(),
         stream,
-        request_headers: headers_for_record(headers),
+        request_headers: sent_headers(
+            &route.backend,
+            headers,
+            route
+                .backend
+                .credential
+                .header()
+                .as_ref()
+                .map(|header| (header, header.value(REDACTED))),
+            body.len(),
+            SecretView::Redacted,
+        ),
         messages: summary.messages,
         prompt: summary.prompt,
         step: summary.step,

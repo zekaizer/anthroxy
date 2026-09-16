@@ -15,6 +15,7 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
         &BackendConfig {
             kind,
             url: "http://backend".into(),
+            models_path: BackendConfig::default_models_path(),
             credential: CredentialConfig::None,
             headers: headers
                 .iter()

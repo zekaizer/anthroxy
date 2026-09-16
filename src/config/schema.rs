@@ -171,6 +171,10 @@ pub struct BackendConfig {
     /// the request path is appended unchanged; for `openai` it is
     /// `/v1/chat/completions`.
     pub url: String,
+    /// Where the probe asks this backend for its model list, appended to
+    /// `url`; for a gateway that serves the list off `/v1/models`.
+    #[serde(default = "BackendConfig::default_models_path")]
+    pub models_path: String,
     #[serde(default)]
     pub credential: CredentialConfig,
     /// Headers set on every upstream request, overriding the client's value.
@@ -188,6 +192,12 @@ pub struct BackendConfig {
     /// directly.
     #[serde(default)]
     pub proxy: Option<String>,
+}
+
+impl BackendConfig {
+    pub fn default_models_path() -> String {
+        "/v1/models".to_owned()
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

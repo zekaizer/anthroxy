@@ -120,21 +120,81 @@ async fn records_request_and_json_response() {
     assert_eq!(meta["outcome"], "complete");
     assert!(meta["response_bytes"].as_u64().unwrap() > 0);
     assert!(meta["duration_ms"].is_number());
-    assert_eq!(
-        meta["request_headers"]["anthropic-beta"],
-        "x-beta,oauth-2025-04-20"
-    );
-    assert!(
-        meta["request_headers"].get("authorization").is_none()
-            && meta["request_headers"].get("x-api-key").is_none(),
-        "credentials never land on disk: {}",
-        meta["request_headers"]
-    );
-    assert_eq!(
-        meta["request_headers"]["cf-access-client-secret"], "<redacted>",
-        "a forced header is a secret as the console shows it"
-    );
     assert_eq!(meta["response_headers"]["content-type"], "application/json");
+}
+
+/// The recording is the header set the backend saw: nothing the router or its
+/// HTTP client added is missing from it, each header says where it came from,
+/// and no secret is written.
+#[tokio::test]
+async fn the_recording_names_every_header_the_backend_saw() {
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!(
+        "[backends.mock.headers]\ncf-access-client-secret = \"forced-secret\"\n[logging]\nbody_dir = \"{}\"\n",
+        dir.path().display()
+    );
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+
+    let res = router
+        .post("/v1/messages", &body("fast", false))
+        .header("anthropic-beta", "x-beta")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let _ = res.bytes().await.unwrap();
+
+    let entries = wait_for_entries(dir.path(), 1).await;
+    let meta = read_json(&entries[0].join("meta.json"));
+    let recorded: Vec<(String, String, String)> = meta["request_headers"]
+        .as_array()
+        .expect("request_headers is a list of {name, value, source}")
+        .iter()
+        .map(|h| {
+            (
+                h["name"].as_str().unwrap().to_owned(),
+                h["value"].as_str().unwrap().to_owned(),
+                h["source"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+
+    let response = read_json(&entries[0].join("response.json"));
+    let mut seen: Vec<String> = response["echo"]["headers"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    seen.sort();
+    let mut names: Vec<String> = recorded.iter().map(|(name, ..)| name.clone()).collect();
+    names.sort();
+    assert_eq!(names, seen, "every header the backend saw is recorded");
+
+    let by_name = |name: &str| {
+        recorded
+            .iter()
+            .find(|(n, ..)| n == name)
+            .map(|(_, value, source)| (value.as_str(), source.as_str()))
+            .unwrap_or_else(|| panic!("{name} not recorded: {recorded:?}"))
+    };
+    assert_eq!(
+        by_name("authorization"),
+        ("Bearer <redacted>", "credential"),
+        "the credential is named and its value is not written"
+    );
+    assert_eq!(
+        by_name("cf-access-client-secret"),
+        ("<redacted>", "backend"),
+        "a forced header may be a secret; the source says it came from the config"
+    );
+    assert_eq!(
+        by_name("anthropic-beta"),
+        ("x-beta,oauth-2025-04-20", "backend")
+    );
+    assert_eq!(by_name("content-type"), ("application/json", "default"));
+    assert_eq!(by_name("host").1, "transport");
 }
 
 #[tokio::test]
