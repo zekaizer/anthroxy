@@ -373,7 +373,11 @@ async function inspect(target, name, files, neighbors, listed) {
     const partSwitch = h("span", { class: "segmented", role: "group", "aria-label": "File" });
     const viewSwitch = h("span", { class: "segmented", role: "group", "aria-label": "View" });
     const body = h("div");
+    const facts = h("div");
     const draw = () => {
+      // The summary too: a big response is folded for the view that shows
+      // it, and the tokens it then knows belong up here.
+      replace(facts, summaryFacts(exchange));
       replace(partSwitch, PARTS.map(([id, label]) =>
         h("button", { type: "button", "aria-pressed": state.recordingPart === id ? "true" : "false", onclick: () => { state.recordingPart = id; draw(); } }, label)));
       replace(viewSwitch, VIEWS.map(([id, label]) =>
@@ -390,7 +394,7 @@ async function inspect(target, name, files, neighbors, listed) {
     }, label);
     const title = exchange.meta ? exchange.meta.request_id : name;
     replace(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
-      summaryFacts(exchange),
+      facts,
       h("div", { class: "controls" }, partSwitch, viewSwitch),
       body));
     draw();
@@ -592,12 +596,16 @@ function readRequest(body, dialect) {
       item.find = `${key.toLowerCase()}\n${item.find}`;
       return item;
     });
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  const tools = Array.isArray(body.tools) ? body.tools : [];
+  // A message or a tool the client sent as null is still an entry of the
+  // list; read as `{}` it shows as the empty thing it is, and the rest of
+  // the document still reads.
+  const object = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+  const messages = (Array.isArray(body.messages) ? body.messages : []).map(object);
+  const tools = (Array.isArray(body.tools) ? body.tools : []).map(object);
   if (dialect === "openai") {
     // Chat Completions carries the system text as leading system messages.
     let lead = 0;
-    while (lead < messages.length && messages[lead] && messages[lead].role === "system") lead++;
+    while (lead < messages.length && messages[lead].role === "system") lead++;
     return {
       params,
       system: messages.slice(0, lead).map((m, i) => indexed({ label: `messages[${i}]`, blocks: openaiContent(m.content) }, m)),
@@ -1181,6 +1189,10 @@ function contains(text, needle) {
 
 /// `text` with each case-insensitive occurrence of `needle` in a `<mark>`.
 function marked(text, needle) {
+  // A recording holds whatever the client sent: a tool without an `input`, a
+  // name that is a number. Marking is for text, and the rest is shown as it
+  // reads, rather than throwing and taking the whole panel with it.
+  if (typeof text !== "string") return text === undefined || text === null ? "" : String(text);
   if (!needle) return text;
   const lower = text.toLowerCase();
   // Lowercasing that changes length would misplace the marks.
@@ -1217,15 +1229,17 @@ function responseView(exchange) {
   return [
     folded.error ? banner(`${folded.error.type || "error"}: ${folded.error.message || JSON.stringify(folded.error)}`) : null,
     bare ? null : h("dl", { class: "facts" },
-      fact("Stop reason", folded.stop ? h("span", { class: "mono" }, folded.stop) : h("span", { class: "muted" }, "none")),
+      folded.counted ? null : fact("Stop reason", folded.stop ? h("span", { class: "mono" }, folded.stop) : h("span", { class: "muted" }, "none")),
       folded.usage ? fact("Usage", usageText(folded.usage)) : null,
       folded.model ? fact("Model", h("span", { class: "mono" }, folded.model)) : null,
       folded.events ? fact("Events", [...folded.events].map(([type, n]) => `${type} ×${n}`).join(", ")) : null,
-      folded.malformed ? fact("Unreadable frames", String(folded.malformed)) : null),
-    bare ? null : [
+      folded.malformed ? fact("Unreadable frames", String(folded.malformed)) : null,
+      folded.choices > 1 ? fact("Choices", `${folded.choices}; the first is the one the router relayed and the one shown`) : null),
+    bare || folded.counted ? null : [
       h("h3", null, "Content"),
       folded.blocks.length ? folded.blocks.map((b) => blockView(b, NO_CONTEXT)) : h("p", { class: "note" }, "No content."),
     ],
+    folded.counted ? h("p", { class: "note" }, "A token count carries no message.") : null,
   ];
 }
 
@@ -1254,8 +1268,12 @@ function sseData(text) {
 
 function foldAnthropicStream(frames) {
   const out = { blocks: [], stop: null, usage: null, model: null, error: null, events: new Map(), malformed: 0 };
-  const open = [];
+  // Keyed by the index the stream gives, which is whatever the backend sent:
+  // an array would let one frame ask for four billion slots.
+  const open = new Map();
   for (const frame of frames) {
+    // Some Anthropic-compatible backends end the stream the OpenAI way.
+    if (frame.data === "[DONE]") continue;
     const d = parseJson(frame.data);
     if (d instanceof Error || !d) {
       out.malformed++;
@@ -1266,16 +1284,18 @@ function foldAnthropicStream(frames) {
       out.model = d.message.model || null;
       out.usage = { ...(d.message.usage || {}) };
     } else if (d.type === "content_block_start") {
-      open[d.index] = { ...d.content_block, partial: "" };
-    } else if (d.type === "content_block_delta" && open[d.index]) {
-      const block = open[d.index];
+      open.set(d.index, { ...d.content_block, partial: "" });
+    } else if (d.type === "content_block_delta" && open.has(d.index)) {
+      const block = open.get(d.index);
       const delta = d.delta || {};
-      if (delta.type === "text_delta") block.text = (block.text || "") + delta.text;
-      else if (delta.type === "thinking_delta") block.thinking = (block.thinking || "") + delta.thinking;
-      else if (delta.type === "input_json_delta") block.partial += delta.partial_json;
-    } else if (d.type === "content_block_stop" && open[d.index]) {
-      out.blocks.push(closeBlock(open[d.index]));
-      open[d.index] = null;
+      // A delta without its text is a frame that says nothing, not one that
+      // says "undefined".
+      if (delta.type === "text_delta" && typeof delta.text === "string") block.text = (block.text || "") + delta.text;
+      else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") block.thinking = (block.thinking || "") + delta.thinking;
+      else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") block.partial += delta.partial_json;
+    } else if (d.type === "content_block_stop" && open.has(d.index)) {
+      out.blocks.push(closeBlock(open.get(d.index)));
+      open.delete(d.index);
     } else if (d.type === "message_delta") {
       if (d.delta && d.delta.stop_reason) out.stop = d.delta.stop_reason;
       if (d.usage) out.usage = { ...(out.usage || {}), ...d.usage };
@@ -1284,7 +1304,7 @@ function foldAnthropicStream(frames) {
     }
   }
   // Blocks still open when the stream ended are shown as far as they got.
-  for (const block of open) if (block) out.blocks.push(closeBlock(block));
+  for (const block of open.values()) out.blocks.push(closeBlock(block));
   return out;
 }
 
@@ -1299,6 +1319,11 @@ function closeBlock(block) {
 
 function anthropicDocument(doc) {
   if (doc && doc.type === "error") return { blocks: [], stop: null, usage: null, model: null, error: doc.error || doc };
+  // `/v1/messages/count_tokens` answers with the count and nothing else; it
+  // is a whole answer, not a message that came back empty.
+  if (doc && doc.content === undefined && typeof doc.input_tokens === "number") {
+    return { blocks: [], stop: null, usage: { input_tokens: doc.input_tokens }, model: null, error: null, counted: true };
+  }
   return {
     blocks: anthropicContent(doc.content),
     stop: doc.stop_reason || null,
@@ -1315,6 +1340,9 @@ function foldOpenaiStream(frames) {
   // By index, and started once named, as the router's own decoder takes them.
   const calls = new Map();
   let last = null;
+  /// Slot an unnumbered call goes in next; kept rather than found again,
+  /// which a stream of thousands of them would pay for each time.
+  let next = 0;
   for (const frame of frames) {
     if (frame.data.trim() === "[DONE]") {
       out.events.set("[DONE]", 1);
@@ -1340,8 +1368,9 @@ function foldOpenaiStream(frames) {
         let slot = Number.isInteger(call.index) ? call.index : null;
         // Unnumbered: a delta with neither id nor name continues the latest
         // call; anything else is a new one after it.
-        if (slot === null) slot = last !== null && id === null && name === null ? last : calls.size ? Math.max(...calls.keys()) + 1 : 0;
+        if (slot === null) slot = last !== null && id === null && name === null ? last : next;
         last = slot;
+        if (Number.isInteger(slot) && slot >= next) next = slot + 1;
         if (!calls.has(slot)) calls.set(slot, { id: null, function: { name: null, arguments: "" } });
         const entry = calls.get(slot);
         if (entry.id === null) entry.id = id;
@@ -1358,13 +1387,17 @@ function foldOpenaiStream(frames) {
 }
 
 function openaiDocument(doc) {
-  const choice = (doc.choices || [])[0];
+  const choices = Array.isArray(doc.choices) ? doc.choices : [];
+  const choice = choices[0];
   return {
     blocks: choice && choice.message ? openaiMessage(choice.message) : [],
     stop: choice ? choice.finish_reason || null : null,
     usage: doc.usage || null,
     model: doc.model || null,
     error: doc.error || null,
+    // The router relays the first choice, so that is the one shown; say when
+    // the backend sent more.
+    choices: choices.length,
   };
 }
 

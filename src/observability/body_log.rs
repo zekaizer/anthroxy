@@ -264,10 +264,9 @@ impl BodyLog {
                 bytes += metadata.len();
             }
         }
-        let raw = std::fs::read(dir.join("meta.json")).ok();
-        let meta: serde_json::Value = raw
-            .as_ref()
-            .and_then(|raw| serde_json::from_slice(raw).ok())
+        let meta: serde_json::Value = std::fs::read(dir.join("meta.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
             .unwrap_or_default();
         let text = |key: &str| meta.get(key).and_then(|v| v.as_str()).map(str::to_owned);
         EntrySummary {
@@ -288,7 +287,9 @@ impl BodyLog {
             prompt: text("prompt"),
             step: text("step"),
             session: text("session"),
-            unreadable: raw.is_some() && !meta.is_object(),
+            // Also when there is no `meta.json` at all: an entry half written
+            // or half pruned says as little as one that does not parse.
+            unreadable: !meta.is_object(),
             name,
         }
     }
@@ -313,10 +314,15 @@ impl BodyLog {
 
     /// Deletes every entry; returns how many went. Other names are left alone.
     pub fn remove_all(&self) -> usize {
-        self.list(usize::MAX)
-            .entries
-            .iter()
-            .filter(|entry| self.remove(&entry.name).unwrap_or(false))
+        // By name: reading every `meta.json` first would be work done only to
+        // describe entries about to be deleted.
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+            .filter(|name| self.remove(name).unwrap_or(false))
             .count()
     }
 }
