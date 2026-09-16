@@ -491,7 +491,7 @@ function summaryFacts(exchange) {
       m.duration_ms !== undefined ? `, total ${fmt.ms(m.duration_ms)}` : ""]),
     fact("Size", `request ${fmt.bytes(exchange.files.request ? exchange.files.request.bytes : null)}, response ${fmt.bytes(m.response_bytes)}`),
     usage ? fact("Tokens", usage) : null,
-    heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is opened")) : null);
+    heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is read in Sections")) : null);
 }
 
 function rawView(exchange, file) {

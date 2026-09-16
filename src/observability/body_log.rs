@@ -622,7 +622,10 @@ mod tests {
         // it is the exchange in flight that is writing it.
         let starting = dir.path().join("20260911T130000.000Z-rtr_starting");
         std::fs::create_dir(&starting).unwrap();
-        assert!(!log.list(10).entries[0].unreadable);
+        let listed = log.list(10).entries;
+        assert_eq!(listed[0].name, "20260911T130000.000Z-rtr_starting");
+        assert!(!listed[0].unreadable);
+        assert_eq!(listed[0].outcome, None);
         std::fs::remove_dir_all(&starting).unwrap();
         let newest_only = log.list(1);
         assert_eq!(newest_only.entries.len(), 1);

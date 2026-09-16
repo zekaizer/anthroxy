@@ -91,9 +91,10 @@ fn merge_beta<'a>(existing: impl IntoIterator<Item = &'a HeaderValue>, extra: &[
     flags.join(",")
 }
 
-/// Why a header the client sent does not reach the backend. The only one an
-/// operator chose is [`DropReason::DropHeaders`]; the rest follow from what
-/// the router is.
+/// Why a header the client sent does not reach the backend. A backend's
+/// configuration decides [`DropReason::DropHeaders`], [`DropReason::Overridden`]
+/// and, through its `kind`, [`DropReason::BackendKind`]; the rest follow from
+/// what the router is and happen to every request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DropReason {

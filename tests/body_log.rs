@@ -141,7 +141,7 @@ url = "{}"
 credential = {{ kind = "static", value = "backend-secret-key" }}
 anthropic_beta = ["oauth-2025-04-20"]
 drop_headers = ["@claude-code"]
-headers = {{ "cf-access-client-secret" = "forced-secret" }}
+headers = {{ "cf-access-client-secret" = "forced-secret", "x-gateway-route" = "gateway" }}
 
 [[models]]
 id = "fast"
@@ -160,6 +160,7 @@ body_dir = "{}"
         .post("/v1/messages", &body("fast", false))
         .header("anthropic-beta", "x-beta")
         .header("x-app", "cli")
+        .header("x-gateway-route", "from-the-client")
         .send()
         .await
         .unwrap();
@@ -247,14 +248,24 @@ body_dir = "{}"
         "cli",
         "a dropped value is shown"
     );
+    assert_eq!(
+        dropped_by_name("x-gateway-route"),
+        ("from-the-client", "overridden"),
+        "a value the backend's `headers` replaced never reached it either"
+    );
+    assert_eq!(
+        by_name("x-gateway-route"),
+        ("<redacted>", "backend"),
+        "and the backend's own value is what arrived"
+    );
     let both: Vec<&String> = names
         .iter()
         .filter(|name| dropped.iter().any(|(n, ..)| n == *name))
         .collect();
     assert_eq!(
         both,
-        ["content-length", "host"],
-        "a header is sent or dropped, except the two the HTTP client reframes"
+        ["content-length", "host", "x-gateway-route"],
+        "a name is in both reports only when the HTTP client reframed it or the backend replaced the client's value"
     );
     assert_ne!(
         dropped_by_name("host").0,

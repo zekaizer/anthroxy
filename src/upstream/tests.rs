@@ -198,11 +198,14 @@ fn every_header_the_backend_does_not_see_says_why() {
     );
     assert_eq!(reason("x-api-key").0, "<redacted>");
 
-    // Together the two reports are every header the client sent.
+    // Together the two reports are every header the client sent. A name the
+    // backend forces is in the upstream map carrying the backend's value, so
+    // it only counts as forwarded when the backend left it alone.
     let sent = upstream_headers(&client, &backend);
     for name in client.keys() {
+        let forwarded = sent.contains_key(name) && !backend.headers.contains_key(name);
         assert!(
-            sent.contains_key(name) || dropped.iter().any(|h| h.name == name.as_str()),
+            forwarded || dropped.iter().any(|h| h.name == name.as_str()),
             "{name} is in neither report"
         );
     }
