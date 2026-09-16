@@ -1304,7 +1304,7 @@ function probeContent(probe) {
           fact("Route", backend.proxy ? ["through proxy ", h("code", null, backend.proxy)] : "direct"),
           fact(`GET ${backend.request.path}`, modelLine)),
         sent.length ? h("details", null, h("summary", null, `Request headers (${sent.length})`),
-          h("p", { class: "note" }, "Headers the router set; the HTTP client adds host and framing. Backend-forced values and the credential are masked."),
+          h("p", { class: "note" }, "Every header the backend receives. Backend-forced values and the credential are masked."),
           table(["Header", "Value", "From"], sent.map((x) =>
             h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value), h("td", null, badge(x.source)))))) : null,
         received.length ? h("details", null, h("summary", null, `Response headers (${received.length})`),

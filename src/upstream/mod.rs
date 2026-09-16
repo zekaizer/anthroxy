@@ -16,7 +16,8 @@ pub use client::{
     http_client,
 };
 pub use headers::{
-    X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, header_value, is_event_stream,
-    response_headers, upstream_headers,
+    HeaderSource, SecretView, SentHeader, X_ROUTER_BACKEND, X_ROUTER_MODEL,
+    X_ROUTER_UPSTREAM_MODEL, header_value, is_event_stream, response_headers, sent_headers,
+    upstream_headers,
 };
 pub use retry::{Decision, RetryPolicy, is_connection_failure};

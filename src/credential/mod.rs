@@ -40,6 +40,11 @@ impl Credential {
         Ok(Self { header, secret })
     }
 
+    /// Header this credential travels in.
+    pub fn header(&self) -> &CredentialHeader {
+        &self.header
+    }
+
     /// Header to set on the upstream request. The value is marked sensitive so
     /// HTTP-layer logging redacts it.
     pub fn header_pair(&self) -> (HeaderName, HeaderValue) {
@@ -156,6 +161,10 @@ pub trait CredentialSource: Send + Sync + std::fmt::Debug {
     fn is_refreshable(&self) -> bool {
         false
     }
+
+    /// Header the credential travels in, known before it is acquired; `None`
+    /// when the backend takes no credential.
+    fn header(&self) -> Option<CredentialHeader>;
 
     /// Where the credential comes from, for status output. Never the value.
     fn describe(&self) -> String;

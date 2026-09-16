@@ -317,7 +317,7 @@ async function inspect(target, name, files, neighbors, listed) {
     };
     if (exchange.meta instanceof Error) exchange.meta = null;
     exchange.dialect = dialectOf(exchange.meta && exchange.meta.path);
-    const session = exchange.meta && exchange.meta.request_headers && exchange.meta.request_headers["x-claude-code-session-id"];
+    const session = recordedHeader(exchange.meta, "x-claude-code-session-id");
     exchange.earlier = session
       ? listed.filter((e) => e.session === session && e.name < name && e.path === exchange.meta.path).slice(0, COMPARED)
       : [];
@@ -1318,15 +1318,31 @@ function metaView(exchange) {
   const headers = (map) => table(["Header", "Value"], Object.entries(map || {}).map(([name, value]) =>
     h("tr", null, h("td", { class: "mono nowrap" }, name), h("td", { class: "mono wrap-anywhere" }, value))),
   { empty: "None recorded." });
+  const sent = table(["Header", "Value", "From"], (m.request_headers || []).map((x) =>
+    h("tr", null,
+      h("td", { class: "mono nowrap" }, x.name),
+      h("td", { class: "mono wrap-anywhere" }, x.value),
+      h("td", null, badge(x.source)))),
+  { empty: "None recorded." });
   const shown = new Set(["request_headers", "response_headers"]);
   return [
     table(["Field", "Value"], Object.entries(m).filter(([key]) => !shown.has(key)).map(([key, value]) =>
       h("tr", null, h("td", { class: "mono nowrap" }, key), h("td", { class: "mono wrap-anywhere" }, typeof value === "string" ? value : JSON.stringify(value))))),
-    h("h3", null, "Request headers, as sent upstream"),
-    headers(m.request_headers),
+    h("h3", null, "Request headers, as the backend received them"),
+    h("p", { class: "note" }, "Every header the backend saw. ",
+      h("code", null, "transport"), " is what the HTTP client frames the request with; ",
+      h("code", null, "credential"), " and forced ", h("code", null, "backend"),
+      " values may be secrets and are never written to disk."),
+    sent,
     h("h3", null, "Response headers"),
     headers(m.response_headers),
   ];
+}
+
+/// Value of one recorded request header, by name.
+function recordedHeader(meta, name) {
+  const found = meta && meta.request_headers && meta.request_headers.find((x) => x.name === name);
+  return found ? found.value : null;
 }
 
 // ---------------------------------------------------------------- helpers

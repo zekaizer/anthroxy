@@ -45,6 +45,12 @@ impl CredentialSource for FixedCredential {
 
     async fn invalidate(&self, _rejected: &Credential) {}
 
+    fn header(&self) -> Option<CredentialHeader> {
+        self.credential
+            .as_ref()
+            .map(|credential| credential.header().clone())
+    }
+
     fn describe(&self) -> String {
         match (&self.env_name, &self.credential) {
             (Some(name), _) => format!("env ${name}"),
