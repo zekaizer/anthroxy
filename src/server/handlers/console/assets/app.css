@@ -180,6 +180,7 @@ tr:last-child td { border-bottom: none; }
 td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--accent-soft); }
+tr.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 tr.selected td { background: var(--accent-soft); }
 /* A request sent again unchanged, folded under the one it repeats. */
 tr.attempt td { color: var(--muted); }
