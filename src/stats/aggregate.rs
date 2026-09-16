@@ -105,7 +105,13 @@ pub struct Row {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     /// Share of prompt tokens read from a cache.
+    /// Read tokens over the prompt tokens of the requests that reported
+    /// caching at all; `None` when none of them did.
     pub cache_hit_rate: Option<f64>,
+    /// Requests whose backend said nothing about caching, so they are in no
+    /// hit rate. A backend can cache well and report nothing: vLLM ships
+    /// with prefix caching on and `--enable-prompt-tokens-details` off.
+    pub cache_silent: u64,
     /// Output tokens over the time between first byte and end, streamed
     /// complete exchanges only.
     pub output_tokens_per_second: Option<f64>,
@@ -267,6 +273,9 @@ struct Group {
     duration: Vec<u64>,
     generating_ms: u64,
     generated: u64,
+    /// Prompt tokens of the requests that reported caching, which is the
+    /// only denominator a hit rate can honestly use.
+    cache_prompt: u64,
 }
 
 impl Group {
@@ -281,6 +290,7 @@ impl Group {
             duration: Vec::new(),
             generating_ms: 0,
             generated: 0,
+            cache_prompt: 0,
         }
     }
 
@@ -307,6 +317,11 @@ impl Group {
             row.output_tokens += usage.output;
             row.cache_read_tokens += usage.cache_read;
             row.cache_creation_tokens += usage.cache_creation;
+            if usage.cache_known() {
+                self.cache_prompt += usage.prompt();
+            } else {
+                row.cache_silent += 1;
+            }
         }
         if failed || record.outcome != Outcome::Complete {
             return;
@@ -329,8 +344,8 @@ impl Group {
         let mut row = self.row;
         (row.ttfb_p50_ms, row.ttfb_p95_ms) = percentiles(&mut self.ttfb);
         (row.duration_p50_ms, row.duration_p95_ms) = percentiles(&mut self.duration);
-        let prompt = row.input_tokens + row.cache_read_tokens + row.cache_creation_tokens;
-        row.cache_hit_rate = (prompt > 0).then(|| row.cache_read_tokens as f64 / prompt as f64);
+        row.cache_hit_rate = (self.cache_prompt > 0)
+            .then(|| row.cache_read_tokens as f64 / self.cache_prompt as f64);
         row.output_tokens_per_second = (self.generating_ms > 0)
             .then(|| self.generated as f64 * 1000.0 / self.generating_ms as f64);
         row

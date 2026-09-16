@@ -33,6 +33,7 @@ fn record(at: &str, model: Option<&str>) -> StatsRecord {
             output: 50,
             cache_read: 80,
             cache_creation: 10,
+            cache_reported: true,
         }),
     }
 }
@@ -225,9 +226,13 @@ fn aggregation_by_model_and_day() {
     assert_eq!(fast.output_tokens, 20 * 50);
     assert_eq!(fast.cache_read_tokens, 20 * 80);
     assert_eq!(fast.cache_creation_tokens, 20 * 10);
+    // The disconnected request reported no caching either way, so its five
+    // prompt tokens are in no hit rate: 1,600 read of the 2,000 that the
+    // twenty requests which did report caching sent.
+    assert_eq!(fast.cache_silent, 1);
     let hit = fast.cache_hit_rate.unwrap();
     assert!(
-        (hit - 1600.0 / (205.0 + 1600.0 + 200.0)).abs() < 1e-9,
+        (hit - 1600.0 / (200.0 + 1600.0 + 200.0)).abs() < 1e-9,
         "{hit}"
     );
     // 1000 output tokens over sum(duration - ttfb) = 20 * 1000 ms.
@@ -435,4 +440,49 @@ fn a_credential_re_send_is_counted_apart_from_retries() {
         report.total.retried, 2,
         "a re-send after a rejected credential is not a retry"
     );
+}
+
+#[test]
+fn a_hit_rate_counts_only_the_requests_that_reported_caching() {
+    // vLLM ships with prefix caching on and its reporting flag off, so a
+    // range can hold requests that cached well and said nothing about it.
+    // Averaging their prompt into the denominator reads as a cache that is
+    // failing, which is the opposite of what happened.
+    let mut silent = record("2026-09-11T10:00:00Z", Some("fast"));
+    silent.usage = Some(TokenUsage {
+        input: 900,
+        output: 50,
+        cache_read: 0,
+        cache_creation: 0,
+        cache_reported: false,
+    });
+    let mut telling = record("2026-09-11T10:01:00Z", Some("fast"));
+    telling.usage = Some(TokenUsage {
+        input: 20,
+        output: 50,
+        cache_read: 80,
+        cache_creation: 0,
+        cache_reported: true,
+    });
+    let report = aggregate(
+        &[silent.clone(), telling],
+        Range::Day,
+        "2026-09-11T12:00:00Z".parse().unwrap(),
+    );
+    let row = &report.models[0];
+    assert_eq!(
+        row.cache_hit_rate,
+        Some(0.8),
+        "80 of the 100 that were told"
+    );
+    assert_eq!(row.cache_silent, 1);
+
+    // Nothing reported at all: there is no rate to quote, not a rate of zero.
+    let report = aggregate(
+        &[silent],
+        Range::Day,
+        "2026-09-11T12:00:00Z".parse().unwrap(),
+    );
+    assert_eq!(report.models[0].cache_hit_rate, None);
+    assert_eq!(report.models[0].cache_silent, 1);
 }
