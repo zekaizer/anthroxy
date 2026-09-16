@@ -630,12 +630,12 @@ function overview(view) {
 function overviewContent(status, reload) {
   const lastReload = status.reloads[status.reloads.length - 1];
   const cards = h("div", { class: "cards" },
-    card("Version", status.version, true),
+    card("Version", status.version, { small: true }),
     card("Uptime", since(status.started_at, "uptime")),
-    card("Listening on", status.listen, true),
-    card("Configuration", status.config_path || "built in memory", true),
-    card("Statistics", status.stats ? `${status.stats.dir} (${kept(status.stats.retention)})` : "off", true),
-    card("Body recording", status.body_log ? `${status.body_log.dir} (${kept(status.body_log.retention)})` : "off", true));
+    card("Listening on", status.listen, { small: true }),
+    card("Configuration", status.config_path || "built in memory", { small: true }),
+    card("Statistics", status.stats ? `${status.stats.dir} (${kept(status.stats.retention)})` : "off", { small: true }),
+    card("Body recording", status.body_log ? `${status.body_log.dir} (${kept(status.body_log.retention)})` : "off", { small: true }));
 
   const reloadButton = h("button", { type: "button" }, "Reload configuration");
   reloadButton.addEventListener("click", async () => {
@@ -751,10 +751,14 @@ function kept(retention) {
   return retention === "0s" ? "kept indefinitely" : `kept for ${retention}`;
 }
 
-function card(label, value, small) {
+/// A stat tile: one label, one value, and a sub-line when the number needs
+/// its denominator or a caveat. `small` is for a value that is a path or a
+/// sentence rather than a number.
+function card(label, value, { small, sub } = {}) {
   return h("div", { class: "card" },
     h("div", { class: "label" }, label),
-    h("div", { class: `value ${small ? "small" : ""}` }, value));
+    h("div", { class: `value ${small ? "small" : ""}` }, value),
+    sub ? h("div", { class: "sub" }, sub) : null);
 }
 
 function aliasesSnippet(status) {
@@ -824,8 +828,8 @@ function requests(view, selected) {
         h("td", { class: "num" }, fmt.ms(v.duration_ms)),
         h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
           v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
-        h("td", { class: "num" }, v.usage ? fmt.int(v.usage.cache_read) : "–",
-          cacheShare(v) ? h("div", { class: "sub" }, cacheShare(v)) : null),
+        h("td", { class: "num" }, v.usage && cacheKnown(v.usage) ? fmt.int(v.usage.cache_read) : "–",
+          cacheShare(v.usage) ? h("div", { class: "sub" }, cacheShare(v.usage)) : null),
         h("td", null, outcomeBadge(v),
           v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
           v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null)));
@@ -900,11 +904,20 @@ function dayLabel(at) {
 }
 
 /// How much of the prompt the backend read from its cache, which is the
-/// number the raw count is usually being compared against.
-function cacheShare(v) {
-  if (!v.usage) return null;
-  const prompt = v.usage.input + v.usage.cache_read + v.usage.cache_creation;
-  return prompt ? fmt.pct(v.usage.cache_read / prompt) : null;
+/// number the raw count is usually being compared against. A backend that
+/// said nothing about caching gets no number: it is not a backend that
+/// cached nothing, and saying 0% would be an answer it never gave.
+function cacheShare(usage) {
+  if (!usage) return null;
+  if (!cacheKnown(usage)) return h("span", { class: "faint", title: "The backend reported no cache counters" }, "not reported");
+  const prompt = usage.input + usage.cache_read + usage.cache_creation;
+  return prompt ? fmt.pct(usage.cache_read / prompt) : null;
+}
+
+/// Whether anything is known about caching, by the same rule the router
+/// uses: a line written before the flag existed answers with its counts.
+function cacheKnown(usage) {
+  return Boolean(usage.cache_reported || usage.cache_read > 0 || usage.cache_creation > 0);
 }
 
 /// Everything but a Messages request says what it was.
@@ -936,8 +949,11 @@ async function showRequest(target, id, scroll) {
         fact("Timing", `headers ${fmt.ms(v.latency_ms)}, first byte ${fmt.ms(v.ttfb_ms)}, total ${fmt.ms(v.duration_ms)}`),
         fact("Body", fmt.bytes(v.bytes)),
         fact("Tokens", v.usage
-          ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}, cache read ${fmt.int(v.usage.cache_read)}, cache write ${fmt.int(v.usage.cache_creation)}`
+          ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}`
           : "not reported"),
+        v.usage ? fact("Prompt cache", cacheKnown(v.usage)
+          ? `${fmt.pct(v.usage.cache_read / (v.usage.input + v.usage.cache_read + v.usage.cache_creation))} read from cache — ${fmt.int(v.usage.cache_read)} read, ${fmt.int(v.usage.cache_creation)} written, of ${fmt.int(v.usage.input + v.usage.cache_read + v.usage.cache_creation)} prompt tokens`
+          : h("span", { class: "muted" }, "the backend reported no cache counters")) : null,
         // Measured only on streamed answers that complete.
         v.output_tokens_per_second ? fact("Output speed", fmt.rate(v.output_tokens_per_second)) : null,
         fact("Outcome", outcomeBadge(v))),
@@ -1008,7 +1024,11 @@ function statsContent(data) {
     card("Credential re-sends", fmt.int(total.credential_refreshed)),
     card("Input tokens", fmt.int(total.input_tokens)),
     card("Output tokens", fmt.int(total.output_tokens)),
-    card("Cache hit rate", fmt.pct(total.cache_hit_rate)),
+    card("Cache hit rate", fmt.pct(total.cache_hit_rate), {
+      sub: total.cache_silent
+        ? `${fmt.int(total.cache_silent)} request(s) reported no cache counters`
+        : null,
+    }),
     card("Output speed", fmt.rate(total.output_tokens_per_second)));
   const modelRows = report.models.map((row) => statsRow(row, h("td", null, h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))));
   const dayRows = report.days.map((row) => statsRow(row, h("td", { class: "nowrap mono" }, row.key)));
@@ -1035,7 +1055,10 @@ function statsContent(data) {
     h("h3", null, "By day (UTC)"),
     table(headers("Date"), dayRows, { empty: "No request in this range." }),
     h("p", { class: "note" },
-      "Latency percentiles count successful, complete requests only; speed is output tokens over the time after the first byte of streamed answers. Files: ",
+      "Latency percentiles count successful, complete requests only; speed is output tokens over the time after the first byte of streamed answers. ",
+      "A hit rate counts only the requests whose backend reported cache counters at all — vLLM ships with prefix caching on and ",
+      h("code", null, "--enable-prompt-tokens-details"), " off, and SGLang with ",
+      h("code", null, "--enable-cache-report"), " off, so a silent backend is not one that never hit. Files: ",
       h("code", null, data.dir), "."),
   ];
 }
@@ -1054,7 +1077,8 @@ function statsRow(row, first) {
     h("td", { class: "num" }, fmt.int(row.output_tokens)),
     h("td", { class: "num" }, fmt.int(row.cache_read_tokens)),
     h("td", { class: "num" }, fmt.int(row.cache_creation_tokens)),
-    h("td", { class: "num" }, fmt.pct(row.cache_hit_rate)),
+    h("td", { class: "num" }, fmt.pct(row.cache_hit_rate),
+      row.cache_silent ? h("div", { class: "sub" }, `${fmt.int(row.cache_silent)} silent`) : null),
     h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second)));
 }
 

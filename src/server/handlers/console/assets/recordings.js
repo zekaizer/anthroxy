@@ -1466,18 +1466,62 @@ function openaiDocument(doc) {
 /// How much of the prompt the backend read from its cache, in the fields
 /// either dialect names it by; nothing when it reported neither.
 function cacheFact(usage) {
-  const details = usage.prompt_tokens_details || {};
-  const read = usage.cache_read_input_tokens ?? details.cached_tokens;
-  if (typeof read !== "number") return null;
-  const prompt = typeof usage.input_tokens === "number"
-    ? usage.input_tokens + read + (usage.cache_creation_input_tokens || 0)
-    : usage.prompt_tokens;
-  if (!prompt) return null;
+  const cache = cacheCounts(usage);
+  if (!cache) return null;
+  const { read, prompt } = cache;
+  // A backend that contradicts itself is worth saying so about, rather than
+  // quoting a share above the whole: vLLM has over-reported cached tokens
+  // in disaggregated prefill/decode more than once.
+  if (read > prompt) {
+    return fact("Prompt cache", h("span", { class: "error-text" },
+      `The backend reported ${fmt.int(read)} tokens read from cache out of a prompt of ${fmt.int(prompt)}, which cannot both be true.`));
+  }
   return fact("Prompt cache", [
     h("strong", null, fmt.pct(read / prompt)),
     ` of the prompt was read from cache (${fmt.int(read)} of ${fmt.int(prompt)} tokens).`,
     " Cache prefix says where it stopped.",
   ]);
+}
+
+/// Cached and total prompt tokens out of a recorded `usage`, in whichever
+/// dialect and under whichever name the backend wrote them; null when it
+/// wrote none, which is not the same as a cache that never hit.
+///
+/// The two dialects disagree about the main count, and telling them apart is
+/// the whole of this: Anthropic's `input_tokens` EXCLUDES what was cached,
+/// while `prompt_tokens` everywhere else INCLUDES it — LiteLLM even sends
+/// Anthropic's field names beside an inclusive `prompt_tokens`. The presence
+/// of `input_tokens` is what decides, as LiteLLM's own reader does.
+function cacheCounts(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const details = usage.prompt_tokens_details || {};
+  const num = (...values) => {
+    const found = values.filter((v) => typeof v === "number");
+    return found.length ? Math.max(...found) : null;
+  };
+  const read = num(usage.cache_read_input_tokens, details.cached_tokens,
+    usage.prompt_cache_hit_tokens, usage.cached_tokens);
+  const write = num(usage.cache_creation_input_tokens, details.cache_write_tokens,
+    details.created_cache_tokens, details.cache_creation_tokens,
+    nestedCreation(usage.cache_creation));
+  if (read === null && write === null) return null;
+  if (typeof usage.input_tokens === "number") {
+    // Anthropic: the parts are disjoint, so the prompt is their sum.
+    const prompt = usage.input_tokens + (read || 0) + (write || 0);
+    return prompt ? { read: read || 0, prompt, dialect: "anthropic" } : null;
+  }
+  // Everywhere else: the cached tokens are already inside prompt_tokens.
+  const prompt = usage.prompt_tokens;
+  return typeof prompt === "number" && prompt
+    ? { read: read || 0, prompt, dialect: "openai" }
+    : null;
+}
+
+/// The per-lifetime breakdown Anthropic sends beside the flat total.
+function nestedCreation(creation) {
+  if (!creation || typeof creation !== "object") return null;
+  const counts = Object.values(creation).filter((v) => typeof v === "number");
+  return counts.length ? counts.reduce((a, b) => a + b, 0) : null;
 }
 
 /// Usage fields as the backend named them; nested counts are dotted.
