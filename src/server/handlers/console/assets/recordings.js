@@ -200,7 +200,7 @@ function recordings(view, opened) {
       replace(more, `Show ${fmt.int(Math.min(LIST_PAGE, grouped.length - limit))} more of ${fmt.int(grouped.length - limit)} not shown`);
     };
     const grouped = groups(entries);
-    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], grouped.slice(0, limit).flatMap(groupRows),
+    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["On disk", "num"], ""], grouped.slice(0, limit).flatMap(groupRows),
       { empty: needle ? "No recording matches." : "No recording yet." });
     more.addEventListener("click", () => {
       append(drawn.querySelector("tbody"), grouped.slice(limit, limit + LIST_PAGE).flatMap(groupRows));
@@ -427,7 +427,10 @@ async function firstRecordedFile(name, names) {
 async function recordedFile(name, file) {
   try {
     const res = await api(`/api/recordings/${encodeURIComponent(name)}/${encodeURIComponent(file)}`, { raw: true });
-    return { name: file, text: await res.text() };
+    // The bytes as recorded: a `response.bin` is not UTF-8, and decoding it
+    // for display grows every byte the decoder cannot read into U+FFFD.
+    const bytes = await res.arrayBuffer();
+    return { name: file, text: new TextDecoder().decode(bytes), bytes: bytes.byteLength };
   } catch (error) {
     if (error.status === 404) return null;
     throw error;
@@ -474,7 +477,7 @@ function summaryFacts(exchange) {
       m.attempts > 1 ? `, ${m.attempts} attempts` : "",
       m.latency_ms !== undefined ? `, headers ${fmt.ms(m.latency_ms)}` : "",
       m.duration_ms !== undefined ? `, total ${fmt.ms(m.duration_ms)}` : ""]),
-    fact("Size", `request ${fmt.bytes(exchange.files.request ? byteSize(exchange.files.request.text) : null)}, response ${fmt.bytes(m.response_bytes)}`),
+    fact("Size", `request ${fmt.bytes(exchange.files.request ? exchange.files.request.bytes : null)}, response ${fmt.bytes(m.response_bytes)}`),
     usage ? fact("Tokens", usage) : null,
     heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is opened")) : null);
 }
@@ -486,7 +489,7 @@ function rawView(exchange, file) {
   const cut = file.text.length > SHOWN_CHARS;
   const shown = cut ? file.text.slice(0, SHOWN_CHARS) : file.text;
   return [
-    h("p", { class: "note" }, h("code", null, file.name), `, ${fmt.bytes(byteSize(file.text))}, exactly as recorded.`),
+    h("p", { class: "note" }, h("code", null, file.name), `, ${fmt.bytes(file.bytes)}, exactly as recorded.`),
     cut ? banner(`Showing the first ${fmt.int(SHOWN_CHARS)} of ${fmt.int(file.text.length)} characters.`, "info") : null,
     h("pre", null, file.name.endsWith(".json") && !cut ? prettyJson(shown) : shown),
   ];
