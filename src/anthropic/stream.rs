@@ -300,6 +300,8 @@ mod tests {
                 input_tokens: 12,
                 output_tokens: 34,
                 cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_reported: false,
                 thinking_tokens: 0,
             }),
             Event::Done,
@@ -409,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_reads_are_reported_only_when_present() {
+    fn the_cache_counters_say_zero_rather_than_going_missing() {
         let with_cache = run([
             start(),
             Event::TextDelta("x".into()),
@@ -417,16 +419,40 @@ mod tests {
                 input_tokens: 10,
                 output_tokens: 2,
                 cache_read_tokens: 500,
+                cache_creation_tokens: 0,
+                cache_reported: true,
                 thinking_tokens: 0,
             }),
             Event::Done,
         ]);
         assert!(
             with_cache.contains(
-                r#""usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":500}"#
+                r#""usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}"#
             ),
             "{with_cache}"
         );
+        // A backend that reported no hits still answered the question, and
+        // the zero is how the answer survives to whoever reads the body.
+        let no_hits = run([
+            start(),
+            Event::TextDelta("x".into()),
+            Event::Usage(Usage {
+                input_tokens: 10,
+                output_tokens: 2,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_reported: true,
+                thinking_tokens: 0,
+            }),
+            Event::Done,
+        ]);
+        assert!(
+            no_hits.contains(
+                r#""usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}"#
+            ),
+            "{no_hits}"
+        );
+        // A backend that was never asked leaves the counters out entirely.
         let without = run([start(), Event::TextDelta("x".into()), Event::Done]);
         assert!(
             without.contains(r#""usage":{"input_tokens":0,"output_tokens":0}"#),
@@ -444,6 +470,8 @@ mod tests {
                 input_tokens: 1,
                 output_tokens: 9,
                 cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cache_reported: false,
                 thinking_tokens: 7,
             }),
             Event::Done,

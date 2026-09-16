@@ -75,6 +75,8 @@ mod tests {
                 input_tokens: 5,
                 output_tokens: 7,
                 cache_read_tokens: 300,
+                cache_creation_tokens: 0,
+                cache_reported: true,
                 thinking_tokens: 0,
             },
         };
@@ -95,7 +97,7 @@ mod tests {
                 ],
                 "stop_reason": "tool_use",
                 "stop_sequence": null,
-                "usage": {"input_tokens": 5, "output_tokens": 7, "cache_read_input_tokens": 300}
+                "usage": {"input_tokens": 5, "output_tokens": 7, "cache_read_input_tokens": 300, "cache_creation_input_tokens": 0}
             })
         );
     }
