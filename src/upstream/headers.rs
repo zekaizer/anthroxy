@@ -49,18 +49,9 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// list. An `openai` backend gets no `anthropic-version` or `anthropic-beta`
 /// at all (ADR-0010).
 pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
-    let anthropic = backend.kind == BackendKind::Anthropic;
     let mut out = HeaderMap::with_capacity(client.len() + backend.headers.len() + 1);
     for (name, value) in client {
-        if is_hop_by_hop(name)
-            || *name == HOST
-            || *name == CONTENT_LENGTH
-            || *name == AUTHORIZATION
-            || *name == X_API_KEY
-            || *name == ACCEPT_ENCODING
-            || (!anthropic && (*name == ANTHROPIC_VERSION || *name == ANTHROPIC_BETA))
-            || backend.drop_headers.matches(name)
-        {
+        if dropped(name, backend).is_some() {
             continue;
         }
         out.append(name.clone(), value.clone());
@@ -98,6 +89,82 @@ fn merge_beta<'a>(existing: impl IntoIterator<Item = &'a HeaderValue>, extra: &[
         }
     }
     flags.join(",")
+}
+
+/// Why a header the client sent does not reach the backend. The only one an
+/// operator chose is [`DropReason::DropHeaders`]; the rest follow from what
+/// the router is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DropReason {
+    /// Hop-by-hop, `host` or `content-length`: the HTTP client owns them.
+    Framing,
+    /// The client's own `authorization`/`x-api-key`, replaced by the backend
+    /// credential.
+    ClientCredential,
+    /// `accept-encoding`: bodies are relayed and logged uncompressed.
+    Uncompressed,
+    /// `anthropic-version`/`anthropic-beta` on an `openai` backend (ADR-0010).
+    BackendKind,
+    /// The backend's `drop_headers`.
+    DropHeaders,
+}
+
+/// Whether the client's `name` reaches `backend`, and why not.
+pub fn dropped(name: &HeaderName, backend: &Backend) -> Option<DropReason> {
+    if is_hop_by_hop(name) || *name == HOST || *name == CONTENT_LENGTH {
+        return Some(DropReason::Framing);
+    }
+    if *name == AUTHORIZATION || *name == X_API_KEY {
+        return Some(DropReason::ClientCredential);
+    }
+    if *name == ACCEPT_ENCODING {
+        return Some(DropReason::Uncompressed);
+    }
+    if backend.kind != BackendKind::Anthropic
+        && (*name == ANTHROPIC_VERSION || *name == ANTHROPIC_BETA)
+    {
+        return Some(DropReason::BackendKind);
+    }
+    backend
+        .drop_headers
+        .matches(name)
+        .then_some(DropReason::DropHeaders)
+}
+
+/// One header the client sent that the backend never sees.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DroppedHeader {
+    pub name: String,
+    pub value: String,
+    pub reason: DropReason,
+}
+
+/// What [`upstream_headers`] left behind, for a report that has to say why a
+/// header is missing. The client's own credential is redacted whatever `view`
+/// says: it is the router's token, and it is dropped rather than forwarded.
+pub fn dropped_headers(
+    client: &HeaderMap,
+    backend: &Backend,
+    view: SecretView,
+) -> Vec<DroppedHeader> {
+    let mut out: Vec<DroppedHeader> = Vec::new();
+    for (name, value) in client {
+        let Some(reason) = dropped(name, backend) else {
+            continue;
+        };
+        let value = match reason {
+            DropReason::ClientCredential => view.show(header_text(value)),
+            _ => header_text(value).to_owned(),
+        };
+        out.push(DroppedHeader {
+            name: name.to_string(),
+            value,
+            reason,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// One request header as a report shows it, with where its value came from.

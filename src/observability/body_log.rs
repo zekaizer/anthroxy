@@ -14,7 +14,7 @@ use tokio::sync::watch;
 
 use crate::private_fs::{PendingWrite, create_dir_private, write_private};
 use crate::server::relay::RelayOutcome;
-use crate::upstream::SentHeader;
+use crate::upstream::{DroppedHeader, SentHeader};
 
 #[derive(Debug, Clone)]
 pub struct BodyLog {
@@ -37,6 +37,9 @@ pub struct RequestRecord {
     pub stream: bool,
     /// Every header the backend received, each saying where it came from.
     pub request_headers: Vec<SentHeader>,
+    /// What the client sent that the backend never saw, each saying why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dropped_headers: Vec<DroppedHeader>,
     /// Claude Code's `x-claude-code-session-id`, as the client sent it: the
     /// recording still groups by session when the backend never sees it.
     #[serde(skip_serializing_if = "Option::is_none")]

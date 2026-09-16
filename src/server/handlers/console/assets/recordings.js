@@ -1324,7 +1324,7 @@ function metaView(exchange) {
       h("td", { class: "mono wrap-anywhere" }, x.value),
       h("td", null, badge(x.source)))),
   { empty: "None recorded." });
-  const shown = new Set(["request_headers", "response_headers"]);
+  const shown = new Set(["request_headers", "dropped_headers", "response_headers"]);
   return [
     table(["Field", "Value"], Object.entries(m).filter(([key]) => !shown.has(key)).map(([key, value]) =>
       h("tr", null, h("td", { class: "mono nowrap" }, key), h("td", { class: "mono wrap-anywhere" }, typeof value === "string" ? value : JSON.stringify(value))))),
@@ -1334,9 +1334,37 @@ function metaView(exchange) {
       h("code", null, "credential"), " and forced ", h("code", null, "backend"),
       " values may be secrets and are never written to disk."),
     sent,
+    (m.dropped_headers || []).length ? [
+      h("h3", null, "Headers the backend never saw"),
+      h("p", { class: "note" }, "The client sent these; the router left them out. What this backend's configuration decided comes first: ",
+        h("code", null, "drop_headers"), " and ", h("code", null, "backend kind"),
+        ". The rest go on every request whatever the configuration says."),
+      table(["Header", "Value", "Why"], [...m.dropped_headers].sort(byDropReason).map((x) =>
+        h("tr", null,
+          h("td", { class: "mono nowrap" }, x.name),
+          h("td", { class: "mono wrap-anywhere" }, x.value),
+          h("td", null, badge(dropLabel(x.reason), CHOSEN_DROPS.includes(x.reason) ? "info" : null))))),
+    ] : null,
     h("h3", null, "Response headers"),
     headers(m.response_headers),
   ];
+}
+
+/// Drops a backend's configuration decided, which is what someone reading
+/// this table came for; the others happen to every request.
+const CHOSEN_DROPS = ["drop_headers", "backend_kind"];
+
+function byDropReason(a, b) {
+  const rank = (x) => (CHOSEN_DROPS.includes(x.reason) ? CHOSEN_DROPS.indexOf(x.reason) : CHOSEN_DROPS.length);
+  return rank(a) - rank(b) || a.name.localeCompare(b.name);
+}
+
+/// Why a header the client sent did not reach the backend. A reason this
+/// console does not know yet is shown as `meta.json` names it.
+function dropLabel(reason) {
+  if (reason === "client_credential") return "client credential";
+  if (reason === "backend_kind") return "backend kind";
+  return String(reason);
 }
 
 // ---------------------------------------------------------------- helpers

@@ -130,15 +130,36 @@ async fn records_request_and_json_response() {
 async fn the_recording_names_every_header_the_backend_saw() {
     let upstream = MockUpstream::start(echo).await;
     let dir = tempfile::tempdir().unwrap();
-    let extra = format!(
-        "[backends.mock.headers]\ncf-access-client-secret = \"forced-secret\"\n[logging]\nbody_dir = \"{}\"\n",
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "router-test-token"
+
+[backends.mock]
+url = "{}"
+credential = {{ kind = "static", value = "backend-secret-key" }}
+anthropic_beta = ["oauth-2025-04-20"]
+drop_headers = ["@claude-code"]
+headers = {{ "cf-access-client-secret" = "forced-secret" }}
+
+[[models]]
+id = "fast"
+backend = "mock"
+upstream_model = "mock-fast-v1"
+
+[logging]
+body_dir = "{}"
+"#,
+        upstream.url(),
         dir.path().display()
     );
-    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+    let router = TestRouter::start(&config).await;
 
     let res = router
         .post("/v1/messages", &body("fast", false))
         .header("anthropic-beta", "x-beta")
+        .header("x-app", "cli")
         .send()
         .await
         .unwrap();
@@ -195,6 +216,51 @@ async fn the_recording_names_every_header_the_backend_saw() {
     );
     assert_eq!(by_name("content-type"), ("application/json", "default"));
     assert_eq!(by_name("host").1, "transport");
+
+    let dropped: Vec<(String, String, String)> = meta["dropped_headers"]
+        .as_array()
+        .expect("dropped_headers is a list of {name, value, reason}")
+        .iter()
+        .map(|h| {
+            (
+                h["name"].as_str().unwrap().to_owned(),
+                h["value"].as_str().unwrap().to_owned(),
+                h["reason"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let dropped_by_name = |name: &str| {
+        dropped
+            .iter()
+            .find(|(n, ..)| n == name)
+            .map(|(_, value, reason)| (value.as_str(), reason.as_str()))
+            .unwrap_or_else(|| panic!("{name} not recorded as dropped: {dropped:?}"))
+    };
+    assert_eq!(
+        dropped_by_name("x-api-key"),
+        ("<redacted>", "client_credential"),
+        "the token the client authenticated with is named, never written"
+    );
+    assert_eq!(dropped_by_name("x-app").1, "drop_headers");
+    assert_eq!(
+        dropped_by_name("x-app").0,
+        "cli",
+        "a dropped value is shown"
+    );
+    let both: Vec<&String> = names
+        .iter()
+        .filter(|name| dropped.iter().any(|(n, ..)| n == *name))
+        .collect();
+    assert_eq!(
+        both,
+        ["content-length", "host"],
+        "a header is sent or dropped, except the two the HTTP client reframes"
+    );
+    assert_ne!(
+        dropped_by_name("host").0,
+        by_name("host").0,
+        "the client addressed the router; the backend is addressed instead"
+    );
 }
 
 #[tokio::test]
