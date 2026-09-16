@@ -265,6 +265,21 @@ h3 { font-size: var(--text-md); margin: var(--space-4) 0 var(--space-2); }
 .banner.info { background: var(--accent-soft); border-color: var(--accent-line); }
 .banner.warn { background: var(--warn-soft); border-color: var(--warn-line); }
 
+/* A list with what is open beside it, not stacked above it: a detail the
+   height of a conversation used to push the list off the screen. */
+.master { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.master.open { grid-template-columns: minmax(0, 1fr) minmax(0, 26rem); }
+.master > .detail:empty { display: none; }
+.master > .detail { position: sticky; top: 7rem; }
+.master > .detail > section.panel { margin-bottom: 0; box-shadow: var(--elev-2); max-height: calc(100vh - 8rem); overflow: auto; }
+
+/* What is running, when anything is: one line while the router is idle. */
+.strip { margin-bottom: var(--space-4); }
+.strip .idle { margin: 0; color: var(--muted); font-size: var(--text-sm); display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* The day a run of rows belongs to, said once. */
+tr.daybar td { background: var(--sunken); color: var(--muted); font-size: var(--text-xs); font-weight: 600; padding: var(--space-1) var(--space-2); }
+
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-2); }
 .card {
   border: 1px solid var(--line);
@@ -306,7 +321,11 @@ tr.attempt td { color: var(--muted); }
 tr.attempt td:first-child { box-shadow: inset 2px 0 var(--line); padding-left: var(--space-5); }
 td .sub { color: var(--faint); font-size: var(--text-xs); }
 /* A reason beside its badge: one line, however long the backend made it. */
-td .sub.one-line { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td .sub.one-line { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A model id is full of hyphens, so a narrow column would break it into a
+   column of syllables; the table scrolls instead. */
+td.model { min-width: 11rem; }
+td.model .sub { white-space: nowrap; }
 .nowrap { white-space: nowrap; }
 /* break-word, not anywhere: a long value widens its table, which scrolls,
    instead of squeezing the column to one character. */
@@ -463,6 +482,12 @@ summary .size { margin-left: auto; flex: none; color: var(--faint); font-size: v
 .block-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); margin-bottom: var(--space-1); }
 h4 { font-size: var(--text-sm); margin: var(--space-2) 0 var(--space-1); color: var(--muted); }
 img.thumb { display: block; max-width: min(100%, 320px); max-height: 240px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+
+@media (max-width: 1100px) {
+  .master.open { grid-template-columns: minmax(0, 1fr); }
+  .master > .detail { position: static; }
+  .master > .detail > section.panel { max-height: none; }
+}
 
 @media (max-width: 800px) {
   .inspect { grid-template-columns: 1fr; }

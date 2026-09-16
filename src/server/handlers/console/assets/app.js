@@ -766,9 +766,10 @@ function requests(view, selected) {
   const filter = h("input", { type: "text", placeholder: "Filter by model, backend, id or status", value: state.requestsFilter });
   const errorsOnly = h("input", { type: "checkbox" });
   errorsOnly.checked = state.errorsOnly;
-  const inFlight = h("div");
+  const inFlight = h("div", { class: "strip" });
   const recent = h("div");
-  const detail = h("div");
+  const detail = h("aside", { class: "detail" });
+  const master = h("div", { class: "master" });
   let data = null;
 
   const draw = () => {
@@ -780,36 +781,53 @@ function requests(view, selected) {
       return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
-    rerender(inFlight, table(
-      ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
-      data.in_flight.filter(matches).map((v) =>
-        openRow({ class: "clickable", "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
-          h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub mono" }, v.id)),
-          h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
-          h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
-          h("td", null, statusBadge(v.status)),
-          h("td", { class: "num" }, since(v.received_at, "ms")),
-          h("td", { class: "num" }, v.ttfb_ms === null ? h("span", { class: "muted" }, "waiting") : fmt.ms(v.ttfb_ms)),
-          h("td", { class: "num" }, fmt.bytes(v.bytes)))),
-      { empty: "No request in flight." }));
+    const running = data.in_flight.filter(matches);
+    // Nothing in flight is the usual state, and a table header over an empty
+    // row is a third of the first screen spent saying so.
+    rerender(inFlight, running.length
+      ? table(
+        ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
+        running.map((v) =>
+          openRow({ class: "clickable", "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
+            h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub mono" }, v.id)),
+            h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
+            h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
+            h("td", null, statusBadge(v.status)),
+            h("td", { class: "num" }, since(v.received_at, "ms")),
+            h("td", { class: "num" }, v.ttfb_ms === null ? h("span", { class: "muted" }, "waiting") : fmt.ms(v.ttfb_ms)),
+            h("td", { class: "num" }, fmt.bytes(v.bytes)))))
+      : h("p", { class: "idle" }, badge("idle", "ok"), " Nothing in flight.",
+        data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null));
+
+    const rows = [];
+    let day = null;
+    for (const v of data.recent.filter(matches)) {
+      // A clock alone is ambiguous once the router has run past midnight, and
+      // a date on every row is the same date seventeen times.
+      const at = new Date(v.received_at).toDateString();
+      if (at !== day) {
+        day = at;
+        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 9 }, dayLabel(v.received_at))));
+      }
+      rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
+        h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub" }, rel(v.received_at))),
+        h("td", { class: "mono model" }, modelCell(v), pathNote(v),
+          v.source === "console" ? h("div", null, kindBadge("console")) : null),
+        h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
+        h("td", null, statusBadge(v.status), v.attempts > 1 ? [" ", attemptsCell(v.attempts)] : null),
+        h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
+        h("td", { class: "num" }, fmt.ms(v.duration_ms)),
+        h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
+          v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
+        h("td", { class: "num" }, v.usage ? fmt.int(v.usage.cache_read) : "–",
+          cacheShare(v) ? h("div", { class: "sub" }, cacheShare(v)) : null),
+        h("td", null, outcomeBadge(v),
+          v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
+          v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null)));
+    }
     rerender(recent, table(
-      ["Time", "Model", "Backend / upstream", "Status", "Attempts", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
-      data.recent.filter(matches).map((v) =>
-        openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
-          h("td", { class: "nowrap" }, fmt.clock(v.received_at),
-            h("div", { class: "sub" }, v.source === "console" ? kindBadge("console") : v.peer || "")),
-          h("td", { class: "mono wrap-anywhere" }, modelCell(v), pathNote(v)),
-          h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
-          h("td", null, statusBadge(v.status)),
-          h("td", { class: "num" }, attemptsCell(v.attempts)),
-          h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
-          h("td", { class: "num" }, fmt.ms(v.duration_ms)),
-          h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
-            v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
-          h("td", { class: "num" }, v.usage ? fmt.int(v.usage.cache_read) : "–"),
-          h("td", null, outcomeBadge(v),
-            v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
-            v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null))),
+      ["Time", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
+      rows,
       { empty: "No finished request since the router started." }));
   };
 
@@ -828,24 +846,60 @@ function requests(view, selected) {
       in_flight: fresh.in_flight.map(({ elapsed_ms, ...rest }) => rest),
       recent: fresh.recent,
     });
+    // An exchange still running keeps changing, so its detail is read again
+    // with the list rather than frozen at the moment it was opened.
+    if (selected && data && data.in_flight.some((v) => v.id === selected)) showRequest(detail, selected, false);
     if (signature === drawn) return;
     drawn = signature;
     data = fresh;
     draw();
+    if (selected) showRequest(detail, selected, false);
   };
   filter.addEventListener("input", () => { state.requestsFilter = filter.value; draw(); });
   errorsOnly.addEventListener("change", () => { state.errorsOnly = errorsOnly.checked; draw(); });
 
-  view.append(
-    detail,
-    panel("In flight", null, inFlight),
+  replace(master,
     panel("Recent", h("span", { class: "muted" }, "newest first; kept in memory until restart"),
       h("div", { class: "controls" }, filter, h("label", null, errorsOnly, " Errors only")),
-      recent));
+      recent),
+    detail);
+  view.append(inFlight, master);
+
+  /// Opens `id` beside the list, or closes what is open for null. The list
+  /// stays where it is: a detail drawn above it sent every click back to the
+  /// top of the page.
+  const open = (id) => {
+    selected = id;
+    draw();
+    master.classList.toggle("open", Boolean(id));
+    if (id) showRequest(detail, id, true);
+    else replace(detail);
+  };
+
   const refresh = polled(recent, load);
   refresh();
   every(2000, refresh);
-  if (selected) showRequest(detail, selected);
+  open(selected);
+  return open;
+}
+
+/// "Today", "Yesterday", or the date.
+function dayLabel(at) {
+  const day = new Date(at);
+  const today = new Date(serverNow());
+  const days = Math.round((today.setHours(0, 0, 0, 0) - new Date(day).setHours(0, 0, 0, 0)) / 86400000);
+  const date = day.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  if (days === 0) return `Today — ${date}`;
+  if (days === 1) return `Yesterday — ${date}`;
+  return date;
+}
+
+/// How much of the prompt the backend read from its cache, which is the
+/// number the raw count is usually being compared against.
+function cacheShare(v) {
+  if (!v.usage) return null;
+  const prompt = v.usage.input + v.usage.cache_read + v.usage.cache_creation;
+  return prompt ? fmt.pct(v.usage.cache_read / prompt) : null;
 }
 
 /// Everything but a Messages request says what it was.
@@ -860,14 +914,14 @@ function modelCell(v) {
   return [v.requested_model, h("div", { class: "sub" }, `→ ${v.model} (${v.matched})`)];
 }
 
-async function showRequest(target, id) {
+async function showRequest(target, id, scroll) {
   await guarded(target, async () => {
     const v = await api(`/api/requests/${encodeURIComponent(id)}`);
     const close = h("button", { type: "button", class: "small", onclick: () => go("requests") }, "Close");
     const recording = v.recording
       ? h("button", { type: "button", class: "small", onclick: () => go("recordings", v.recording) }, "Open recording")
       : null;
-    replace(target, panel(`Request ${v.id}`, [recording, close],
+    rerender(target, panel(`Request ${v.id}`, [recording, close],
       h("dl", { class: "facts" },
         fact("Received", `${fmt.time(v.received_at)} from ${v.peer || "–"}${v.source === "console" ? " (console test)" : ""}`),
         fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
@@ -886,7 +940,7 @@ async function showRequest(target, id) {
       v.hints.length ? [h("h3", null, "Hints"), v.hints.map((hint) =>
         h("div", { class: "hint" }, hint.summary, hint.snippet ? snippet(hint.snippet) : null))] : null,
       v.error_body ? [h("h3", null, "Upstream error body"), h("pre", null, prettyJson(v.error_body))] : null));
-    target.scrollIntoView({ block: "nearest" });
+    if (scroll) target.scrollIntoView({ block: "nearest" });
   });
 }
 
