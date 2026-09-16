@@ -4,8 +4,6 @@
 // sections or as its files exactly as recorded. Loaded before app.js; it only
 // defines functions, which use app.js's helpers when they run.
 
-/// Rows the list draws at first, and adds per "Show more".
-const LIST_PAGE = 100;
 /// Requests this far apart are never one request tried again.
 const RETRY_WINDOW_MS = 10 * 60 * 1000;
 /// Past this many characters a recorded response is folded only for the view

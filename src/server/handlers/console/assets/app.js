@@ -13,6 +13,11 @@ const TABS = [
   ["recordings", "Recordings"],
 ];
 
+/// Rows a list draws at first, and adds per "Show more". Enough to see what
+/// the router has been doing without a page nine screens long; the filter is
+/// how a list of hundreds is searched, not the scrollbar.
+const LIST_PAGE = 25;
+
 const state = {
   token: null,
   status: null,
@@ -780,6 +785,9 @@ function requests(view, selected) {
   const detail = h("aside", { class: "detail" });
   const master = h("div", { class: "master" });
   let data = null;
+  /// Rows the table draws, kept across the two-second poll so a refresh does
+  /// not fold back what the reader asked to see.
+  let shown = LIST_PAGE;
 
   const draw = () => {
     if (!data) return;
@@ -810,7 +818,8 @@ function requests(view, selected) {
 
     const rows = [];
     let day = null;
-    for (const v of data.recent.filter(matches)) {
+    const matching = data.recent.filter(matches);
+    for (const v of matching.slice(0, shown)) {
       // A clock alone is ambiguous once the router has run past midnight, and
       // a date on every row is the same date seventeen times.
       const at = new Date(v.received_at).toDateString();
@@ -834,10 +843,15 @@ function requests(view, selected) {
           v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
           v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null)));
     }
+    const hidden = matching.length - Math.min(shown, matching.length);
+    const more = h("button", { type: "button", class: "small" },
+      `Show ${fmt.int(Math.min(LIST_PAGE, hidden))} more of ${fmt.int(hidden)} not shown`);
+    more.addEventListener("click", () => { shown += LIST_PAGE; draw(); });
     rerender(recent, table(
       ["Time", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
       rows,
-      { empty: "No finished request since the router started." }));
+      { empty: "No finished request since the router started." }),
+      hidden ? h("p", { class: "note" }, more) : null);
   };
 
   let drawn = null;
@@ -864,8 +878,8 @@ function requests(view, selected) {
     draw();
     if (selected) showRequest(detail, selected, false);
   };
-  filter.addEventListener("input", () => { state.requestsFilter = filter.value; draw(); });
-  errorsOnly.addEventListener("change", () => { state.errorsOnly = errorsOnly.checked; draw(); });
+  filter.addEventListener("input", () => { state.requestsFilter = filter.value; shown = LIST_PAGE; draw(); });
+  errorsOnly.addEventListener("change", () => { state.errorsOnly = errorsOnly.checked; shown = LIST_PAGE; draw(); });
 
   replace(master,
     panel("Recent", h("span", { class: "muted" }, "newest first; kept in memory until restart"),
