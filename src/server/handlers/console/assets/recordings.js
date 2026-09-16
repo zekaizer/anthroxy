@@ -155,19 +155,10 @@ function recordings(view, opened) {
         if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
       }
     });
-    // A row opens a recording, so it is reachable and operable by keyboard;
-    // the buttons inside it keep their own handling.
-    const tr = h("tr", {
+    const tr = openRow({
       class: `clickable ${e.name === opened ? "selected" : ""}`,
-      tabindex: 0,
       "aria-label": `Recording ${e.request_id}`,
-      onclick: () => go("recordings", e.name),
-      onkeydown: (event) => {
-        if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
-        event.preventDefault();
-        go("recordings", e.name);
-      },
-    },
+    }, () => go("recordings", e.name),
       h("td", { class: "nowrap" }, fmt.time(e.at)),
       h("td", { class: "prompt-cell" },
         entryPrompt(e),

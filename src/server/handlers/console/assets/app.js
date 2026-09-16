@@ -144,6 +144,22 @@ function table(headers, rows, options = {}) {
   return h("div", { class: "table-wrap" }, h("table", null, h("thead", null, head), h("tbody", null, body)));
 }
 
+/// A row that opens something: reachable and operable by keyboard, with the
+/// buttons inside it keeping their own handling.
+function openRow(props, open, ...cells) {
+  const tr = h("tr", {
+    ...props,
+    tabindex: 0,
+    onclick: open,
+    onkeydown: (event) => {
+      if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      open();
+    },
+  }, cells);
+  return tr;
+}
+
 /// What something is doing or how it ended.
 function badge(text, kind) {
   return h("span", { class: `badge state ${kind || ""}` }, text);
@@ -439,7 +455,21 @@ async function renderShell() {
       h("span", { class: "spacer" }),
       signOutButton),
     header.nav);
-  const main = h("main", { id: "view" });
+  // The roles above promise the tab pattern; these keys are the rest of it.
+  // One tab is in the tab order and the arrows move between them, as a screen
+  // reader announcing a tablist tells its user they will.
+  header.nav.addEventListener("keydown", (event) => {
+    const moves = { ArrowLeft: -1, ArrowRight: 1, Home: -TABS.length, End: TABS.length };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    const at = TABS.findIndex(([id]) => id === state.tab);
+    const next = Math.min(TABS.length - 1, Math.max(0, at + moves[event.key]));
+    // The hash change rebuilds the tabs, so the focus has to wait for it or it
+    // lands on a button that is about to be replaced.
+    focusTabAfterRoute = true;
+    go(TABS[next][0]);
+  });
+  const main = h("main", { id: "view", role: "tabpanel" });
   root.replaceChildren(top, main);
   // Tabs read the model list from the first status, so it comes first.
   await refreshHeader();
@@ -470,6 +500,9 @@ function go(tab, arg) {
 /// tabs that return one.
 const retargets = new WeakMap();
 
+/// Set when the arrow keys chose the tab, so the new one takes the focus.
+let focusTabAfterRoute = false;
+
 function route() {
   if (!state.token) return;
   const [hashTab, hashArg] = location.hash.slice(1).split("/");
@@ -488,9 +521,18 @@ function route() {
     h("button", {
       type: "button",
       role: "tab",
+      id: `tab-${id}`,
+      "aria-controls": "view",
       "aria-selected": id === state.tab ? "true" : "false",
+      // Roving: the tablist holds one tab stop, and the arrows move within it.
+      tabindex: id === state.tab ? 0 : -1,
       onclick: () => go(id),
     }, label)));
+  view.setAttribute("aria-labelledby", `tab-${state.tab}`);
+  if (focusTabAfterRoute) {
+    focusTabAfterRoute = false;
+    header.nav.children[TABS.findIndex(([id]) => id === state.tab)].focus();
+  }
   clearTimers();
   document.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
   state.reloadNotice = null;
@@ -679,7 +721,7 @@ function requests(view, selected) {
     rerender(inFlight, table(
       ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
       data.in_flight.filter(matches).map((v) =>
-        h("tr", { class: "clickable", onclick: () => go("requests", v.id) },
+        openRow({ class: "clickable", "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
           h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub mono" }, v.id)),
           h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
           h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
@@ -691,7 +733,7 @@ function requests(view, selected) {
     rerender(recent, table(
       ["Time", "Model", "Backend / upstream", "Status", "Attempts", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
       data.recent.filter(matches).map((v) =>
-        h("tr", { class: `clickable ${v.id === selected ? "selected" : ""}`, onclick: () => go("requests", v.id) },
+        openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
           h("td", { class: "nowrap" }, fmt.clock(v.received_at),
             h("div", { class: "sub" }, v.source === "console" ? kindBadge("console") : v.peer || "")),
           h("td", { class: "mono wrap-anywhere" }, modelCell(v), pathNote(v)),
