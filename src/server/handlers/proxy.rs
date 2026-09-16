@@ -33,8 +33,8 @@ use crate::text::short;
 use crate::translate;
 use crate::upstream::{
     SecretView, UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL,
-    X_ROUTER_UPSTREAM_MODEL, header_value, is_event_stream, response_headers, sent_headers,
-    upstream_headers,
+    X_ROUTER_UPSTREAM_MODEL, dropped_headers, header_value, is_event_stream, response_headers,
+    sent_headers, upstream_headers,
 };
 
 pub async fn proxy(
@@ -404,6 +404,7 @@ fn request_record(
             body.len(),
             SecretView::Redacted,
         ),
+        dropped_headers: dropped_headers(client_headers, &route.backend),
         session: client_headers
             .get(SESSION_ID)
             .and_then(|value| value.to_str().ok())

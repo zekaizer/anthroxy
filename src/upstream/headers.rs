@@ -49,18 +49,9 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// list. An `openai` backend gets no `anthropic-version` or `anthropic-beta`
 /// at all (ADR-0010).
 pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
-    let anthropic = backend.kind == BackendKind::Anthropic;
     let mut out = HeaderMap::with_capacity(client.len() + backend.headers.len() + 1);
     for (name, value) in client {
-        if is_hop_by_hop(name)
-            || *name == HOST
-            || *name == CONTENT_LENGTH
-            || *name == AUTHORIZATION
-            || *name == X_API_KEY
-            || *name == ACCEPT_ENCODING
-            || (!anthropic && (*name == ANTHROPIC_VERSION || *name == ANTHROPIC_BETA))
-            || backend.drop_headers.matches(name)
-        {
+        if dropped(name, backend).is_some() {
             continue;
         }
         out.append(name.clone(), value.clone());
@@ -98,6 +89,88 @@ fn merge_beta<'a>(existing: impl IntoIterator<Item = &'a HeaderValue>, extra: &[
         }
     }
     flags.join(",")
+}
+
+/// Why a header the client sent does not reach the backend. A backend's
+/// configuration decides [`DropReason::DropHeaders`], [`DropReason::Overridden`]
+/// and, through its `kind`, [`DropReason::BackendKind`]; the rest follow from
+/// what the router is and happen to every request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DropReason {
+    /// Hop-by-hop, `host` or `content-length`: the HTTP client owns them.
+    Framing,
+    /// The client's own `authorization`/`x-api-key`, replaced by the backend
+    /// credential.
+    ClientCredential,
+    /// `accept-encoding`: bodies are relayed and logged uncompressed.
+    Uncompressed,
+    /// `anthropic-version`/`anthropic-beta` on an `openai` backend (ADR-0010).
+    BackendKind,
+    /// The backend's `drop_headers`.
+    DropHeaders,
+    /// The backend's `headers` set this name, which replaces every value the
+    /// client sent under it.
+    Overridden,
+}
+
+/// Whether the client's `name` reaches `backend`, and why not.
+fn dropped(name: &HeaderName, backend: &Backend) -> Option<DropReason> {
+    if is_hop_by_hop(name) || *name == HOST || *name == CONTENT_LENGTH {
+        return Some(DropReason::Framing);
+    }
+    if *name == AUTHORIZATION || *name == X_API_KEY {
+        return Some(DropReason::ClientCredential);
+    }
+    if *name == ACCEPT_ENCODING {
+        return Some(DropReason::Uncompressed);
+    }
+    if backend.kind != BackendKind::Anthropic
+        && (*name == ANTHROPIC_VERSION || *name == ANTHROPIC_BETA)
+    {
+        return Some(DropReason::BackendKind);
+    }
+    backend
+        .drop_headers
+        .matches(name)
+        .then_some(DropReason::DropHeaders)
+}
+
+/// One header the client sent that the backend never sees.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DroppedHeader {
+    pub name: String,
+    pub value: String,
+    pub reason: DropReason,
+}
+
+/// Every value the client sent that the backend does not see: what
+/// [`upstream_headers`] filters out, and what its `headers` overwrite. Values
+/// are the client's own and are shown as sent, except its credential, which
+/// is the router's token and is of no use to any report.
+pub fn dropped_headers(client: &HeaderMap, backend: &Backend) -> Vec<DroppedHeader> {
+    let mut out: Vec<DroppedHeader> = Vec::new();
+    for (name, value) in client {
+        let reason = match dropped(name, backend) {
+            Some(reason) => reason,
+            // `anthropic_beta` merges the client's flags in rather than
+            // replacing them, so a beta header the backend adds to is not one
+            // it overrode.
+            None if backend.headers.contains_key(name) => DropReason::Overridden,
+            None => continue,
+        };
+        let value = match reason {
+            DropReason::ClientCredential => REDACTED.to_owned(),
+            _ => header_text(value).to_owned(),
+        };
+        out.push(DroppedHeader {
+            name: name.to_string(),
+            value,
+            reason,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// One request header as a report shows it, with where its value came from.

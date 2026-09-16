@@ -4,6 +4,7 @@ use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
 use crate::config::{BackendConfig, BackendKind, CredentialConfig, UpstreamConfig};
+use crate::upstream::{DropReason, dropped_headers};
 
 fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
     backend_of_kind(BackendKind::Anthropic, beta, headers)
@@ -149,6 +150,65 @@ fn the_claude_code_preset_drops_what_claude_code_adds() {
         out["user-agent"], "claude-cli/2.0",
         "the preset leaves user-agent alone"
     );
+}
+
+#[test]
+fn every_header_the_backend_does_not_see_says_why() {
+    let mut client = client_headers();
+    client.append("x-app", HeaderValue::from_static("cli"));
+    let backend = Backend::from_config(
+        "b",
+        &BackendConfig {
+            kind: BackendKind::OpenAi,
+            url: "http://backend".into(),
+            models_path: BackendConfig::default_models_path(),
+            credential: CredentialConfig::None,
+            headers: [("x-app".to_owned(), "gateway".to_owned())].into(),
+            anthropic_beta: Vec::new(),
+            drop_headers: vec!["x-stainless-*".into()],
+            drop_fields: Vec::new(),
+            proxy: None,
+        },
+    )
+    .unwrap();
+
+    let dropped = dropped_headers(&client, &backend);
+    let reason = |name: &str| {
+        dropped
+            .iter()
+            .find(|h| h.name == name)
+            .map(|h| (h.value.as_str(), h.reason))
+            .unwrap_or_else(|| panic!("{name} not reported: {dropped:?}"))
+    };
+    assert_eq!(reason("host").1, DropReason::Framing);
+    assert_eq!(reason("content-length").1, DropReason::Framing);
+    assert_eq!(reason("connection").1, DropReason::Framing);
+    assert_eq!(reason("accept-encoding").1, DropReason::Uncompressed);
+    assert_eq!(reason("anthropic-version").1, DropReason::BackendKind);
+    assert_eq!(reason("anthropic-beta").1, DropReason::BackendKind);
+    assert_eq!(reason("x-stainless-retry-count").1, DropReason::DropHeaders);
+    assert_eq!(
+        reason("x-app"),
+        ("cli", DropReason::Overridden),
+        "the client's value is gone, and it is the client's value that is shown"
+    );
+    assert_eq!(
+        reason("authorization"),
+        ("<redacted>", DropReason::ClientCredential)
+    );
+    assert_eq!(reason("x-api-key").0, "<redacted>");
+
+    // Together the two reports are every header the client sent. A name the
+    // backend forces is in the upstream map carrying the backend's value, so
+    // it only counts as forwarded when the backend left it alone.
+    let sent = upstream_headers(&client, &backend);
+    for name in client.keys() {
+        let forwarded = sent.contains_key(name) && !backend.headers.contains_key(name);
+        assert!(
+            forwarded || dropped.iter().any(|h| h.name == name.as_str()),
+            "{name} is in neither report"
+        );
+    }
 }
 
 #[test]

@@ -8,8 +8,11 @@
 const LIST_PAGE = 100;
 /// Requests this far apart are never one request tried again.
 const RETRY_WINDOW_MS = 10 * 60 * 1000;
-/// Displays at most this much of a recorded file as raw text.
-const SHOWN_BYTES = 2 * 1024 * 1024;
+/// Past this many characters a recorded response is folded only for the view
+/// that shows it, not for the summary above it.
+const SUMMARY_FOLD_CHARS = 1024 * 1024;
+/// Characters of a recorded file the raw view draws at most.
+const SHOWN_CHARS = 2 * 1024 * 1024;
 /// Messages after the last prompt up to this size start unfolded.
 const OPEN_BYTES = 4 * 1024;
 /// Earlier recordings of the same session a request is compared with, nearest
@@ -101,7 +104,9 @@ function recordings(view, opened) {
       show(folded[0].hidden);
     });
     draw();
-    lead.querySelector("td.prompt-cell .sub").append(" · ", toggle);
+    // The facts line, not the prompt above it: that one is clipped to a line,
+    // which would hide the toggle for an entry that shows a step.
+    lead.querySelector("td.prompt-cell .sub.entry-facts").append(" · ", toggle);
     for (const e of repeats) reveals.set(e.name, () => show(true));
     return [lead, ...folded];
   };
@@ -115,6 +120,12 @@ function recordings(view, opened) {
     const open = new Map();
     const out = [];
     for (const e of entries) {
+      // Without a session there is nothing saying one client sent both, and
+      // two clients asking the same thing are not one request tried again.
+      if (!e.session) {
+        out.push([e]);
+        continue;
+      }
       const id = key(e);
       const group = open.get(id);
       if (group && Math.abs(new Date(group[group.length - 1].at) - new Date(e.at)) <= RETRY_WINDOW_MS) {
@@ -139,14 +150,28 @@ function recordings(view, opened) {
         await load();
         if (opened === e.name) go("recordings");
       } catch (error) {
+        // The row survives a failed delete, so it takes another click.
+        remove.disabled = false;
         if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
       }
     });
-    const tr = h("tr", { class: `clickable ${e.name === opened ? "selected" : ""}`, onclick: () => go("recordings", e.name) },
+    // A row opens a recording, so it is reachable and operable by keyboard;
+    // the buttons inside it keep their own handling.
+    const tr = h("tr", {
+      class: `clickable ${e.name === opened ? "selected" : ""}`,
+      tabindex: 0,
+      "aria-label": `Recording ${e.request_id}`,
+      onclick: () => go("recordings", e.name),
+      onkeydown: (event) => {
+        if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        go("recordings", e.name);
+      },
+    },
       h("td", { class: "nowrap" }, fmt.time(e.at)),
       h("td", { class: "prompt-cell" },
         entryPrompt(e),
-        h("div", { class: "sub" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; refilter(); }))),
+        h("div", { class: "sub entry-facts" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; refilter(); }))),
       h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
       h("td", null, statusBadge(e.status)),
       h("td", null, entryOutcome(e)),
@@ -168,12 +193,14 @@ function recordings(view, opened) {
     const entries = shown();
     const more = h("button", { type: "button", class: "small" });
     const moreLine = h("p", { class: "note" }, more);
+    // A group is one row with its attempts; both counts are in groups, so
+    // "50 more" adds 50 rows.
     const label = () => {
       moreLine.hidden = limit >= grouped.length;
-      replace(more, `Show ${Math.min(LIST_PAGE, grouped.length - limit)} more of ${grouped.length - limit} not shown`);
+      replace(more, `Show ${fmt.int(Math.min(LIST_PAGE, grouped.length - limit))} more of ${fmt.int(grouped.length - limit)} not shown`);
     };
     const grouped = groups(entries);
-    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["Size", "num"], ""], grouped.slice(0, limit).flatMap(groupRows),
+    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["On disk", "num"], ""], grouped.slice(0, limit).flatMap(groupRows),
       { empty: needle ? "No recording matches." : "No recording yet." });
     more.addEventListener("click", () => {
       append(drawn.querySelector("tbody"), grouped.slice(limit, limit + LIST_PAGE).flatMap(groupRows));
@@ -181,9 +208,13 @@ function recordings(view, opened) {
       label();
     });
     label();
+    // The rows can be fewer than the recordings twice over, so both say so.
+    const folded = entries.length - grouped.length;
     replace(list,
       h("p", { class: "note" }, `${fmt.int(data.total)} recording(s) in `, h("code", null, data.dir), `, ${kept(data.retention)}. They hold whole conversations.`,
-        data.total > data.entries.length ? ` The newest ${fmt.int(data.entries.length)} are listed.` : ""),
+        data.total > data.entries.length ? ` The newest ${fmt.int(data.entries.length)} are listed.` : "",
+        needle ? ` ${fmt.int(entries.length)} match(es) the filter.` : "",
+        folded ? ` ${fmt.int(folded)} grouped under a later attempt.` : ""),
       drawn,
       moreLine);
   };
@@ -191,9 +222,6 @@ function recordings(view, opened) {
     limit = LIST_PAGE;
     draw();
   };
-  // Whether the entry named in the hash was opened once the list arrived.
-  let openedShown = false;
-
   // A box per opening, so an earlier opening still loading fills nothing shown.
   const open = (name) => {
     rows.get(opened)?.classList.remove("selected");
@@ -203,7 +231,6 @@ function recordings(view, opened) {
     const box = h("div");
     replace(inspector, box);
     if (!opened || !data) return;
-    openedShown = true;
     // Newer and older follow the list as filtered, or the whole list when
     // the filter hides the opened entry.
     const filtered = shown();
@@ -215,7 +242,10 @@ function recordings(view, opened) {
   const load = async () => {
     data = await api("/api/recordings");
     draw();
-    if (opened && !openedShown) open(opened);
+    // Every load rebuilds the rows, so the open recording is opened again:
+    // its row is re-selected, an attempt it folds under is revealed, and what
+    // it shows is read from the entry as it now stands.
+    if (opened) open(opened);
   };
 
   let typing = null;
@@ -232,8 +262,13 @@ function recordings(view, opened) {
     removeAll.disabled = true;
     try {
       const result = await api("/api/recordings", { method: "DELETE" });
-      replace(inspector, banner(`Deleted ${result.removed} recording(s).`, "info"));
+      // Closed first: the open recording is one of the deleted ones, and a
+      // reload would otherwise open it again to say it is not there.
+      open(null);
+      history.replaceState(null, "", "#recordings");
+      state.arg = null;
       await load();
+      replace(inspector, banner(`Deleted ${result.removed} recording(s).`, "info"));
     } catch (error) {
       if (!(error instanceof SignedOut)) replace(inspector, banner(error.message));
     } finally {
@@ -248,19 +283,24 @@ function recordings(view, opened) {
   return open;
 }
 
-/// How the entry ended, as the Requests tab judges it: a recorded relay that
-/// finished still failed the request when the status did. An upstream failure
-/// keeps its reason on one line; the inspector has it in full.
+/// How a recording ended: a relay that finished still failed the request when
+/// the status did. The list and the open recording read it the same way.
+function recordedOutcome(m) {
+  if (m.unreadable) return badge("unreadable", "warn");
+  if (!m.outcome) return badge("in progress", "info");
+  if (m.outcome.startsWith(UPSTREAM_ERROR)) return badge("error", "err");
+  if (m.outcome === "client_disconnected") return badge("client left", "warn");
+  if (m.status >= 400) return badge("error", "err");
+  if (m.outcome === "complete") return badge("complete", "ok");
+  return badge(m.outcome, "err");
+}
+
+/// The badge, plus an upstream failure's reason on one line; the open
+/// recording has it in full.
 function entryOutcome(e) {
-  if (!e.outcome) return h("span", { class: "muted" }, "in progress");
-  if (e.outcome.startsWith(UPSTREAM_ERROR)) {
-    const reason = e.outcome.slice(UPSTREAM_ERROR.length).trim();
-    return [badge("error", "err"), h("div", { class: "sub one-line", title: reason }, reason)];
-  }
-  if (e.outcome === "client_disconnected") return badge("client left", "warn");
-  if (e.status >= 400) return badge("error", "err");
-  if (e.outcome === "complete") return badge("complete", "ok");
-  return badge(e.outcome, "err");
+  if (!e.outcome || !e.outcome.startsWith(UPSTREAM_ERROR)) return recordedOutcome(e);
+  const reason = e.outcome.slice(UPSTREAM_ERROR.length).trim();
+  return [recordedOutcome(e), h("div", { class: "sub one-line", title: reason }, reason)];
 }
 
 /// The entry's prompt; for a later request of a turn, what it sends with the
@@ -282,7 +322,7 @@ function entryFacts(e, filterBy) {
       class: "link small mono",
       title: `Show only session ${e.session}`,
       onclick: (event) => { event.stopPropagation(); filterBy(e.session); },
-    }, `session ${e.session.slice(0, 8)}`));
+    }, `session ${e.session.length > 8 ? `${e.session.slice(0, 8)}…` : e.session}`));
   }
   if (e.stream !== null && e.stream !== undefined) facts.push(e.stream ? "stream" : "whole response");
   if (e.path && !/^\/v1\/(messages|chat\/completions)(\?|$)/.test(e.path)) facts.push(h("span", { class: "mono" }, e.path));
@@ -296,6 +336,12 @@ function entryFacts(e, filterBy) {
 /// tried. `neighbors` holds the listed entries just `newer` and `older`;
 /// `listed` is the whole list, where earlier requests of the session are found.
 async function inspect(target, name, files, neighbors, listed) {
+  // Find text belongs to the recording it was typed in: carried into another
+  // one it hides everything and reads as a recording with nothing in it.
+  if (state.inspected !== name) {
+    state.requestFind = "";
+    state.inspected = name;
+  }
   await guarded(target, async () => {
     const responses = (files || RESPONSE_FILES).filter((file) => file.startsWith("response."));
     const [meta, request, response] = await Promise.all([
@@ -316,7 +362,12 @@ async function inspect(target, name, files, neighbors, listed) {
       parsed: {},
     };
     if (exchange.meta instanceof Error) exchange.meta = null;
-    exchange.dialect = dialectOf(exchange.meta && exchange.meta.path);
+    // The body is read only when there is no path to go by: parsing a large
+    // `request.json` is what the Request view is for.
+    const recorded = exchange.meta && exchange.meta.path;
+    exchange.dialect = recorded
+      ? dialectOf(recorded)
+      : dialectOf(null, request ? parseJson(request.text) : null);
     const session = exchange.meta && exchange.meta.session;
     exchange.earlier = session
       ? listed.filter((e) => e.session === session && e.name < name && e.path === exchange.meta.path).slice(0, COMPARED)
@@ -325,7 +376,11 @@ async function inspect(target, name, files, neighbors, listed) {
     const partSwitch = h("span", { class: "segmented", role: "group", "aria-label": "File" });
     const viewSwitch = h("span", { class: "segmented", role: "group", "aria-label": "View" });
     const body = h("div");
+    const facts = h("div");
     const draw = () => {
+      // The summary too: a big response is folded for the view that shows
+      // it, and the tokens it then knows belong up here.
+      replace(facts, summaryFacts(exchange));
       replace(partSwitch, PARTS.map(([id, label]) =>
         h("button", { type: "button", "aria-pressed": state.recordingPart === id ? "true" : "false", onclick: () => { state.recordingPart = id; draw(); } }, label)));
       replace(viewSwitch, VIEWS.map(([id, label]) =>
@@ -342,7 +397,7 @@ async function inspect(target, name, files, neighbors, listed) {
     }, label);
     const title = exchange.meta ? exchange.meta.request_id : name;
     replace(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
-      summaryFacts(exchange),
+      facts,
       h("div", { class: "controls" }, partSwitch, viewSwitch),
       body));
     draw();
@@ -351,8 +406,17 @@ async function inspect(target, name, files, neighbors, listed) {
 }
 
 /// The request format an upstream path speaks.
-function dialectOf(path) {
-  return String(path || "").startsWith("/v1/chat/completions") ? "openai" : "anthropic";
+/// Which wire format the recorded files are in. `meta.json` names the path
+/// the router sent; without it the body says, since a Chat Completions
+/// request is the only one carrying `messages[].tool_calls` or a `tools[]`
+/// whose entries wrap a `function`. Guessing wrong reads an `openai`
+/// recording as Anthropic and drops every tool call from the view.
+function dialectOf(path, body) {
+  if (path) return String(path).startsWith("/v1/chat/completions") ? "openai" : "anthropic";
+  const openai = body && typeof body === "object"
+    && ((Array.isArray(body.tools) && body.tools.some((t) => t && t.function))
+      || (Array.isArray(body.messages) && body.messages.some((m) => m && (m.tool_calls || m.role === "tool"))));
+  return openai ? "openai" : "anthropic";
 }
 
 const RESPONSE_FILES = ["response.json", "response.sse", "response.bin"];
@@ -370,7 +434,10 @@ async function firstRecordedFile(name, names) {
 async function recordedFile(name, file) {
   try {
     const res = await api(`/api/recordings/${encodeURIComponent(name)}/${encodeURIComponent(file)}`, { raw: true });
-    return { name: file, text: await res.text() };
+    // The bytes as recorded: a `response.bin` is not UTF-8, and decoding it
+    // for display grows every byte the decoder cannot read into U+FFFD.
+    const bytes = await res.arrayBuffer();
+    return { name: file, text: new TextDecoder().decode(bytes), bytes: bytes.byteLength };
   } catch (error) {
     if (error.status === 404) return null;
     throw error;
@@ -403,26 +470,39 @@ function summaryFacts(exchange) {
   const route = [m.requested_model];
   if (m.model && m.model !== m.requested_model) route.push(`→ ${m.model}`);
   if (m.upstream_model && m.upstream_model !== m.model) route.push(`→ ${m.upstream_model}`);
-  const response = exchange.files.response ? parsedOnce(exchange, "response", () => foldResponse(exchange.files.response, exchange.dialect)) : null;
+  // Folding a recorded stream costs a JSON.parse per event, too much to pay
+  // for one line of a summary; a big one is folded for the view that reads
+  // it, and the tokens wait for that. Once folded it stays folded.
+  const file = exchange.files.response;
+  const foldable = file && file.name !== "response.bin";
+  const read = state.recordingPart === "response" && state.recordingView === "sections";
+  const heavy = foldable
+    && file.text.length > SUMMARY_FOLD_CHARS
+    && !read
+    && !("response" in exchange.parsed);
+  const response = foldable && !heavy ? parsedOnce(exchange, "response", () => foldResponse(file, exchange.dialect)) : null;
   const usage = response && !(response instanceof Error) && response.usage ? usageText(response.usage) : null;
   return h("dl", { class: "facts" },
     fact("Request", `${m.method} ${m.path}${m.stream ? " (stream)" : ""}, ${fmt.time(m.received_at)}`),
     fact("Route", [h("span", { class: "mono" }, route.join(" ")), ` on ${m.backend}`]),
-    fact("Result", [statusBadge(m.status), " ", outcomeBadge(m), m.outcome && m.outcome !== "complete" ? ` ${m.outcome}` : "",
+    fact("Result", [statusBadge(m.status), " ", recordedOutcome(m), m.outcome && m.outcome !== "complete" ? ` ${m.outcome}` : "",
       m.attempts > 1 ? `, ${m.attempts} attempts` : "",
       m.latency_ms !== undefined ? `, headers ${fmt.ms(m.latency_ms)}` : "",
       m.duration_ms !== undefined ? `, total ${fmt.ms(m.duration_ms)}` : ""]),
-    fact("Size", `request ${fmt.bytes(exchange.files.request ? byteSize(exchange.files.request.text) : null)}, response ${fmt.bytes(m.response_bytes)}`),
-    usage ? fact("Tokens", usage) : null);
+    fact("Size", `request ${fmt.bytes(exchange.files.request ? exchange.files.request.bytes : null)}, response ${fmt.bytes(m.response_bytes)}`),
+    usage ? fact("Tokens", usage) : null,
+    heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is read in Sections")) : null);
 }
 
 function rawView(exchange, file) {
   if (!file) return missingFile(exchange);
-  const cut = file.text.length > SHOWN_BYTES;
-  const shown = cut ? file.text.slice(0, SHOWN_BYTES) : file.text;
+  // Cut by characters, said in characters: one byte count for the file is
+  // enough, and a multibyte file would make two of them disagree.
+  const cut = file.text.length > SHOWN_CHARS;
+  const shown = cut ? file.text.slice(0, SHOWN_CHARS) : file.text;
   return [
-    h("p", { class: "note" }, h("code", null, file.name), `, ${fmt.bytes(byteSize(file.text))}, exactly as recorded.`),
-    cut ? banner(`Showing the first ${fmt.bytes(SHOWN_BYTES)} of ${fmt.bytes(file.text.length)}.`, "info") : null,
+    h("p", { class: "note" }, h("code", null, file.name), `, ${fmt.bytes(file.bytes)}, exactly as recorded.`),
+    cut ? banner(`Showing the first ${fmt.int(SHOWN_CHARS)} of ${fmt.int(file.text.length)} characters.`, "info") : null,
     h("pre", null, file.name.endsWith(".json") && !cut ? prettyJson(shown) : shown),
   ];
 }
@@ -452,12 +532,15 @@ function requestView(exchange) {
   const sum = (items) => items.reduce((total, item) => total + item.bytes, 0);
   const matching = (items, needle) => (needle ? items.filter((item) => item.find.includes(needle)) : items);
   const sections = [
-    { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], render: (ctx) => promptSection(doc, prompt, ctx) },
+    // `filters: false`: Find reaches inside both of these, but their items
+    // are counted under Messages, so they show their own count instead of a
+    // second tally of the same hits.
+    { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], filters: false, render: (ctx) => promptSection(doc, prompt, ctx) },
     { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
     { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
     { id: "params", label: "Parameters", count: doc.params.length, items: doc.params, render: (ctx) => paramsSection(matching(doc.params, ctx.needle), ctx) },
-    { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, render: (ctx) => compareSection(exchange, doc, ctx) },
+    { id: "compare", label: "Compared", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
   ];
   const total = sum(doc.messages) + sum(doc.system) + sum(doc.tools) + sum(doc.params) || 1;
   const find = h("input", { type: "text", placeholder: "Find in this request", "aria-label": "Find in the request", value: state.requestFind });
@@ -469,11 +552,13 @@ function requestView(exchange) {
     state.requestSection = id;
     const needle = state.requestFind.trim().toLowerCase();
     const ctx = { ...links, needle, reveal };
-    replace(found, needle ? `${sections.slice(1).reduce((n, s) => n + matching(s.items, needle).length, 0)} matching item(s)` : "");
+    replace(found, needle
+      ? `${sections.reduce((n, s) => n + (s.filters === false ? 0 : matching(s.items, needle).length), 0)} matching item(s)`
+      : "");
     replace(nav, sections.map((s) => {
       const fill = h("span");
       fill.style.width = `${Math.min(100, (sum(s.items) / total) * 100)}%`;
-      const hits = needle ? matching(s.items, needle).length : null;
+      const hits = needle && s.filters !== false ? matching(s.items, needle).length : null;
       return h("button", { type: "button", class: hits === 0 ? "empty" : null, "aria-current": s.id === id ? "true" : null, onclick: () => show(s.id) },
         h("span", { class: "label" }, s.label),
         h("span", { class: "count" }, hits === null ? String(s.count) : `${hits} found`),
@@ -520,12 +605,16 @@ function readRequest(body, dialect) {
       item.find = `${key.toLowerCase()}\n${item.find}`;
       return item;
     });
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  const tools = Array.isArray(body.tools) ? body.tools : [];
+  // A message or a tool the client sent as null is still an entry of the
+  // list; read as `{}` it shows as the empty thing it is, and the rest of
+  // the document still reads.
+  const object = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+  const messages = (Array.isArray(body.messages) ? body.messages : []).map(object);
+  const tools = (Array.isArray(body.tools) ? body.tools : []).map(object);
   if (dialect === "openai") {
     // Chat Completions carries the system text as leading system messages.
     let lead = 0;
-    while (lead < messages.length && messages[lead] && messages[lead].role === "system") lead++;
+    while (lead < messages.length && messages[lead].role === "system") lead++;
     return {
       params,
       system: messages.slice(0, lead).map((m, i) => indexed({ label: `messages[${i}]`, blocks: openaiContent(m.content) }, m)),
@@ -647,7 +736,6 @@ function lastPrompt(messages) {
     const pieces = typedPieces(messages[position].blocks);
     for (const b of messages[position].blocks) {
       if (b.kind !== "text") continue;
-      let at = 0;
       for (const match of [...b.text.matchAll(REMINDER), null]) {
         const typed = pieces.shift();
         if (typed) {
@@ -661,7 +749,6 @@ function lastPrompt(messages) {
           text = inner.slice(QUEUED.length).trim();
           queued = true;
         }
-        at = match.index + match[0].length;
       }
     }
     if (text.trim()) return { position, text: text.trim(), queued };
@@ -969,7 +1056,9 @@ function diffView(now, before, diff, ctx) {
     : `#${now.messages[0].index}–#${now.messages[diff.messages - 1].index} repeat`;
   const newer = now.messages.slice(diff.messages);
   const dropped = before.messages.length - diff.messages;
-  const messageText = [badge(dropped ? "changed" : "extended", dropped ? "warn" : "ok"),
+  // Nothing dropped and nothing new is the same list, not an extension of it.
+  const messageLabel = dropped ? "changed" : newer.length ? "extended" : "same";
+  const messageText = [badge(messageLabel, dropped ? "warn" : "ok"),
     ` ${repeated}, ${newer.length} new`, dropped ? `, ${dropped} of the earlier request's differ or are gone` : ""];
   return [
     h("dl", { class: "facts" },
@@ -1109,6 +1198,10 @@ function contains(text, needle) {
 
 /// `text` with each case-insensitive occurrence of `needle` in a `<mark>`.
 function marked(text, needle) {
+  // A recording holds whatever the client sent: a tool without an `input`, a
+  // name that is a number. Marking is for text, and the rest is shown as it
+  // reads, rather than throwing and taking the whole panel with it.
+  if (typeof text !== "string") return text === undefined || text === null ? "" : String(text);
   if (!needle) return text;
   const lower = text.toLowerCase();
   // Lowercasing that changes length would misplace the marks.
@@ -1145,15 +1238,17 @@ function responseView(exchange) {
   return [
     folded.error ? banner(`${folded.error.type || "error"}: ${folded.error.message || JSON.stringify(folded.error)}`) : null,
     bare ? null : h("dl", { class: "facts" },
-      fact("Stop reason", folded.stop ? h("span", { class: "mono" }, folded.stop) : h("span", { class: "muted" }, "none")),
+      folded.counted ? null : fact("Stop reason", folded.stop ? h("span", { class: "mono" }, folded.stop) : h("span", { class: "muted" }, "none")),
       folded.usage ? fact("Usage", usageText(folded.usage)) : null,
       folded.model ? fact("Model", h("span", { class: "mono" }, folded.model)) : null,
       folded.events ? fact("Events", [...folded.events].map(([type, n]) => `${type} ×${n}`).join(", ")) : null,
-      folded.malformed ? fact("Unreadable frames", String(folded.malformed)) : null),
-    bare ? null : [
+      folded.malformed ? fact("Unreadable frames", String(folded.malformed)) : null,
+      folded.choices > 1 ? fact("Choices", `${folded.choices}; the first is the one the router relayed and the one shown`) : null),
+    bare || folded.counted ? null : [
       h("h3", null, "Content"),
       folded.blocks.length ? folded.blocks.map((b) => blockView(b, NO_CONTEXT)) : h("p", { class: "note" }, "No content."),
     ],
+    folded.counted ? h("p", { class: "note" }, "A token count carries no message.") : null,
   ];
 }
 
@@ -1180,10 +1275,25 @@ function sseData(text) {
   return frames;
 }
 
+/// A content block's index as the key it is kept under: a backend that
+/// numbers a block `0` and its deltas `"0"` means the same block.
+function blockKey(index) {
+  return String(index);
+}
+
 function foldAnthropicStream(frames) {
   const out = { blocks: [], stop: null, usage: null, model: null, error: null, events: new Map(), malformed: 0 };
-  const open = [];
+  // Keyed by the index the stream gives, which is whatever the backend sent:
+  // an array would let one frame ask for four billion slots.
+  const open = new Map();
   for (const frame of frames) {
+    // Some Anthropic-compatible backends end the stream the OpenAI way. It
+    // is not a frame that failed to read, and it is worth seeing that the
+    // backend sends it.
+    if (frame.data.trim() === "[DONE]") {
+      out.events.set("[DONE]", (out.events.get("[DONE]") || 0) + 1);
+      continue;
+    }
     const d = parseJson(frame.data);
     if (d instanceof Error || !d) {
       out.malformed++;
@@ -1194,16 +1304,18 @@ function foldAnthropicStream(frames) {
       out.model = d.message.model || null;
       out.usage = { ...(d.message.usage || {}) };
     } else if (d.type === "content_block_start") {
-      open[d.index] = { ...d.content_block, partial: "" };
-    } else if (d.type === "content_block_delta" && open[d.index]) {
-      const block = open[d.index];
+      open.set(blockKey(d.index), { ...d.content_block, partial: "" });
+    } else if (d.type === "content_block_delta" && open.has(blockKey(d.index))) {
+      const block = open.get(blockKey(d.index));
       const delta = d.delta || {};
-      if (delta.type === "text_delta") block.text = (block.text || "") + delta.text;
-      else if (delta.type === "thinking_delta") block.thinking = (block.thinking || "") + delta.thinking;
-      else if (delta.type === "input_json_delta") block.partial += delta.partial_json;
-    } else if (d.type === "content_block_stop" && open[d.index]) {
-      out.blocks.push(closeBlock(open[d.index]));
-      open[d.index] = null;
+      // A delta without its text is a frame that says nothing, not one that
+      // says "undefined".
+      if (delta.type === "text_delta" && typeof delta.text === "string") block.text = (block.text || "") + delta.text;
+      else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") block.thinking = (block.thinking || "") + delta.thinking;
+      else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") block.partial += delta.partial_json;
+    } else if (d.type === "content_block_stop" && open.has(blockKey(d.index))) {
+      out.blocks.push(closeBlock(open.get(blockKey(d.index))));
+      open.delete(blockKey(d.index));
     } else if (d.type === "message_delta") {
       if (d.delta && d.delta.stop_reason) out.stop = d.delta.stop_reason;
       if (d.usage) out.usage = { ...(out.usage || {}), ...d.usage };
@@ -1212,7 +1324,7 @@ function foldAnthropicStream(frames) {
     }
   }
   // Blocks still open when the stream ended are shown as far as they got.
-  for (const block of open) if (block) out.blocks.push(closeBlock(block));
+  for (const block of open.values()) out.blocks.push(closeBlock(block));
   return out;
 }
 
@@ -1227,6 +1339,11 @@ function closeBlock(block) {
 
 function anthropicDocument(doc) {
   if (doc && doc.type === "error") return { blocks: [], stop: null, usage: null, model: null, error: doc.error || doc };
+  // `/v1/messages/count_tokens` answers with the count and nothing else; it
+  // is a whole answer, not a message that came back empty.
+  if (doc && doc.content === undefined && typeof doc.input_tokens === "number") {
+    return { blocks: [], stop: null, usage: { input_tokens: doc.input_tokens }, model: null, error: null, counted: true };
+  }
   return {
     blocks: anthropicContent(doc.content),
     stop: doc.stop_reason || null,
@@ -1243,6 +1360,9 @@ function foldOpenaiStream(frames) {
   // By index, and started once named, as the router's own decoder takes them.
   const calls = new Map();
   let last = null;
+  /// Slot an unnumbered call goes in next; kept rather than found again,
+  /// which a stream of thousands of them would pay for each time.
+  let next = 0;
   for (const frame of frames) {
     if (frame.data.trim() === "[DONE]") {
       out.events.set("[DONE]", 1);
@@ -1268,8 +1388,9 @@ function foldOpenaiStream(frames) {
         let slot = Number.isInteger(call.index) ? call.index : null;
         // Unnumbered: a delta with neither id nor name continues the latest
         // call; anything else is a new one after it.
-        if (slot === null) slot = last !== null && id === null && name === null ? last : calls.size ? Math.max(...calls.keys()) + 1 : 0;
+        if (slot === null) slot = last !== null && id === null && name === null ? last : next;
         last = slot;
+        if (Number.isInteger(slot) && slot >= next) next = slot + 1;
         if (!calls.has(slot)) calls.set(slot, { id: null, function: { name: null, arguments: "" } });
         const entry = calls.get(slot);
         if (entry.id === null) entry.id = id;
@@ -1286,13 +1407,17 @@ function foldOpenaiStream(frames) {
 }
 
 function openaiDocument(doc) {
-  const choice = (doc.choices || [])[0];
+  const choices = Array.isArray(doc.choices) ? doc.choices : [];
+  const choice = choices[0];
   return {
     blocks: choice && choice.message ? openaiMessage(choice.message) : [],
     stop: choice ? choice.finish_reason || null : null,
     usage: doc.usage || null,
     model: doc.model || null,
     error: doc.error || null,
+    // The router relays the first choice, so that is the one shown; say when
+    // the backend sent more.
+    choices: choices.length,
   };
 }
 
@@ -1324,7 +1449,7 @@ function metaView(exchange) {
       h("td", { class: "mono wrap-anywhere" }, x.value),
       h("td", null, badge(x.source)))),
   { empty: "None recorded." });
-  const shown = new Set(["request_headers", "response_headers"]);
+  const shown = new Set(["request_headers", "dropped_headers", "response_headers"]);
   return [
     table(["Field", "Value"], Object.entries(m).filter(([key]) => !shown.has(key)).map(([key, value]) =>
       h("tr", null, h("td", { class: "mono nowrap" }, key), h("td", { class: "mono wrap-anywhere" }, typeof value === "string" ? value : JSON.stringify(value))))),
@@ -1334,9 +1459,39 @@ function metaView(exchange) {
       h("code", null, "credential"), " and forced ", h("code", null, "backend"),
       " values may be secrets and are never written to disk."),
     sent,
+    (m.dropped_headers || []).length ? [
+      h("h3", null, "Headers the backend never saw"),
+      h("p", { class: "note" }, "The client sent these; the backend saw none of them. What this backend's configuration decided comes first: ",
+        h("code", null, "drop_headers"), ", a value its ", h("code", null, "headers"),
+        " replaced, and what its ", h("code", null, "kind"),
+        " does not take. The rest go on every request whatever the configuration says."),
+      table(["Header", "Value", "Why"], [...m.dropped_headers].sort(byDropReason).map((x) =>
+        h("tr", null,
+          h("td", { class: "mono nowrap" }, x.name),
+          h("td", { class: "mono wrap-anywhere" }, x.value),
+          h("td", null, badge(dropLabel(x.reason), CHOSEN_DROPS.includes(x.reason) ? "info" : null))))),
+    ] : null,
     h("h3", null, "Response headers"),
     headers(m.response_headers),
   ];
+}
+
+/// Drops a backend's configuration decided, which is what someone reading
+/// this table came for; the others happen to every request.
+const CHOSEN_DROPS = ["drop_headers", "overridden", "backend_kind"];
+
+function byDropReason(a, b) {
+  const rank = (x) => (CHOSEN_DROPS.includes(x.reason) ? CHOSEN_DROPS.indexOf(x.reason) : CHOSEN_DROPS.length);
+  return rank(a) - rank(b) || a.name.localeCompare(b.name);
+}
+
+/// Why a header the client sent did not reach the backend. A reason this
+/// console does not know yet is shown as `meta.json` names it.
+function dropLabel(reason) {
+  if (reason === "client_credential") return "client credential";
+  if (reason === "backend_kind") return "backend kind";
+  if (reason === "overridden") return "headers";
+  return String(reason);
 }
 
 // ---------------------------------------------------------------- helpers

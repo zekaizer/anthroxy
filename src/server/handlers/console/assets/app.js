@@ -28,6 +28,8 @@ const state = {
   recordingView: "sections",
   requestSection: "prompt",
   requestFind: "",
+  /// Recording `requestFind` was typed in.
+  inspected: null,
   lastProbe: null,
   lastSmoke: null,
   reloadNotice: null,
