@@ -27,6 +27,7 @@ pub fn masked(config: &Config) -> Value {
                 json!({
                     "kind": backend.kind,
                     "url": backend.url,
+                    "models_path": backend.models_path,
                     "credential": credential(&backend.credential),
                     "headers": headers,
                     "anthropic_beta": backend.anthropic_beta,

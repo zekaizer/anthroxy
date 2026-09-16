@@ -1302,7 +1302,7 @@ function probeContent(probe) {
         h("dl", { class: "facts" },
           fact("Credential", backend.credential.ok ? backend.credential.text : h("span", { class: "error-text" }, backend.credential.text)),
           fact("Route", backend.proxy ? ["through proxy ", h("code", null, backend.proxy)] : "direct"),
-          fact("GET /v1/models", modelLine)),
+          fact(`GET ${backend.request.path}`, modelLine)),
         sent.length ? h("details", null, h("summary", null, `Request headers (${sent.length})`),
           h("p", { class: "note" }, "Headers the router set; the HTTP client adds host and framing. Backend-forced values and the credential are masked."),
           table(["Header", "Value", "From"], sent.map((x) =>

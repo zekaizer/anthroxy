@@ -1,5 +1,5 @@
 //! Reachability check used by `anthroxy check`: acquire the credential
-//! and call `GET /v1/models` on the backend.
+//! and call the backend's `models_path`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
@@ -15,7 +15,7 @@ use crate::credential::{Credential, CredentialError, mask};
 pub struct Probe {
     /// Credential source, plus the masked value when there is one.
     pub credential: Result<String, CredentialError>,
-    /// What the router set on `GET /v1/models`, by name; empty when no
+    /// What the router set on the model list request, by name; empty when no
     /// credential could be had and nothing was sent.
     pub request_headers: Vec<SentHeader>,
     pub models: Option<ModelsProbe>,
@@ -80,7 +80,7 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
         Some(c) => format!("{} ({})", backend.credential.describe(), c.masked()),
         None => backend.credential.describe(),
     };
-    let request = list_request(backend, "/v1/models");
+    let request = list_request(backend, &backend.models_path);
     let request_headers = sent_headers(backend, &request.headers, credential.as_ref());
     let models = match client.send(request).await {
         Ok(upstream) => {
@@ -306,6 +306,7 @@ mod tests {
             &BackendConfig {
                 kind: BackendKind::Anthropic,
                 url,
+                models_path: BackendConfig::default_models_path(),
                 credential: CredentialConfig::None,
                 headers: Default::default(),
                 anthropic_beta: Vec::new(),
@@ -356,6 +357,7 @@ mod tests {
             &BackendConfig {
                 kind: BackendKind::Anthropic,
                 url,
+                models_path: BackendConfig::default_models_path(),
                 credential: CredentialConfig::Static {
                     value: "key-1234567890".into(),
                     header: CredentialHeader::bearer(),
@@ -426,6 +428,42 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_model_list_is_fetched_from_the_path_the_backend_names() {
+        let app = axum::Router::new().route(
+            "/llm/api/models",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({"data": [{"id": "in-house"}]}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let backend = Backend::from_config(
+            "gw",
+            &BackendConfig {
+                kind: BackendKind::OpenAi,
+                url,
+                models_path: "/llm/api/models".into(),
+                credential: CredentialConfig::None,
+                headers: Default::default(),
+                anthropic_beta: Vec::new(),
+                drop_fields: Vec::new(),
+                proxy: None,
+            },
+        )
+        .unwrap();
+
+        match probe(&client(), &backend).await.models {
+            Some(ModelsProbe::Answered {
+                status: 200,
+                models,
+                ..
+            }) => assert_eq!(ids(models), ["in-house"]),
+            other => panic!("{other:?}"),
+        }
+    }
+
     fn ids(models: Vec<ListedModel>) -> Vec<String> {
         models.into_iter().map(|m| m.id).collect()
     }
@@ -493,6 +531,7 @@ mod tests {
             &BackendConfig {
                 kind: BackendKind::OpenAi,
                 url,
+                models_path: BackendConfig::default_models_path(),
                 credential: CredentialConfig::None,
                 headers: Default::default(),
                 anthropic_beta: Vec::new(),

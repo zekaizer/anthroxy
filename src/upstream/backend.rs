@@ -10,6 +10,8 @@ pub struct Backend {
     pub kind: BackendKind,
     /// Origin without trailing slash.
     pub url: String,
+    /// Path the probe fetches the model list from.
+    pub models_path: String,
     pub credential: Box<dyn CredentialSource>,
     /// Headers forced onto every upstream request, values marked sensitive.
     pub headers: HeaderMap,
@@ -46,6 +48,7 @@ impl Backend {
             name: name.to_owned(),
             kind: config.kind,
             url: config.url.clone(),
+            models_path: config.models_path.clone(),
             credential,
             headers,
             anthropic_beta: config.anthropic_beta.clone(),

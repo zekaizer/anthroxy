@@ -495,6 +495,53 @@ backend = "a"
 }
 
 #[test]
+fn models_path_defaults_to_the_anthropic_one_and_takes_an_override() {
+    assert_eq!(
+        parse(MINIMAL).unwrap().backends["local"].models_path,
+        "/v1/models"
+    );
+    let text = MINIMAL.replace(
+        "url = \"http://127.0.0.1:1234\"",
+        "url = \"http://127.0.0.1:1234\"\nmodels_path = \"/llm/api/models\"",
+    );
+    assert_eq!(
+        parse(&text).unwrap().backends["local"].models_path,
+        "/llm/api/models"
+    );
+}
+
+#[test]
+fn validation_rejects_a_models_path_that_is_not_one() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+models_path = "v1/models"
+
+[backends.b]
+url = "http://b"
+models_path = "/v1/mo dels"
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    assert!(
+        joined.contains("backends.a.models_path: `v1/models` must start with `/`"),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("backends.b.models_path: `/v1/mo dels`"),
+        "{joined}"
+    );
+    assert_eq!(p.len(), 2, "{joined}");
+}
+
+#[test]
 fn overrides_are_normalized_like_the_file() {
     let overrides = Overrides {
         listen: Some("127.0.0.1:1".parse().unwrap()),

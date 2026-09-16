@@ -93,6 +93,9 @@ credential = { kind = "none" }
 # kind = "openai"
 # url = "https://llm.example.corp"
 # credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
+# # Where `anthroxy check` and the console read this backend's model list;
+# # defaults to /v1/models. The chat path is not configurable.
+# models_path = "/llm/api/models"
 
 # A backend whose token another program keeps fresh; the command is re-run
 # every `refresh`, and once more immediately if the backend answers 401.

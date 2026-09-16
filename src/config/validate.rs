@@ -49,6 +49,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             ));
         }
         check_url(&format!("backends.{name}.url"), &backend.url, &mut problems);
+        check_models_path(name, &backend.models_path, &mut problems);
         if let Some(proxy) = &backend.proxy {
             check_proxy(&format!("backends.{name}.proxy"), proxy, &mut problems);
         }
@@ -246,6 +247,21 @@ fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
         }
         Ok(_) => {}
         Err(e) => problems.push(format!("{field}: `{url}` is not a valid URL ({e})")),
+    }
+}
+
+/// Appended to `url` as the request target, so it is a path and may carry a
+/// query, but nothing before the first `/`.
+fn check_models_path(name: &str, path: &str, problems: &mut Vec<String>) {
+    let shown = path.escape_debug();
+    if !path.starts_with('/') {
+        problems.push(format!(
+            "backends.{name}.models_path: `{shown}` must start with `/`; it is appended to `url`"
+        ));
+    } else if path.parse::<http::uri::PathAndQuery>().is_err() {
+        problems.push(format!(
+            "backends.{name}.models_path: `{shown}` is not a valid request path"
+        ));
     }
 }
 

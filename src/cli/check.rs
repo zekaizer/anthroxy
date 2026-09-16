@@ -158,7 +158,13 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
         }
     };
     let (models_line, ids) = match &probe.models {
-        None => (style.dim("GET /v1/models skipped (no credential)"), None),
+        None => (
+            style.dim(&format!(
+                "GET {} skipped (no credential)",
+                backend.models_path
+            )),
+            None,
+        ),
         Some(ModelsProbe::Failed(error)) => {
             ok = false;
             (style.err(&error.to_string()), None)
@@ -177,7 +183,8 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
                 format!(", {} model(s)", ids.len())
             };
             let text = format!(
-                "GET /v1/models → HTTP {status} in {} ms{count}",
+                "GET {} → HTTP {status} in {} ms{count}",
+                backend.models_path,
                 latency.as_millis()
             );
             let line = match detail {
