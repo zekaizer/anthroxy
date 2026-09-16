@@ -262,6 +262,8 @@ const fmt = {
     if (!t) return "–";
     const diff = (new Date(t).getTime() - serverNow()) / 1000;
     const abs = Math.abs(diff);
+    // Inside the clocks' own disagreement, so neither "0s ago" nor "in 0s".
+    if (abs < 1.5) return "just now";
     const text = abs < 60 ? `${Math.round(abs)}s`
       : abs < 3600 ? `${Math.round(abs / 60)}m`
       : abs < 86400 ? `${(abs / 3600).toFixed(1)}h`
@@ -526,6 +528,9 @@ async function refreshHeader() {
     noteServerTime(status.now);
     replace(header.meta,
       healthPill(status.health),
+      // Every tab refreshes itself; this says whether what is on screen is
+      // still being fed, which nothing did.
+      h("span", null, "read ", rel(new Date(serverNow()).toISOString())),
       h("span", null, status.version),
       h("span", null, "up ", since(status.started_at, "uptime")),
       h("span", null, status.listen));

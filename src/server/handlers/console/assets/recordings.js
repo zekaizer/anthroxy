@@ -233,8 +233,14 @@ function recordings(view, opened) {
     inspect(box, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] }, data.entries);
   };
 
+  let drawn = null;
   const load = async () => {
     data = await api("/api/recordings");
+    // A redraw rebuilds the rows and reads the open recording's files again,
+    // so a poll that found nothing new leaves the page alone.
+    const signature = JSON.stringify(data);
+    if (signature === drawn) return;
+    drawn = signature;
     draw();
     // Every load rebuilds the rows, so the open recording is opened again:
     // its row is re-selected, an attempt it folds under is revealed, and what
@@ -250,7 +256,7 @@ function recordings(view, opened) {
       refilter();
     }, 150);
   });
-  refresh.addEventListener("click", () => guarded(list, load));
+  refresh.addEventListener("click", () => poll());
   removeAll.addEventListener("click", async () => {
     if (!confirm("Delete every recording? This cannot be undone.")) return;
     removeAll.disabled = true;
@@ -272,7 +278,11 @@ function recordings(view, opened) {
 
   const listPanel = panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list);
   view.append(inspector, listPanel);
-  guarded(list, load);
+  const poll = polled(list, load);
+  poll();
+  // Only while the list is what is on screen: re-reading it under an open
+  // recording would fetch that recording's files again every few seconds.
+  every(5000, () => { if (!opened) poll(); });
   return open;
 }
 
