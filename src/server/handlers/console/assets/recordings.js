@@ -317,7 +317,7 @@ async function inspect(target, name, files, neighbors, listed) {
     };
     if (exchange.meta instanceof Error) exchange.meta = null;
     exchange.dialect = dialectOf(exchange.meta && exchange.meta.path);
-    const session = recordedHeader(exchange.meta, "x-claude-code-session-id");
+    const session = exchange.meta && exchange.meta.session;
     exchange.earlier = session
       ? listed.filter((e) => e.session === session && e.name < name && e.path === exchange.meta.path).slice(0, COMPARED)
       : [];
@@ -1337,12 +1337,6 @@ function metaView(exchange) {
     h("h3", null, "Response headers"),
     headers(m.response_headers),
   ];
-}
-
-/// Value of one recorded request header, by name.
-function recordedHeader(meta, name) {
-  const found = meta && meta.request_headers && meta.request_headers.find((x) => x.name === name);
-  return found ? found.value : null;
 }
 
 // ---------------------------------------------------------------- helpers

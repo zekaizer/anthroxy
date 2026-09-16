@@ -26,6 +26,12 @@ pub async fn status(
                 "url": backend.url,
                 "credential": backend.credential.status(),
                 "drop_fields": backend.drop_fields,
+                "drop_headers": snapshot
+                    .config
+                    .backends
+                    .get(&backend.name)
+                    .map(|config| config.drop_headers.clone())
+                    .unwrap_or_default(),
                 "anthropic_beta": backend.anthropic_beta,
             })
         })

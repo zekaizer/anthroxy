@@ -22,6 +22,25 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
+            drop_headers: Vec::new(),
+            drop_fields: Vec::new(),
+            proxy: None,
+        },
+    )
+    .unwrap()
+}
+
+fn backend_with_drops(drops: &[&str]) -> Backend {
+    Backend::from_config(
+        "b",
+        &BackendConfig {
+            kind: BackendKind::Anthropic,
+            url: "http://backend".into(),
+            models_path: BackendConfig::default_models_path(),
+            credential: CredentialConfig::None,
+            headers: Default::default(),
+            anthropic_beta: Vec::new(),
+            drop_headers: drops.iter().map(|s| s.to_string()).collect(),
             drop_fields: Vec::new(),
             proxy: None,
         },
@@ -99,6 +118,37 @@ fn upstream_headers_apply_backend_overrides() {
         "backend header overrides client"
     );
     assert_eq!(out["x-extra"], "1");
+}
+
+#[test]
+fn upstream_headers_drop_what_the_backend_named() {
+    let backend = backend_with_drops(&["x-stainless-*", "User-Agent"]);
+    let out = upstream_headers(&client_headers(), &backend);
+    assert!(out.get("x-stainless-retry-count").is_none(), "{out:?}");
+    assert!(
+        out.get("user-agent").is_none(),
+        "a name is matched in any case"
+    );
+    assert_eq!(out["content-type"], "application/json", "nothing else goes");
+}
+
+#[test]
+fn the_claude_code_preset_drops_what_claude_code_adds() {
+    let mut client = client_headers();
+    client.append("x-app", HeaderValue::from_static("cli"));
+    client.append("x-claude-code-session-id", HeaderValue::from_static("s-1"));
+    let out = upstream_headers(&client, &backend_with_drops(&["@claude-code"]));
+    for gone in [
+        "x-stainless-retry-count",
+        "x-app",
+        "x-claude-code-session-id",
+    ] {
+        assert!(out.get(gone).is_none(), "{gone} in {out:?}");
+    }
+    assert_eq!(
+        out["user-agent"], "claude-cli/2.0",
+        "the preset leaves user-agent alone"
+    );
 }
 
 #[test]

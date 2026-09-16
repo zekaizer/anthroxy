@@ -542,6 +542,94 @@ backend = "a"
 }
 
 #[test]
+fn validation_rejects_drop_headers_that_cannot_mean_what_they_say() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+drop_headers = ["x-forced", "authorization", "content-type", "*", "@nope", "x header"]
+headers = { "x-forced" = "1" }
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    for needle in [
+        "backends.a.drop_headers: `x-forced` is set in `headers` for this backend;",
+        "backends.a.drop_headers: `authorization` never reaches a backend anyway",
+        "backends.a.drop_headers: `content-type` says what the body is",
+        "backends.a.drop_headers: `*` matches every header",
+        "backends.a.drop_headers: `@nope` is not a preset",
+        "backends.a.drop_headers: `x header` is not a header name",
+    ] {
+        assert!(joined.contains(needle), "{needle} missing from {joined}");
+    }
+    assert_eq!(p.len(), 6, "{joined}");
+}
+
+#[test]
+fn a_pattern_that_covers_a_forced_or_required_header_is_rejected_too() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+drop_headers = ["x-*", "content-*"]
+headers = { "x-forced" = "1" }
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    assert!(
+        joined.contains("backends.a.drop_headers: `x-*` is set in `headers` for this backend"),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("backends.a.drop_headers: `content-*` says what the body is"),
+        "{joined}"
+    );
+    // A pattern wide enough to hit several rules is reported against each.
+    assert!(
+        joined.contains(
+            "backends.a.drop_headers: `x-*` never reaches a backend anyway (`x-api-key`)"
+        ),
+        "{joined}"
+    );
+    assert!(
+        joined.contains(
+            "backends.a.drop_headers: `content-*` never reaches a backend anyway (`content-length`)"
+        ),
+        "{joined}"
+    );
+    assert_eq!(p.len(), 4, "{joined}");
+}
+
+#[test]
+fn drop_headers_takes_names_patterns_and_the_preset() {
+    let text = MINIMAL.replace(
+        "url = \"http://127.0.0.1:1234\"",
+        "url = \"http://127.0.0.1:1234\"\ndrop_headers = [\"x-stainless-*\", \"@claude-code\"]",
+    );
+    assert_eq!(
+        parse(&text).unwrap().backends["local"].drop_headers,
+        ["x-stainless-*", "@claude-code"]
+    );
+    assert!(
+        parse(MINIMAL).unwrap().backends["local"]
+            .drop_headers
+            .is_empty()
+    );
+}
+
+#[test]
 fn overrides_are_normalized_like_the_file() {
     let overrides = Overrides {
         listen: Some("127.0.0.1:1".parse().unwrap()),

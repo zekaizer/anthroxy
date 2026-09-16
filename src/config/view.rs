@@ -31,6 +31,7 @@ pub fn masked(config: &Config) -> Value {
                     "credential": credential(&backend.credential),
                     "headers": headers,
                     "anthropic_beta": backend.anthropic_beta,
+                    "drop_headers": backend.drop_headers,
                     "drop_fields": backend.drop_fields,
                     "proxy": backend.proxy.as_deref().map(redacted_url),
                 }),

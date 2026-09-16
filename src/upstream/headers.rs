@@ -43,10 +43,11 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 ///
 /// Dropped: hop-by-hop headers, `host` and `content-length` (owned by the
 /// client library), the client's own `authorization`/`x-api-key` (replaced by
-/// the backend credential) and `accept-encoding` (bodies are relayed and
-/// logged uncompressed). Backend `headers` override, `anthropic_beta` flags
-/// are merged into the client's list. An `openai` backend gets no
-/// `anthropic-version` or `anthropic-beta` at all (ADR-0010).
+/// the backend credential), `accept-encoding` (bodies are relayed and logged
+/// uncompressed) and whatever the backend's `drop_headers` names. Backend
+/// `headers` override, `anthropic_beta` flags are merged into the client's
+/// list. An `openai` backend gets no `anthropic-version` or `anthropic-beta`
+/// at all (ADR-0010).
 pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
     let anthropic = backend.kind == BackendKind::Anthropic;
     let mut out = HeaderMap::with_capacity(client.len() + backend.headers.len() + 1);
@@ -58,6 +59,7 @@ pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
             || *name == X_API_KEY
             || *name == ACCEPT_ENCODING
             || (!anthropic && (*name == ANTHROPIC_VERSION || *name == ANTHROPIC_BETA))
+            || backend.drop_headers.matches(name)
         {
             continue;
         }

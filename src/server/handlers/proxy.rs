@@ -1,5 +1,8 @@
 //! `POST /v1/messages` (and siblings): route by `model`, forward, relay.
 
+/// Claude Code names the conversation a request belongs to in this header.
+const SESSION_ID: &str = "x-claude-code-session-id";
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -164,6 +167,7 @@ async fn handle(
             &parts.method,
             path_and_query,
             &headers,
+            &parts.headers,
             &body,
             &requested_model,
             route,
@@ -371,6 +375,7 @@ fn request_record(
     method: &http::Method,
     path_and_query: &str,
     headers: &http::HeaderMap,
+    client_headers: &http::HeaderMap,
     body: &Bytes,
     requested_model: &str,
     route: &crate::routing::Route,
@@ -399,6 +404,10 @@ fn request_record(
             body.len(),
             SecretView::Redacted,
         ),
+        session: client_headers
+            .get(SESSION_ID)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
         messages: summary.messages,
         prompt: summary.prompt,
         step: summary.step,

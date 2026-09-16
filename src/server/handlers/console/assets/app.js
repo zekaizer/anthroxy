@@ -566,6 +566,7 @@ function overviewContent(status, reload) {
       h("td", null, h("strong", null, backend.name), h("div", { class: "sub" }, backend.kind)),
       h("td", { class: "wrap-anywhere" }, backend.url,
         backend.drop_fields.length ? h("div", { class: "sub" }, `drop_fields: ${backend.drop_fields.join(", ")}`) : null,
+        backend.drop_headers.length ? h("div", { class: "sub" }, `drop_headers: ${backend.drop_headers.join(", ")}`) : null,
         backend.anthropic_beta.length ? h("div", { class: "sub" }, `anthropic_beta: ${backend.anthropic_beta.join(", ")}`) : null),
       h("td", { class: "wrap-anywhere" }, credential.source),
       h("td", null, credential.masked ? h("code", null, credential.masked) : h("span", { class: "muted" }, credential.source === "none" ? "none" : "not cached")),
