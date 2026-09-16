@@ -877,7 +877,7 @@ function systemSection(doc, shown, ctx) {
   return shown.map((s, i) => {
     const text = s.blocks.filter((b) => b.kind === "text").map((b) => b.text).join("\n");
     return lazyDetails({ class: "item" },
-      [h("span", { class: "mono muted" }, s.label), s.blocks.some((b) => b.cache) ? badge("cache", "info") : null,
+      [h("span", { class: "mono muted" }, s.label), s.blocks.some((b) => b.cache) ? tag("cache") : null,
         h("span", { class: "preview" }, marked(firstLine(text), ctx.needle)), h("span", { class: "size" }, fmt.bytes(s.bytes))],
       () => s.blocks.map((b) => blockView(b, ctx)), Boolean(ctx.needle) && i < UNFOLDED_MATCHES);
   });
@@ -1130,23 +1130,23 @@ const NO_CONTEXT = { calls: new Map(), results: new Map(), reveal: null, needle:
 
 function blockView(b, ctx) {
   const needle = ctx.needle;
-  const cache = b.cache ? badge("cache breakpoint", "info") : null;
+  const cache = b.cache ? tag("cache breakpoint") : null;
   switch (b.kind) {
     case "text":
       if (b.notice) {
         return lazyDetails({ class: "item notice" },
-          [badge(b.notice, "warn"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
+          [tag(b.notice), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
           () => h("div", { class: "text" }, marked(b.text, needle)), contains(b.text, needle));
       }
       return h("div", { class: "block" }, cache, textView(b.text, needle));
     case "thinking":
       return lazyDetails({ class: "item thinking" },
-        [badge("thinking"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
+        [tag("thinking"), cache, h("span", { class: "preview" }, marked(firstLine(b.text), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(b.text)))],
         () => h("div", { class: "text" }, marked(b.text, needle)), contains(b.text, needle));
     case "redacted_thinking":
-      return h("div", { class: "block" }, badge("redacted thinking"), cache);
+      return h("div", { class: "block" }, tag("redacted thinking"), cache);
     case "router_label":
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("added by the router"), h("span", { class: "muted" }, b.text)));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag("added by the router"), h("span", { class: "muted" }, b.text)));
     case "tool_use": {
       const result = ctx.reveal ? ctx.results.get(b.id) : undefined;
       return h("div", { class: "block tool-use" },
@@ -1164,12 +1164,12 @@ function blockView(b, ctx) {
         b.content.length ? b.content.map((inner) => blockView(inner, ctx)) : h("span", { class: "muted" }, "empty"));
     }
     case "image":
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("image"), cache), imageView(b));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag("image"), cache), imageView(b));
     case "document":
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge("document"), b.title || "", cache,
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag("document"), b.title || "", cache,
         h("span", { class: "muted" }, b.source ? `${b.source.media_type || b.source.type || ""}, ${fmt.bytes(byteSize(b.source))}` : "")));
     default:
-      return h("div", { class: "block" }, h("div", { class: "block-head" }, badge(b.type), cache), h("pre", null, marked(JSON.stringify(b.raw, null, 2), needle)));
+      return h("div", { class: "block" }, h("div", { class: "block-head" }, tag(b.type), cache), h("pre", null, marked(JSON.stringify(b.raw, null, 2), needle)));
   }
 }
 
@@ -1183,7 +1183,7 @@ function textView(text, needle) {
     if (before.trim()) pieces.push(h("div", { class: "text" }, marked(before.replace(/^\n+|\n+$/g, ""), needle)));
     const inner = match[1].replace(/^\n+|\n+$/g, "");
     pieces.push(lazyDetails({ class: "item reminder" },
-      [badge("system reminder", "warn"), h("span", { class: "preview" }, marked(firstLine(inner), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(match[0])))],
+      [tag("system reminder"), h("span", { class: "preview" }, marked(firstLine(inner), needle)), h("span", { class: "size" }, fmt.bytes(byteSize(match[0])))],
       () => h("div", { class: "text" }, marked(inner, needle)), contains(inner, needle)));
     at = match.index + match[0].length;
   }
@@ -1447,7 +1447,7 @@ function metaView(exchange) {
     h("tr", null,
       h("td", { class: "mono nowrap" }, x.name),
       h("td", { class: "mono wrap-anywhere" }, x.value),
-      h("td", null, badge(x.source)))),
+      h("td", null, kindBadge(x.source)))),
   { empty: "None recorded." });
   const shown = new Set(["request_headers", "dropped_headers", "response_headers"]);
   return [
@@ -1469,7 +1469,7 @@ function metaView(exchange) {
         h("tr", null,
           h("td", { class: "mono nowrap" }, x.name),
           h("td", { class: "mono wrap-anywhere" }, x.value),
-          h("td", null, badge(dropLabel(x.reason), CHOSEN_DROPS.includes(x.reason) ? "info" : null))))),
+          h("td", null, CHOSEN_DROPS.includes(x.reason) ? badge(dropLabel(x.reason), "info") : kindBadge(dropLabel(x.reason)))))),
     ] : null,
     h("h3", null, "Response headers"),
     headers(m.response_headers),

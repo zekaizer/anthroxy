@@ -144,8 +144,20 @@ function table(headers, rows, options = {}) {
   return h("div", { class: "table-wrap" }, h("table", null, h("thead", null, head), h("tbody", null, body)));
 }
 
+/// What something is doing or how it ended.
 function badge(text, kind) {
-  return h("span", { class: `badge ${kind || ""}` }, text);
+  return h("span", { class: `badge state ${kind || ""}` }, text);
+}
+
+/// What kind of thing it is: a backend's dialect, a reload's trigger, where a
+/// header came from. A classification carries no judgement, so no colour.
+function kindBadge(text) {
+  return h("span", { class: "badge kind" }, text);
+}
+
+/// An annotation on something a client sent, not on the router's own state.
+function tag(text) {
+  return h("span", { class: "badge tag" }, text);
 }
 
 function panel(title, actions, ...content) {
@@ -234,9 +246,16 @@ function outcomeBadge(view) {
   return badge("error", "err");
 }
 
+/// An attempt count is a number, not a state. Only an abnormal one is marked.
+function attemptsCell(attempts) {
+  if (!attempts || attempts <= 1) return fmt.int(attempts);
+  return h("strong", { class: "warn-text" }, `×${fmt.int(attempts)}`);
+}
+
 function statusBadge(status) {
-  if (status === null || status === undefined) return badge("–");
-  return badge(String(status), status >= 400 ? "err" : status >= 300 ? "warn" : "ok");
+  if (status === null || status === undefined) return h("span", { class: "muted" }, "–");
+  const kind = status >= 400 ? "err" : status >= 300 ? "warn" : "ok";
+  return h("span", { class: `badge http ${kind}` }, String(status));
 }
 
 // ---------------------------------------------------------------- API
@@ -546,7 +565,7 @@ function overviewContent(status, reload) {
   const reloads = [...status.reloads].reverse().map((event) =>
     h("tr", null,
       h("td", { class: "nowrap" }, fmt.time(event.at), h("div", { class: "sub" }, rel(event.at))),
-      h("td", null, badge(event.trigger)),
+      h("td", null, kindBadge(event.trigger)),
       h("td", null, event.result === "applied" ? badge("applied", "ok") : badge("rejected", "err")),
       h("td", { class: "wrap-anywhere" },
         event.result === "applied"
@@ -674,11 +693,11 @@ function requests(view, selected) {
       data.recent.filter(matches).map((v) =>
         h("tr", { class: `clickable ${v.id === selected ? "selected" : ""}`, onclick: () => go("requests", v.id) },
           h("td", { class: "nowrap" }, fmt.clock(v.received_at),
-            h("div", { class: "sub" }, v.source === "console" ? badge("console", "info") : v.peer || "")),
+            h("div", { class: "sub" }, v.source === "console" ? kindBadge("console") : v.peer || "")),
           h("td", { class: "mono wrap-anywhere" }, modelCell(v), pathNote(v)),
           h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
           h("td", null, statusBadge(v.status)),
-          h("td", { class: "num" }, v.attempts > 1 ? badge(String(v.attempts), "warn") : fmt.int(v.attempts)),
+          h("td", { class: "num" }, attemptsCell(v.attempts)),
           h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
           h("td", { class: "num" }, fmt.ms(v.duration_ms)),
           h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
@@ -1324,7 +1343,7 @@ function probeContent(probe) {
       const sent = backend.request.headers;
       const received = models && models.headers ? models.headers : [];
       return h("div", null,
-        h("h3", null, backend.name, " ", badge(backend.kind), " ", h("span", { class: "muted mono" }, backend.url)),
+        h("h3", null, backend.name, " ", kindBadge(backend.kind), " ", h("span", { class: "muted mono" }, backend.url)),
         h("dl", { class: "facts" },
           fact("Credential", backend.credential.ok ? backend.credential.text : h("span", { class: "error-text" }, backend.credential.text)),
           fact("Route", backend.proxy ? ["through proxy ", h("code", null, backend.proxy)] : "direct"),
@@ -1332,7 +1351,7 @@ function probeContent(probe) {
         sent.length ? h("details", null, h("summary", null, `Request headers (${sent.length})`),
           h("p", { class: "note" }, "Every header the backend receives. Backend-forced values and the credential are masked."),
           table(["Header", "Value", "From"], sent.map((x) =>
-            h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value), h("td", null, badge(x.source)))))) : null,
+            h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value), h("td", null, kindBadge(x.source)))))) : null,
         received.length ? h("details", null, h("summary", null, `Response headers (${received.length})`),
           table(["Header", "Value"], received.map((x) =>
             h("tr", null, h("td", { class: "mono" }, x.name), h("td", { class: "mono wrap-anywhere" }, x.value))))) : null,

@@ -252,6 +252,7 @@ h3 { font-size: var(--text-md); margin: var(--space-4) 0 var(--space-2); }
 .muted { color: var(--muted); }
 .note { color: var(--muted); font-size: var(--text-sm); margin: var(--space-1) 0; }
 .error-text { color: var(--err); }
+.warn-text { color: var(--warn); }
 .banner {
   border: 1px solid var(--err-line);
   border-radius: var(--radius-md);
@@ -311,16 +312,30 @@ td .sub.one-line { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; 
    instead of squeezing the column to one character. */
 .wrap-anywhere { overflow-wrap: break-word; }
 
+/* One shape per kind of thing, so a state, a status code, a classification
+   and an annotation on recorded content are told apart before they are read. */
 .badge {
-  display: inline-block;
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--text-xs);
-  line-height: 1.6;
+  line-height: 1.5;
   white-space: nowrap;
+  border: 1px solid transparent;
   background: var(--sunken);
   color: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1);
 }
+/* What something is doing or how it ended. */
+.badge.state { border-radius: var(--radius-pill); padding: 1px var(--space-2); font-weight: 600; }
+.badge.state::before { content: ""; width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; flex: none; }
+/* A status code is a value, not a state. */
+.badge.http { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+/* A classification carries no judgement, so it carries no colour. */
+.badge.kind { background: var(--sunken); color: var(--muted); border-color: var(--line); }
+/* An annotation on what a client sent, never on the router's own state. */
+.badge.tag { background: none; color: var(--faint); border: 1px dashed var(--line-strong); font-size: var(--text-2xs); }
 .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-line); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-line); }
 .badge.err { background: var(--err-soft); color: var(--err); border-color: var(--err-line); }
