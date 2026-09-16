@@ -369,6 +369,34 @@ async function guarded(target, load) {
   }
 }
 
+/// `load` as a poll: once something has been read, a later failure says above
+/// it how old the reading is instead of taking it away. A refresh that missed
+/// is not a reason to empty the page a reader is looking at.
+function polled(target, load) {
+  let fresh = null;
+  let notice = null;
+  return async () => {
+    try {
+      await load();
+      fresh = serverNow();
+      notice?.remove();
+      notice = null;
+    } catch (error) {
+      if (error instanceof SignedOut) return;
+      if (fresh === null) {
+        replace(target, banner(`Could not load: ${error.message}`));
+        return;
+      }
+      if (!notice) {
+        notice = h("div", { class: "banner warn", role: "status" });
+        target.parentNode.insertBefore(notice, target);
+      }
+      replace(notice, "Showing the last reading from ", rel(new Date(fresh).toISOString()),
+        `. The router did not answer the refresh: ${error.message}`);
+    }
+  };
+}
+
 function every(ms, task) {
   const id = setInterval(() => {
     if (!document.hidden) task();
@@ -570,11 +598,12 @@ function overview(view) {
     drawn = signature;
     rerender(body, overviewContent(status, () => {
       drawn = null;
-      return guarded(body, load);
+      return refresh();
     }));
   };
-  guarded(body, load);
-  every(5000, () => guarded(body, load));
+  const refresh = polled(body, load);
+  refresh();
+  every(5000, refresh);
 }
 
 function overviewContent(status, reload) {
@@ -780,8 +809,9 @@ function requests(view, selected) {
     panel("Recent", h("span", { class: "muted" }, "newest first; kept in memory until restart"),
       h("div", { class: "controls" }, filter, h("label", null, errorsOnly, " Errors only")),
       recent));
-  guarded(recent, load);
-  every(2000, () => guarded(recent, load));
+  const refresh = polled(recent, load);
+  refresh();
+  every(2000, refresh);
   if (selected) showRequest(detail, selected);
 }
 
@@ -848,7 +878,7 @@ function stats(view) {
     h("button", {
       type: "button",
       "aria-pressed": state.statsRange === id ? "true" : "false",
-      onclick: () => { state.statsRange = id; drawRanges(); guarded(body, load); },
+      onclick: () => { state.statsRange = id; drawRanges(); refresh(); },
     }, label)));
   let drawn = null;
   const load = async () => {
@@ -865,10 +895,11 @@ function stats(view) {
     body.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
     rerender(body, statsContent(data));
   };
+  const refresh = polled(body, load);
   drawRanges();
   view.append(panel("Statistics", ranges, body));
-  guarded(body, load);
-  every(30000, () => guarded(body, load));
+  refresh();
+  every(30000, refresh);
 }
 
 function statsContent(data) {
