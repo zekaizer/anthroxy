@@ -17,6 +17,7 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
             kind,
             url: "http://backend".into(),
             models_path: BackendConfig::default_models_path(),
+            live_models: false,
             credential: CredentialConfig::None,
             headers: headers
                 .iter()
@@ -38,6 +39,7 @@ fn backend_with_drops(drops: &[&str]) -> Backend {
             kind: BackendKind::Anthropic,
             url: "http://backend".into(),
             models_path: BackendConfig::default_models_path(),
+            live_models: false,
             credential: CredentialConfig::None,
             headers: Default::default(),
             anthropic_beta: Vec::new(),
@@ -173,6 +175,7 @@ fn every_header_the_backend_does_not_see_says_why() {
             kind: BackendKind::OpenAi,
             url: "http://backend".into(),
             models_path: BackendConfig::default_models_path(),
+            live_models: false,
             credential: CredentialConfig::None,
             headers: [("x-app".to_owned(), "gateway".to_owned())].into(),
             anthropic_beta: Vec::new(),

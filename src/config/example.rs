@@ -113,10 +113,13 @@ credential = { kind = "none" }
 # models_path = "/llm/api/models"
 
 # Grok via xAI Chat Completions. Login once with `scripts/xai-oauth login`,
-# then the command credential re-runs `print` before expiry.
+# then the command credential re-runs `print` before expiry. `live_models`
+# pulls identity from GET /v1/models (OpenAI or Anthropic list); [[models]]
+# still win on id. Passthrough uses the same decoder.
 # [backends.grok]
 # kind = "openai"
 # url = "https://api.x.ai"
+# live_models = true
 # credential = { kind = "command", command = "/path/to/anthroxy/scripts/xai-oauth print", output = "json", refresh = "5m" }
 # [[models]]
 # id = "grok"

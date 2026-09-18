@@ -31,7 +31,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     if passthrough > 1 {
         problems.push("at most one backend with kind = \"passthrough\" is allowed".to_owned());
     }
-    if config.models.is_empty() && passthrough == 0 {
+    let live_models = config.backends.values().any(|b| b.live_models);
+    if config.models.is_empty() && passthrough == 0 && !live_models {
         problems.push("at least one [[models]] entry is required".to_owned());
     }
     // `0s` turns a limit off elsewhere in the file (`logging.body_retention`),

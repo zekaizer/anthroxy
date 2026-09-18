@@ -24,9 +24,12 @@ pub async fn list(
     headers: HeaderMap,
 ) -> Json<ModelList> {
     let mut data = Vec::new();
-    if let Some(live) = &snapshot.live {
-        let occupied = |id: &str| snapshot.registry.lookup(id).is_some();
-        data.extend(live.models(&snapshot.upstream, &headers, occupied).await);
+    let occupied = |id: &str| snapshot.registry.lookup(id).is_some();
+    for live in &snapshot.live {
+        data.extend(
+            live.models(&snapshot.upstream, &headers, occupied)
+                .await,
+        );
     }
     data.extend(snapshot.registry.routes().iter().map(|r| object(&state, r)));
     Json(ModelList::all(data))
@@ -47,8 +50,8 @@ pub async fn get_one(
     if let Some(resolution) = snapshot.registry.lookup(&id) {
         return Json(object(&state, resolution.route)).into_response();
     }
-    if let Some(live) = &snapshot.live {
-        let occupied = |name: &str| snapshot.registry.lookup(name).is_some();
+    let occupied = |name: &str| snapshot.registry.lookup(name).is_some();
+    for live in &snapshot.live {
         if let Some(route) = live
             .lookup(&id, &snapshot.upstream, &headers, occupied)
             .await

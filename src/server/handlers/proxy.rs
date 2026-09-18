@@ -119,27 +119,23 @@ async fn handle(
     {
         note(exchange, |e| e.session(session));
     }
-    let routed = if let Some(resolution) = state.registry.lookup(&requested_model) {
-        Routed::Config(resolution)
-    } else if let Some(live) = &state.live {
-        let occupied = |id: &str| state.registry.lookup(id).is_some();
-        if let Some(route) = live
-            .lookup(&requested_model, &state.upstream, &parts.headers, occupied)
-            .await
-        {
-            Routed::Live(route)
-        } else {
-            match state.registry.resolve(&requested_model) {
-                Some(resolution) => Routed::Config(resolution),
-                None => {
-                    note(exchange, |e| e.unrouted(&requested_model));
-                    return Err(RouterError::unknown_model(
-                        &requested_model,
-                        &state.registry,
-                    ));
-                }
+    let occupied = |id: &str| state.registry.lookup(id).is_some();
+    let mut live_route = None;
+    if state.registry.lookup(&requested_model).is_none() {
+        for live in &state.live {
+            if let Some(route) = live
+                .lookup(&requested_model, &state.upstream, &parts.headers, occupied)
+                .await
+            {
+                live_route = Some(route);
+                break;
             }
         }
+    }
+    let routed = if let Some(resolution) = state.registry.lookup(&requested_model) {
+        Routed::Config(resolution)
+    } else if let Some(route) = live_route {
+        Routed::Live(route)
     } else {
         match state.registry.resolve(&requested_model) {
             Some(resolution) => Routed::Config(resolution),

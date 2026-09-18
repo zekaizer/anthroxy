@@ -23,6 +23,8 @@ pub struct Backend {
     pub drop_fields: Vec<String>,
     /// `kind = "passthrough"`: send the client's `Authorization` / `x-api-key`.
     pub forwards_client_auth: bool,
+    /// Serve `GET {url}{models_path}` as Anthropic model identity.
+    pub live_models: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +61,7 @@ impl Backend {
             drop_headers: DropHeaders::new(&config.drop_headers),
             drop_fields: config.drop_fields.clone(),
             forwards_client_auth: config.kind == BackendKind::Passthrough,
+            live_models: config.kind == BackendKind::Passthrough || config.live_models,
         })
     }
 }

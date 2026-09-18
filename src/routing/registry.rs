@@ -136,4 +136,13 @@ impl Registry {
             .find(|backend| backend.kind == BackendKind::Passthrough)
             .cloned()
     }
+
+    /// Backends whose model identity is fetched live.
+    pub fn live_backends(&self) -> Vec<Arc<Backend>> {
+        self.backends
+            .values()
+            .filter(|backend| backend.live_models)
+            .cloned()
+            .collect()
+    }
 }

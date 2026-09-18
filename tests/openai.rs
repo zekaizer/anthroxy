@@ -999,3 +999,62 @@ display_name = "Grok"
         "{frames:?}"
     );
 }
+
+#[tokio::test]
+async fn live_models_publishes_openai_identity_and_routes() {
+    let upstream = MockUpstream::start(|req| {
+        if req.path_and_query.starts_with("/v1/models") {
+            json_response(
+                200,
+                json!({
+                    "object": "list",
+                    "data": [{
+                        "id": "grok-4",
+                        "object": "model",
+                        "created": 1700000000,
+                        "owned_by": "xai"
+                    }]
+                }),
+            )
+        } else {
+            completion(json!({"role": "assistant", "content": "ok"}), "stop")
+        }
+    })
+    .await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.grok]
+kind = "openai"
+url = "{url}"
+live_models = true
+credential = {{ kind = "static", value = "xai-oauth-token" }}
+"#,
+        url = upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router.get("/v1/models").send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let list: Value = res.json().await.unwrap();
+    assert_eq!(list["data"][0]["id"], "grok-4");
+    assert_eq!(list["data"][0]["type"], "model");
+    assert_eq!(list["data"][0]["display_name"], "grok-4");
+
+    let res = router
+        .post("/v1/messages", &json!({"model": "grok-4", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let received = upstream.last();
+    assert_eq!(received.path_and_query, "/v1/chat/completions");
+    assert_eq!(received.json()["model"], "grok-4");
+    assert_eq!(
+        received.header("authorization"),
+        Some("Bearer xai-oauth-token")
+    );
+}
