@@ -15,7 +15,7 @@ use support::mock_upstream::{echo, json_response};
 use support::openai::{
     chunk, completion, config_with_openai_backend, events, frame, sse_response, usage_and_done,
 };
-use support::router::{config_with_backend, messages_body};
+use support::router::{TOKEN, config_with_backend, messages_body};
 use support::{MockUpstream, TestRouter};
 
 fn claude_code_request(stream: bool) -> Value {
@@ -926,5 +926,76 @@ async fn anthropic_kind_never_translates() {
     assert_eq!(
         body["echo"]["body"]["future_field"],
         json!({"nested": [1, 2, 3]})
+    );
+}
+
+#[tokio::test]
+async fn grok_shaped_origin_translates_messages_and_stream() {
+    let upstream = MockUpstream::start(|req| {
+        if req.path_and_query.starts_with("/v1/models") {
+            json_response(
+                200,
+                json!({
+                    "object": "list",
+                    "data": [{"id": "grok-4", "object": "model", "created": 1}]
+                }),
+            )
+        } else if req.json()["stream"] == true {
+            sse_response(
+                vec![
+                    chunk(json!({"role": "assistant", "content": "hi"}), None),
+                    chunk(json!({}), Some("stop")),
+                ],
+                Duration::from_millis(1),
+            )
+        } else {
+            completion(json!({"role": "assistant", "content": "ok"}), "stop")
+        }
+    })
+    .await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.grok]
+kind = "openai"
+url = "{url}"
+credential = {{ kind = "static", value = "xai-oauth-token" }}
+
+[[models]]
+id = "grok"
+backend = "grok"
+upstream_model = "grok-4"
+display_name = "Grok"
+"#,
+        url = upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+
+    let mut body = claude_code_request(false);
+    body["model"] = json!("grok");
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let received = upstream.last();
+    assert_eq!(received.path_and_query, "/v1/chat/completions");
+    assert_eq!(
+        received.header("authorization"),
+        Some("Bearer xai-oauth-token")
+    );
+    assert_eq!(received.json()["model"], "grok-4");
+
+    let mut streamed = claude_code_request(true);
+    streamed["model"] = json!("grok");
+    let res = router.post("/v1/messages", &streamed).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let text = res.text().await.unwrap();
+    let frames = events(&text);
+    assert!(
+        frames
+            .iter()
+            .any(|(event, data)| event == "content_block_delta" && data["delta"]["text"] == "hi"),
+        "{frames:?}"
     );
 }
