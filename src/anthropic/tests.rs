@@ -28,6 +28,26 @@ fn error_response_serializes_to_anthropic_shape() {
 }
 
 #[test]
+fn identity_list_reads_anthropic_and_openai_shapes() {
+    let anthropic = br#"{"data":[{"id":"claude-opus-4-5","type":"model","display_name":"Opus","created_at":"2025-01-01T00:00:00Z"}]}"#;
+    let opus = identity_list(anthropic);
+    assert_eq!(opus.len(), 1);
+    assert_eq!(opus[0].id, "claude-opus-4-5");
+    assert_eq!(opus[0].display_name, "Opus");
+    assert_eq!(opus[0].created_at, "2025-01-01T00:00:00Z");
+
+    let openai = br#"{"object":"list","data":[{"id":"grok-4","object":"model","created":1700000000,"owned_by":"xai"}]}"#;
+    let grok = identity_list(openai);
+    assert_eq!(grok.len(), 1);
+    assert_eq!(grok[0].id, "grok-4");
+    assert_eq!(grok[0].display_name, "grok-4");
+    assert_eq!(grok[0].kind, "model");
+    assert!(grok[0].created_at.contains("2023"), "{}", grok[0].created_at);
+
+    assert!(identity_list(b"not json").is_empty());
+}
+
+#[test]
 fn model_list_fills_first_and_last() {
     let list = ModelList::all(vec![
         ModelObject::new("a", "A", "2026-01-01T00:00:00Z"),

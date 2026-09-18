@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use super::Route;
-use crate::anthropic::{ModelList, ModelObject};
+use crate::anthropic::ModelObject;
 use crate::upstream::{Backend, UpstreamClient, UpstreamRequest, upstream_headers};
 
 /// How long a fetched list is reused for the same client `Authorization`.
@@ -77,11 +77,15 @@ impl LiveCatalog {
         upstream: &UpstreamClient,
         client_headers: &HeaderMap,
     ) -> Vec<ModelObject> {
-        let auth = client_headers
-            .get(http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_owned();
+        let auth = if self.backend.forwards_client_auth {
+            client_headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_owned()
+        } else {
+            self.backend.name.clone()
+        };
         {
             let cache = self.cache.lock().await;
             if let Some(entry) = cache.as_ref()
@@ -97,7 +101,7 @@ impl LiveCatalog {
                 tracing::warn!(
                     backend = %self.backend.name,
                     error = %error,
-                    "passthrough model list failed; serving configured models only"
+                    "live model list failed; serving configured models only"
                 );
                 Vec::new()
             }
@@ -131,7 +135,7 @@ impl LiveCatalog {
             tracing::warn!(
                 backend = %self.backend.name,
                 status = upstream.response.status().as_u16(),
-                "passthrough model list was not 2xx"
+                "live model list was not 2xx"
             );
             return Ok(Vec::new());
         }
@@ -150,8 +154,6 @@ impl LiveCatalog {
                 });
             }
         };
-        let list: ModelList =
-            serde_json::from_slice(&raw).unwrap_or_else(|_| ModelList::all(vec![]));
-        Ok(list.data)
+        Ok(crate::anthropic::identity_list(&raw))
     }
 }

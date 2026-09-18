@@ -47,3 +47,46 @@ impl ModelList {
         }
     }
 }
+
+/// Anthropic model identity from an upstream `GET /v1/models` body.
+/// Accepts the Anthropic list (`type`/`display_name`/`created_at`) and the
+/// OpenAI list (`object`/`created`). Unknown JSON yields an empty list.
+pub fn identity_list(bytes: &[u8]) -> Vec<ModelObject> {
+    #[derive(serde::Deserialize)]
+    struct WireList {
+        #[serde(default)]
+        data: Vec<WireModel>,
+    }
+    #[derive(serde::Deserialize)]
+    struct WireModel {
+        id: String,
+        #[serde(default)]
+        display_name: Option<String>,
+        #[serde(default)]
+        created_at: Option<String>,
+        #[serde(default)]
+        created: Option<i64>,
+    }
+    let Ok(list) = serde_json::from_slice::<WireList>(bytes) else {
+        return Vec::new();
+    };
+    list.data
+        .into_iter()
+        .filter(|m| !m.id.is_empty())
+        .map(|m| {
+            let display_name = m.display_name.filter(|s| !s.is_empty()).unwrap_or_else(|| m.id.clone());
+            let created_at = m.created_at.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+                m.created
+                    .and_then(unix_created_at)
+                    .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_owned())
+            });
+            ModelObject::new(m.id, display_name, created_at)
+        })
+        .collect()
+}
+
+fn unix_created_at(created: i64) -> Option<String> {
+    jiff::Timestamp::from_second(created)
+        .ok()
+        .map(|t| t.to_string())
+}
