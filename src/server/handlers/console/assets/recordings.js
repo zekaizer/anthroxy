@@ -318,12 +318,10 @@ function entryFacts(e, filterBy) {
   const facts = [];
   if (e.messages !== null && e.messages !== undefined) facts.push(`${e.messages} message(s)`);
   if (e.session) {
-    facts.push(h("button", {
-      type: "button",
-      class: "link small mono",
+    facts.push(sessionChip(e.session, true, {
       title: `Show only session ${e.session}`,
       onclick: (event) => { event.stopPropagation(); filterBy(e.session); },
-    }, `session ${e.session.length > 8 ? `${e.session.slice(0, 8)}…` : e.session}`));
+    }));
   }
   if (e.stream !== null && e.stream !== undefined) facts.push(e.stream ? "stream" : "whole response");
   if (e.path && !/^\/v1\/(messages|chat\/completions)(\?|$)/.test(e.path)) facts.push(h("span", { class: "mono" }, e.path));

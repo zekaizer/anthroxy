@@ -227,12 +227,14 @@ async fn requests_show_what_is_in_flight_and_what_finished() {
     let in_flight = requests["in_flight"].as_array().unwrap();
     assert_eq!(in_flight.len(), 1, "{requests}");
     assert_eq!(in_flight[0]["id"], id.as_str());
+    assert_eq!(in_flight[0]["session"], Value::Null);
     assert_eq!(in_flight[0]["outcome"], Value::Null);
     assert!(in_flight[0]["elapsed_ms"].is_u64());
     let _ = res.text().await.unwrap();
 
     let res = router
         .post("/v1/messages", &messages_body("smart"))
+        .header("x-claude-code-session-id", "sess-console-1")
         .send()
         .await
         .unwrap();
@@ -252,6 +254,8 @@ async fn requests_show_what_is_in_flight_and_what_finished() {
     let recent = requests["recent"].as_array().unwrap();
     assert_eq!(recent.len(), 2, "{requests}");
     assert_eq!(recent[0]["id"], failed.as_str(), "newest first");
+    assert_eq!(recent[0]["session"], "sess-console-1");
+    assert_eq!(recent[1]["session"], Value::Null);
     assert_eq!(recent[1]["outcome"], "complete");
     assert_eq!(recent[1]["usage"]["output"], 2);
     let speed = recent[1]["output_tokens_per_second"]

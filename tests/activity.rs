@@ -116,6 +116,7 @@ async fn a_streamed_exchange_is_tracked_and_persisted_with_its_usage() {
         cache_reported: true,
     });
     assert_eq!(view.usage, usage);
+    assert_eq!(view.session, None);
 
     let records = stats_records(&router.stats_dir, 1).await;
     assert_eq!(records.len(), 1);
@@ -128,6 +129,22 @@ async fn a_streamed_exchange_is_tracked_and_persisted_with_its_usage() {
         !text.contains("secret answer") && !text.contains("\"u1\""),
         "no content in statistics: {text}"
     );
+}
+
+#[tokio::test]
+async fn a_claude_code_session_id_is_kept_on_the_exchange() {
+    let upstream = MockUpstream::start(|_| sse(ANTHROPIC_SSE)).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &messages_body("claude-haiku-4-5"))
+        .header("x-claude-code-session-id", "sess-abc-123")
+        .send()
+        .await
+        .unwrap();
+    let id = request_id(&res);
+    let _ = res.text().await.unwrap();
+    let view = finished(&router, &id).await;
+    assert_eq!(view.session.as_deref(), Some("sess-abc-123"));
 }
 
 #[tokio::test]

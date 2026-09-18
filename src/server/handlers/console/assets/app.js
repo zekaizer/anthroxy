@@ -181,6 +181,52 @@ function tag(text) {
   return h("span", { class: "badge tag" }, text);
 }
 
+/// Hues away from status (red ~6, amber ~39, green ~145, accent ~217) and
+/// from each other. New sessions take the next slot; neighbours in this
+/// list are opposite on the wheel so two fresh sessions do not look alike.
+const SESSION_HUES = [252, 70, 288, 178, 324, 102];
+
+const sessionHues = new Map();
+
+function hueGap(a, b) {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
+}
+
+/// Next palette hue farthest from ones already handed out; wraps to the
+/// least-used slot once every hue is in play.
+function sessionHue(id) {
+  const had = sessionHues.get(id);
+  if (had !== undefined) return had;
+  const used = [...sessionHues.values()];
+  let best = SESSION_HUES[0];
+  let bestScore = -Infinity;
+  for (const hue of SESSION_HUES) {
+    const taken = used.filter((h) => h === hue).length;
+    const nearest = used.length ? Math.min(...used.map((h) => hueGap(hue, h))) : 180;
+    const score = -taken * 1000 + nearest;
+    if (score > bestScore) {
+      bestScore = score;
+      best = hue;
+    }
+  }
+  sessionHues.set(id, best);
+  return best;
+}
+
+/// Session id as a chip whose colour is the session's, not the row's state.
+/// Hue is a class, not an inline style: the page CSP forbids the latter.
+function sessionChip(id, short, extra) {
+  const shown = short && id.length > 16 ? `${id.slice(0, 16)}…` : id;
+  const click = extra && extra.onclick;
+  return h(click ? "button" : "span", {
+    type: click ? "button" : undefined,
+    class: `badge session-chip hue-${sessionHue(id)}`,
+    title: id,
+    ...(extra || {}),
+  }, shown);
+}
+
 const HEALTH_KIND = { ok: "ok", attention: "warn", trouble: "err" };
 
 /// The header's standing answer to "is anything wrong", on every tab, and the
@@ -777,7 +823,7 @@ function aliasesSnippet(status) {
 // ---------------------------------------------------------------- requests
 
 function requests(view, selected) {
-  const filter = h("input", { type: "text", placeholder: "Filter by model, backend, id or status", value: state.requestsFilter });
+  const filter = h("input", { type: "text", placeholder: "Filter by model, backend, id, session or status", value: state.requestsFilter });
   const errorsOnly = h("input", { type: "checkbox" });
   errorsOnly.checked = state.errorsOnly;
   const inFlight = h("div", { class: "strip" });
@@ -795,7 +841,7 @@ function requests(view, selected) {
     const matches = (v) => {
       if (errorsOnly.checked && v.outcome !== "error") return false;
       if (!needle) return true;
-      return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer]
+      return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer, v.session]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
     const running = data.in_flight.filter(matches);
@@ -803,10 +849,11 @@ function requests(view, selected) {
     // row is a third of the first screen spent saying so.
     rerender(inFlight, running.length
       ? table(
-        ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
+        ["Started", "Session", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
         running.map((v) =>
           openRow({ class: "clickable", "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
             h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub mono" }, v.id)),
+            h("td", null, sessionNote(v) || "–"),
             h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
             h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
             h("td", null, statusBadge(v.status)),
@@ -825,10 +872,11 @@ function requests(view, selected) {
       const at = new Date(v.received_at).toDateString();
       if (at !== day) {
         day = at;
-        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 9 }, dayLabel(v.received_at))));
+        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 10 }, dayLabel(v.received_at))));
       }
       rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
         h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub" }, rel(v.received_at))),
+        h("td", null, sessionNote(v) || "–"),
         h("td", { class: "mono model" }, modelCell(v), pathNote(v),
           v.source === "console" ? h("div", null, kindBadge("console")) : null),
         h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
@@ -848,7 +896,7 @@ function requests(view, selected) {
       `Show ${fmt.int(Math.min(LIST_PAGE, hidden))} more of ${fmt.int(hidden)} not shown`);
     more.addEventListener("click", () => { shown += LIST_PAGE; draw(); });
     rerender(recent, table(
-      ["Time", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
+      ["Time", "Session", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
       rows,
       { empty: "No finished request since the router started." }),
       hidden ? h("p", { class: "note" }, more) : null);
@@ -939,6 +987,10 @@ function pathNote(v) {
   return v.path === "/v1/messages" ? null : h("div", { class: "sub" }, v.path);
 }
 
+function sessionNote(v) {
+  return v.session ? sessionChip(v.session) : null;
+}
+
 function modelCell(v) {
   if (!v.requested_model) return "–";
   if (!v.model) return [v.requested_model, h("div", { class: "sub" }, "no route")];
@@ -956,6 +1008,7 @@ async function showRequest(target, id, scroll) {
     rerender(target, panel(`Request ${v.id}`, [recording, close],
       h("dl", { class: "facts" },
         fact("Received", `${fmt.time(v.received_at)} from ${v.peer || "–"}${v.source === "console" ? " (console test)" : ""}`),
+        v.session ? fact("Session", sessionChip(v.session)) : null,
         fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
         fact("Model", v.requested_model ? `${v.requested_model}${v.model ? ` → ${v.model} (${v.matched})` : " (no route)"}` : "–"),
         fact("Backend", v.backend ? `${v.backend} (${v.kind}), upstream model ${v.upstream_model}` : "–"),

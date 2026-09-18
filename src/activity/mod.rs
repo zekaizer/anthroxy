@@ -51,6 +51,8 @@ pub struct ExchangeView {
     pub received_at: jiff::Timestamp,
     pub source: Source,
     pub peer: Option<String>,
+    /// Claude Code's `x-claude-code-session-id`, as the client sent it.
+    pub session: Option<String>,
     pub method: String,
     pub path: String,
     /// What the client named, cut.
@@ -115,6 +117,7 @@ impl Activity {
                 received_at: jiff::Timestamp::now(),
                 source,
                 peer,
+                session: None,
                 method: method.to_owned(),
                 path: path.to_owned(),
                 requested_model: None,

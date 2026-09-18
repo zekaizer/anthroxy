@@ -74,6 +74,11 @@ impl Exchange {
         });
     }
 
+    /// Claude Code's session id, as the client sent it.
+    pub fn session(&self, id: &str) {
+        self.update(|v| v.session = Some(cut(id, 200)));
+    }
+
     /// The request named a model no route serves; tallied.
     pub fn unrouted(&self, model: &str) {
         self.activity.names_mut().unknown(model);

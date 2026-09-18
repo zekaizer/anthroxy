@@ -110,6 +110,14 @@ async fn handle(
         .then(|| anthropic::summarize(&body));
     let requested_model = peek.model.expect("peek guarantees a model");
     note(exchange, |e| e.requested(&requested_model, peek.stream));
+    if let Some(session) = parts
+        .headers
+        .get(SESSION_ID)
+        .and_then(|value| value.to_str().ok())
+        .filter(|id| !id.is_empty())
+    {
+        note(exchange, |e| e.session(session));
+    }
     let resolution = state.registry.resolve(&requested_model).ok_or_else(|| {
         note(exchange, |e| e.unrouted(&requested_model));
         RouterError::unknown_model(&requested_model, &state.registry)

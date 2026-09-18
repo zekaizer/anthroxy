@@ -368,7 +368,22 @@ td.model .sub { white-space: nowrap; }
 .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-line); }
 .badge.err { background: var(--err-soft); color: var(--err); border-color: var(--err-line); }
 .badge.info { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
-
+/* Colour is the session, not a status. Classes, not inline style: CSP. */
+.session-chip { font-family: var(--mono); font-weight: 600; }
+.session-chip.hue-252 { color: hsl(252, 72%, 32%); background: hsl(252, 70%, 90%); border-color: hsl(252, 48%, 70%); }
+.session-chip.hue-70  { color: hsl(70, 72%, 24%);  background: hsl(70, 72%, 86%);  border-color: hsl(70, 48%, 58%); }
+.session-chip.hue-288 { color: hsl(288, 72%, 32%); background: hsl(288, 70%, 91%); border-color: hsl(288, 48%, 72%); }
+.session-chip.hue-178 { color: hsl(178, 72%, 24%); background: hsl(178, 70%, 86%); border-color: hsl(178, 48%, 58%); }
+.session-chip.hue-324 { color: hsl(324, 72%, 32%); background: hsl(324, 70%, 90%); border-color: hsl(324, 48%, 70%); }
+.session-chip.hue-102 { color: hsl(102, 72%, 24%); background: hsl(102, 70%, 86%); border-color: hsl(102, 48%, 56%); }
+@media (prefers-color-scheme: dark) {
+  .session-chip.hue-252 { color: hsl(252, 70%, 84%); background: hsl(252, 40%, 20%); border-color: hsl(252, 35%, 38%); }
+  .session-chip.hue-70  { color: hsl(70, 70%, 78%);  background: hsl(70, 40%, 16%);  border-color: hsl(70, 35%, 32%); }
+  .session-chip.hue-288 { color: hsl(288, 70%, 84%); background: hsl(288, 40%, 20%); border-color: hsl(288, 35%, 38%); }
+  .session-chip.hue-178 { color: hsl(178, 70%, 78%); background: hsl(178, 40%, 16%); border-color: hsl(178, 35%, 32%); }
+  .session-chip.hue-324 { color: hsl(324, 70%, 84%); background: hsl(324, 40%, 20%); border-color: hsl(324, 35%, 38%); }
+  .session-chip.hue-102 { color: hsl(102, 70%, 78%); background: hsl(102, 40%, 16%); border-color: hsl(102, 35%, 32%); }
+}
 /* A badge that is also the way to what it reports. */
 button.badge { height: auto; cursor: pointer; }
 button.badge:hover:not(:disabled) { border-color: currentColor; }
