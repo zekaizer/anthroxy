@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::view::redacted_url;
 use super::{
-    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, origin,
+    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, V1Auth,
+    origin,
 };
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
@@ -14,10 +15,23 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     if config.server.token.trim().is_empty() {
         problems.push("server.token must not be empty".to_owned());
     }
+    if config.server.v1_auth == V1Auth::None && !config.server.listen.ip().is_loopback() {
+        problems.push(
+            "server.v1_auth = \"none\" requires server.listen on a loopback address".to_owned(),
+        );
+    }
     if config.backends.is_empty() {
         problems.push("at least one [backends.<name>] is required".to_owned());
     }
-    if config.models.is_empty() {
+    let passthrough = config
+        .backends
+        .iter()
+        .filter(|(_, b)| b.kind == BackendKind::Passthrough)
+        .count();
+    if passthrough > 1 {
+        problems.push("at most one backend with kind = \"passthrough\" is allowed".to_owned());
+    }
+    if config.models.is_empty() && passthrough == 0 {
         problems.push("at least one [[models]] entry is required".to_owned());
     }
     // `0s` turns a limit off elsewhere in the file (`logging.body_retention`),
@@ -121,6 +135,21 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 "backends.{name}.anthropic_beta: not sent to a backend with kind = \"openai\""
             ));
         }
+        if backend.kind == BackendKind::Passthrough {
+            if !matches!(backend.credential, CredentialConfig::None) {
+                problems.push(format!(
+                    "backends.{name}.credential: kind = \"passthrough\" forwards the client's Authorization; a backend credential is not allowed"
+                ));
+            }
+            if !backend.drop_fields.is_empty()
+                || !backend.headers.is_empty()
+                || !backend.anthropic_beta.is_empty()
+            {
+                problems.push(format!(
+                    "backends.{name}: kind = \"passthrough\" relays the request unmodified; drop_fields, headers and anthropic_beta are not applied"
+                ));
+            }
+        }
         for flag in &backend.anthropic_beta {
             if flag.contains(',') || http::HeaderValue::from_str(flag).is_err() {
                 problems.push(format!(
@@ -163,6 +192,11 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         if !config.backends.contains_key(&model.backend) {
             problems.push(format!(
                 "models[{index}].backend: `{}` is not a configured backend",
+                model.backend
+            ));
+        } else if config.backends[&model.backend].kind == BackendKind::Passthrough {
+            problems.push(format!(
+                "models[{index}].backend: `{0}` has kind = \"passthrough\"; its models come from the backend, not [[models]]",
                 model.backend
             ));
         }

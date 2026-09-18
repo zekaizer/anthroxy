@@ -21,6 +21,8 @@ pub struct Backend {
     pub drop_headers: DropHeaders,
     /// Body paths removed before forwarding.
     pub drop_fields: Vec<String>,
+    /// `kind = "passthrough"`: send the client's `Authorization` / `x-api-key`.
+    pub forwards_client_auth: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +58,7 @@ impl Backend {
             anthropic_beta: config.anthropic_beta.clone(),
             drop_headers: DropHeaders::new(&config.drop_headers),
             drop_fields: config.drop_fields.clone(),
+            forwards_client_auth: config.kind == BackendKind::Passthrough,
         })
     }
 }

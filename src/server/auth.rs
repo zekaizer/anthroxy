@@ -12,7 +12,7 @@ use http::header::AUTHORIZATION;
 use subtle::ConstantTimeEq;
 
 use super::{RequestId, RouterError, Snapshot};
-use crate::config::X_API_KEY;
+use crate::config::{V1Auth, X_API_KEY};
 
 #[derive(Clone)]
 pub struct ClientToken(Vec<u8>);
@@ -69,4 +69,17 @@ pub async fn require_client_token(
         tracing::warn!("rejected request: no client token");
     }
     RouterError::Unauthorized.into_response(&request_id)
+}
+
+/// `/v1` only: skipped when `server.v1_auth = "none"`.
+pub async fn require_v1(
+    Extension(snapshot): Extension<Arc<Snapshot>>,
+    request_id: RequestId,
+    request: Request,
+    next: Next,
+) -> Response {
+    if snapshot.config.server.v1_auth == V1Auth::None {
+        return next.run(request).await;
+    }
+    require_client_token(Extension(snapshot), request_id, request, next).await
 }

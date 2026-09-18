@@ -106,6 +106,17 @@ fn upstream_headers_drop_hop_by_hop_and_client_auth() {
 }
 
 #[test]
+fn passthrough_keeps_the_client_authorization() {
+    let out = upstream_headers(
+        &client_headers(),
+        &backend_of_kind(BackendKind::Passthrough, &[], &[]),
+    );
+    assert_eq!(out["authorization"], "Bearer client-token");
+    assert_eq!(out["x-api-key"], "client-token");
+    assert_eq!(out["anthropic-version"], "2023-06-01");
+}
+
+#[test]
 fn upstream_headers_apply_backend_overrides() {
     let out = upstream_headers(
         &client_headers(),

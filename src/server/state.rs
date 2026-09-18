@@ -13,7 +13,7 @@ use super::{ClientToken, ServerBuildError};
 use crate::activity::Activity;
 use crate::config::Config;
 use crate::observability::BodyLog;
-use crate::routing::Registry;
+use crate::routing::{LiveCatalog, Registry};
 use crate::stats::StatsLog;
 use crate::upstream::UpstreamClient;
 use crate::upstream::probe::ListedModel;
@@ -23,6 +23,7 @@ pub struct Snapshot {
     /// The configuration this snapshot was built from.
     pub config: Config,
     pub registry: Registry,
+    pub live: Option<LiveCatalog>,
     pub upstream: UpstreamClient,
     pub client_token: ClientToken,
     pub max_body_bytes: usize,
@@ -54,9 +55,12 @@ impl Snapshot {
             ),
             false => None,
         };
+        let registry = Registry::from_config(config)?;
+        let live = registry.passthrough().map(LiveCatalog::new);
         Ok(Self {
             config: config.clone(),
-            registry: Registry::from_config(config)?,
+            registry,
+            live,
             upstream: UpstreamClient::from_config(&config.upstream, &config.backends)?,
             client_token: ClientToken::new(&config.server.token),
             max_body_bytes: config.server.max_body_bytes,

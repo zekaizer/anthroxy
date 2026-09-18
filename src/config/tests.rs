@@ -765,6 +765,97 @@ fn backend_kind_defaults_to_anthropic_and_accepts_openai() {
 }
 
 #[test]
+fn v1_auth_none_requires_loopback_listen() {
+    let p = problems(
+        r#"
+[server]
+listen = "0.0.0.0:8787"
+token = "t"
+v1_auth = "none"
+
+[backends.local]
+url = "http://127.0.0.1:1"
+
+[[models]]
+id = "m"
+backend = "local"
+"#,
+    );
+    assert!(
+        p.iter()
+            .any(|s| s.contains("v1_auth") && s.contains("loopback")),
+        "{p:?}"
+    );
+}
+
+#[test]
+fn passthrough_backend_allows_no_models_table() {
+    let c = parse(
+        r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+v1_auth = "none"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+"#,
+    )
+    .unwrap();
+    assert_eq!(c.server.v1_auth, V1Auth::None);
+    assert_eq!(c.backends["account"].kind, BackendKind::Passthrough);
+    assert!(c.models.is_empty());
+}
+
+#[test]
+fn passthrough_rejects_a_models_entry_and_a_second_passthrough() {
+    let p = problems(
+        r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+
+[backends.other]
+kind = "passthrough"
+url = "https://example.com"
+
+[[models]]
+id = "m"
+backend = "account"
+"#,
+    );
+    let joined = p.join("\n");
+    assert!(joined.contains("at most one"), "{joined}");
+    assert!(joined.contains("passthrough"), "{joined}");
+}
+
+#[test]
+fn passthrough_rejects_a_backend_credential() {
+    let p = problems(
+        r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+credential = { kind = "static", value = "sk" }
+"#,
+    );
+    assert!(
+        p.iter()
+            .any(|s| s.contains("credential") && s.contains("passthrough")),
+        "{p:?}"
+    );
+}
+
+#[test]
 fn backend_kind_rejects_unknown_values() {
     let text = MINIMAL.replace("[backends.local]", "[backends.local]\nkind = \"responses\"");
     let error = parse(&text).unwrap_err();

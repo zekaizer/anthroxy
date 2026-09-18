@@ -36,11 +36,25 @@ pub struct ServerConfig {
     /// WSL2 instance under both NAT and mirrored networking.
     #[serde(default = "ServerConfig::default_listen")]
     pub listen: SocketAddr,
-    /// Static token Claude Code must present (`x-api-key` or bearer).
+    /// Static token the console presents, and `/v1` when [`V1Auth::Token`].
     pub token: String,
+    /// How `/v1/*` authenticates. The console always uses `token`.
+    #[serde(default)]
+    pub v1_auth: V1Auth,
     /// Largest accepted request body.
     #[serde(default = "ServerConfig::default_max_body", with = "byte_size")]
     pub max_body_bytes: usize,
+}
+
+/// `/v1` client authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum V1Auth {
+    /// `x-api-key` or `Authorization: Bearer` must equal `server.token`.
+    #[default]
+    Token,
+    /// No `/v1` authentication. `listen` must be loopback.
+    None,
 }
 
 impl ServerConfig {
@@ -168,6 +182,9 @@ pub enum BackendKind {
     #[default]
     Anthropic,
     OpenAi,
+    /// Origin whose model list is fetched live and whose requests are relayed
+    /// byte-for-byte, including the client's `Authorization`.
+    Passthrough,
 }
 
 #[derive(Debug, Clone, Deserialize)]

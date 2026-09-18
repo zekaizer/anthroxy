@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use crate::config::Config;
+use crate::config::{BackendKind, Config};
 use crate::upstream::{Backend, BackendBuildError};
 
 /// One exposed model and where it goes.
@@ -127,5 +127,13 @@ impl Registry {
 
     pub fn default_route(&self) -> Option<&Route> {
         self.default.map(|i| &self.routes[i])
+    }
+
+    /// The unique `kind = "passthrough"` backend, if configured.
+    pub fn passthrough(&self) -> Option<Arc<Backend>> {
+        self.backends
+            .values()
+            .find(|backend| backend.kind == BackendKind::Passthrough)
+            .cloned()
     }
 }

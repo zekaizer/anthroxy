@@ -32,6 +32,7 @@ pub struct ModelList {
     pub data: Vec<ModelObject>,
     pub first_id: Option<String>,
     pub last_id: Option<String>,
+    #[serde(default)]
     pub has_more: bool,
 }
 

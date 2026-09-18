@@ -28,7 +28,7 @@ pub use error::ConfigError;
 pub use origin::origin;
 pub use schema::{
     BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, LogFormat, LoggingConfig,
-    ModelConfig, RoutingConfig, ServerConfig, StatsConfig, UpstreamConfig,
+    ModelConfig, RoutingConfig, ServerConfig, StatsConfig, UpstreamConfig, V1Auth,
 };
 
 /// Environment variable naming the configuration file.

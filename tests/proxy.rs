@@ -887,6 +887,124 @@ async fn a_quiet_stream_after_the_first_chunk_trips_idle_timeout() {
     );
 }
 
+fn passthrough_and_local(url: &str) -> String {
+    format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+v1_auth = "none"
+
+[backends.account]
+kind = "passthrough"
+url = "{url}"
+
+[backends.mock]
+url = "{url}"
+credential = {{ kind = "static", value = "backend-secret-key" }}
+
+[[models]]
+id = "fast"
+backend = "mock"
+upstream_model = "mock-fast-v1"
+"#
+    )
+}
+
+#[tokio::test]
+async fn v1_auth_none_serves_v1_without_a_router_token() {
+    let upstream = MockUpstream::start(|req| {
+        if req.path_and_query.starts_with("/v1/models") {
+            json_response(
+                200,
+                json!({
+                    "data": [{
+                        "id": "claude-opus-4-5",
+                        "type": "model",
+                        "display_name": "Opus",
+                        "created_at": "2024-01-01T00:00:00Z"
+                    }, {
+                        "id": "fast",
+                        "type": "model",
+                        "display_name": "Should lose",
+                        "created_at": "2024-01-01T00:00:00Z"
+                    }],
+                    "has_more": false
+                }),
+            )
+        } else {
+            echo(req)
+        }
+    })
+    .await;
+    let router = TestRouter::start(&passthrough_and_local(&upstream.url())).await;
+
+    let res = router
+        .http
+        .get(router.url("/v1/models"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(model_ids(&body), ["claude-opus-4-5", "fast"]);
+
+    let res = router
+        .http
+        .post(router.url("/v1/messages"))
+        .header("authorization", "Bearer sk-ant-oat01-test")
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .body(messages_body("claude-opus-4-5").to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let seen = upstream.received();
+    let messages = seen
+        .iter()
+        .find(|r| r.path_and_query.starts_with("/v1/messages"))
+        .expect("messages reached upstream");
+    assert_eq!(
+        messages.header("authorization"),
+        Some("Bearer sk-ant-oat01-test")
+    );
+    assert!(messages.header("x-anthroxy-backend").is_none());
+
+    let res = router
+        .http
+        .post(router.url("/v1/messages"))
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .body(messages_body("fast").to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let seen = upstream.received();
+    let messages: Vec<_> = seen
+        .iter()
+        .filter(|r| r.path_and_query.starts_with("/v1/messages"))
+        .collect();
+    assert_eq!(messages.len(), 2, "{seen:?}");
+    let local = messages
+        .iter()
+        .find(|r| r.json()["model"] == "mock-fast-v1")
+        .expect("local model rewritten");
+    assert_eq!(
+        local.header("authorization"),
+        Some("Bearer backend-secret-key")
+    );
+
+    let res = router
+        .http
+        .get(router.url("/api/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
 #[tokio::test]
 async fn a_credential_refresh_does_not_spend_the_retry_budget() {
     // 401 once, then the retryable status for as many attempts as the budget

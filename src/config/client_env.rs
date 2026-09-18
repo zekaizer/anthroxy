@@ -39,12 +39,13 @@ pub fn vars(config: &Config, base_url: &str) -> Vec<(&'static str, String)> {
         .clone()
         .or_else(|| config.models.first().map(|m| m.id.clone()))
         .unwrap_or_default();
-    vec![
-        ("ANTHROPIC_BASE_URL", base_url.to_owned()),
-        ("ANTHROPIC_AUTH_TOKEN", config.server.token.clone()),
-        ("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1".to_owned()),
-        ("ANTHROPIC_MODEL", default_model),
-    ]
+    let mut vars = vec![("ANTHROPIC_BASE_URL", base_url.to_owned())];
+    if config.server.v1_auth != super::V1Auth::None {
+        vars.push(("ANTHROPIC_AUTH_TOKEN", config.server.token.clone()));
+    }
+    vars.push(("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1".to_owned()));
+    vars.push(("ANTHROPIC_MODEL", default_model));
+    vars
 }
 
 /// `wsl_localhost` adds the note that the Windows host needs the
@@ -135,6 +136,20 @@ mod tests {
             out.contains("export ANTHROPIC_MODEL='m2'\n"),
             "default model wins"
         );
+    }
+
+    #[test]
+    fn v1_auth_none_omits_the_auth_token() {
+        let text = "[server]\nlisten = \"127.0.0.1:8787\"\ntoken = \"tok\"\nv1_auth = \"none\"\n[backends.a]\nurl = \"http://a\"\n[[models]]\nid = \"m1\"\nbackend = \"a\"\n";
+        let config = Config::parse(text, |_| None).unwrap();
+        let out = render_for(&config, None, EnvFormat::Sh);
+        assert!(
+            out.contains("export ANTHROPIC_BASE_URL='http://127.0.0.1:8787'\n"),
+            "{out}"
+        );
+        assert!(!out.contains("ANTHROPIC_AUTH_TOKEN"), "{out}");
+        assert!(out.contains("export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1'\n"));
+        assert!(out.contains("export ANTHROPIC_MODEL='m1'\n"), "{out}");
     }
 
     #[test]

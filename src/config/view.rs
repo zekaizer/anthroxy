@@ -55,6 +55,10 @@ pub fn masked(config: &Config) -> Value {
         "server": {
             "listen": config.server.listen.to_string(),
             "token": REDACTED,
+            "v1_auth": match config.server.v1_auth {
+                super::V1Auth::Token => "token",
+                super::V1Auth::None => "none",
+            },
             "max_body_bytes": config.server.max_body_bytes,
         },
         "logging": {

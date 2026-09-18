@@ -189,6 +189,7 @@ async fn status_reports_the_running_configuration_without_its_secrets() {
 
     let config = &status["config"];
     assert_eq!(config["server"]["token"], "<redacted>");
+    assert_eq!(config["server"]["v1_auth"], "token");
     assert_eq!(config["backends"]["mock"]["credential"]["kind"], "static");
     assert_eq!(
         config["backends"]["mock"]["credential"]["value"],

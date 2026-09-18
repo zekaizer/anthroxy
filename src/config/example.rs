@@ -16,6 +16,11 @@ listen = "0.0.0.0:8787"
 # The one token Claude Code presents (as ANTHROPIC_AUTH_TOKEN). Generated at
 # init; replace it with anything you like.
 token = "__TOKEN__"
+# How /v1 authenticates. "token" (default) requires this value as x-api-key
+# or Authorization: Bearer. "none" is unauthenticated /v1 and requires a
+# loopback listen; the console still uses token. Use "none" with a
+# kind = "passthrough" backend so Claude Code can send only ANTHROPIC_BASE_URL.
+# v1_auth = "token"
 # Largest accepted request body. Claude Code sends whole conversations.
 max_body_bytes = "64MiB"
 
