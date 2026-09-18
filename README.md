@@ -138,6 +138,11 @@ kind = "openai"
 url = "https://llm.example.corp"
 credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
 
+[backends.grok]                              # xAI Chat Completions + OAuth helper
+kind = "openai"
+url = "https://api.x.ai"
+credential = { kind = "command", command = "/path/to/anthroxy/scripts/xai-oauth print", output = "json", refresh = "5m" }
+
 [[models]]
 id = "qwen"                      # what Claude Code sees and sends
 backend = "vllm"
