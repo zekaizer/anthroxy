@@ -189,6 +189,7 @@ async fn status_reports_the_running_configuration_without_its_secrets() {
 
     let config = &status["config"];
     assert_eq!(config["server"]["token"], "<redacted>");
+    assert_eq!(config["server"]["v1_auth"], "token");
     assert_eq!(config["backends"]["mock"]["credential"]["kind"], "static");
     assert_eq!(
         config["backends"]["mock"]["credential"]["value"],
@@ -199,7 +200,9 @@ async fn status_reports_the_running_configuration_without_its_secrets() {
         "<redacted>"
     );
     assert_eq!(config["backends"]["mock"]["url"], upstream.url());
-    assert_eq!(config["upstream"]["read_timeout"], "5m");
+    assert_eq!(config["upstream"]["non_stream_timeout"], "15m");
+    assert_eq!(config["upstream"]["stream_first_byte_timeout"], "5m");
+    assert_eq!(config["upstream"]["stream_idle_timeout"], "1m");
 }
 
 #[tokio::test]

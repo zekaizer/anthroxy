@@ -110,7 +110,9 @@ retention = "90d"                # delete daily files older than this; "0s" keep
 
 [upstream]
 connect_timeout = "10s"
-read_timeout = "5m"              # silence tolerated between response chunks
+non_stream_timeout = "15m"       # whole non-stream response after connect
+stream_first_byte_timeout = "5m" # stream: until the first body byte
+stream_idle_timeout = "60s"      # stream: silence between subsequent chunks
 retries = 2                      # after connection failures only
 retry_backoff = "200ms"
 retry_on_status = []             # e.g. [502, 503]

@@ -35,13 +35,13 @@ pub fn build(state: AppState) -> Router {
         )
         .layer(DefaultBodyLimit::max(CONSOLE_BODY_LIMIT));
 
-    let protected = Router::new()
+    let v1 = Router::new()
         .route("/v1/models", get(models::list))
         .route("/v1/models/{id}", get(models::get_one))
         .route("/v1/messages", post(proxy::proxy))
         .route("/v1/messages/count_tokens", post(proxy::proxy))
-        .merge(console_api)
-        .route_layer(middleware::from_fn(auth::require_client_token));
+        .route_layer(middleware::from_fn(auth::require_v1));
+    let console_api = console_api.route_layer(middleware::from_fn(auth::require_client_token));
 
     Router::new()
         .route("/healthz", get(health::healthz))
@@ -51,7 +51,8 @@ pub fn build(state: AppState) -> Router {
         .route("/ui/app.js", get(console::script))
         .route("/ui/recordings.js", get(console::recordings_script))
         .route("/ui/app.css", get(console::style))
-        .merge(protected)
+        .merge(v1)
+        .merge(console_api)
         .fallback(not_found)
         // Without this a method no route takes answers 405 with an empty body,
         // the one reply that would not be an Anthropic error document.

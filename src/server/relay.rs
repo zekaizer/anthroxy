@@ -134,9 +134,10 @@ impl<S> Relay<S> {
     }
 }
 
-impl<S> Stream for Relay<S>
+impl<S, E> Stream for Relay<S>
 where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
+    E: std::fmt::Display,
 {
     type Item = Result<Bytes, std::io::Error>;
 

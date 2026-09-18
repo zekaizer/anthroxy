@@ -55,6 +55,10 @@ pub fn masked(config: &Config) -> Value {
         "server": {
             "listen": config.server.listen.to_string(),
             "token": REDACTED,
+            "v1_auth": match config.server.v1_auth {
+                super::V1Auth::Token => "token",
+                super::V1Auth::None => "none",
+            },
             "max_body_bytes": config.server.max_body_bytes,
         },
         "logging": {
@@ -68,7 +72,9 @@ pub fn masked(config: &Config) -> Value {
         },
         "upstream": {
             "connect_timeout": duration(config.upstream.connect_timeout),
-            "read_timeout": duration(config.upstream.read_timeout),
+            "non_stream_timeout": duration(config.upstream.non_stream_timeout),
+            "stream_first_byte_timeout": duration(config.upstream.stream_first_byte_timeout),
+            "stream_idle_timeout": duration(config.upstream.stream_idle_timeout),
             "retries": config.upstream.retries,
             "retry_backoff": duration(config.upstream.retry_backoff),
             "retry_on_status": config.upstream.retry_on_status,
@@ -170,7 +176,9 @@ mod tests {
 token = "router-token-value"
 
 [upstream]
-read_timeout = "2m"
+non_stream_timeout = "10m"
+stream_first_byte_timeout = "2m"
+stream_idle_timeout = "30s"
 
 [backends.a]
 url = "http://a"
@@ -198,7 +206,9 @@ backend = "a"
             assert!(!shown.contains(secret), "{secret} leaked: {shown}");
         }
         assert_eq!(view["server"]["token"], REDACTED);
-        assert_eq!(view["upstream"]["read_timeout"], "2m");
+        assert_eq!(view["upstream"]["non_stream_timeout"], "10m");
+        assert_eq!(view["upstream"]["stream_first_byte_timeout"], "2m");
+        assert_eq!(view["upstream"]["stream_idle_timeout"], "30s");
         assert_eq!(
             view["backends"]["a"]["credential"]["header"],
             "x-api-key: …"

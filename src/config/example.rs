@@ -16,6 +16,11 @@ listen = "0.0.0.0:8787"
 # The one token Claude Code presents (as ANTHROPIC_AUTH_TOKEN). Generated at
 # init; replace it with anything you like.
 token = "__TOKEN__"
+# How /v1 authenticates. "token" (default) requires this value as x-api-key
+# or Authorization: Bearer. "none" is unauthenticated /v1 and requires a
+# loopback listen; the console still uses token. Use "none" with a
+# kind = "passthrough" backend so Claude Code can send only ANTHROPIC_BASE_URL.
+# v1_auth = "token"
 # Largest accepted request body. Claude Code sends whole conversations.
 max_body_bytes = "64MiB"
 
@@ -44,9 +49,13 @@ retention = "90d"
 [upstream]
 # Connection establishment limit per attempt.
 connect_timeout = "10s"
-# Longest silence tolerated while waiting for the next response chunk. Local
-# models can take minutes to process a large prompt before the first token.
-read_timeout = "5m"
+# Non-stream: the whole response after connect. Longer than a stream's first
+# byte because the backend holds the body until generation finishes.
+non_stream_timeout = "15m"
+# Stream: until the first body byte (queue + prefill).
+stream_first_byte_timeout = "5m"
+# Stream: silence between subsequent chunks; resets on each chunk.
+stream_idle_timeout = "60s"
 # Extra attempts after a connection failure (never after a timeout, never once
 # the response has started).
 retries = 2

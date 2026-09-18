@@ -73,13 +73,14 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
     let models = match client.send(request).await {
         Ok(upstream) => {
             let status = upstream.response.status().as_u16();
+            let latency = upstream.latency;
             let headers = upstream
                 .response
                 .headers()
                 .iter()
                 .map(|(name, value)| (name.to_string(), header_text(value).to_owned()))
                 .collect();
-            let body = upstream.response.bytes().await.unwrap_or_default();
+            let body = upstream.body_bytes().await.unwrap_or_default();
             let json = serde_json::from_slice::<serde_json::Value>(&body).ok();
             let mut models = json.as_ref().map(listed_models).unwrap_or_default();
             let detail = if (200..300).contains(&status) {
@@ -95,7 +96,7 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
             }
             ModelsProbe::Answered {
                 status,
-                latency: upstream.latency,
+                latency,
                 headers,
                 models,
                 detail,
@@ -123,7 +124,7 @@ async fn fill_native_context(
     if !upstream.response.status().is_success() {
         return;
     }
-    let Ok(body) = upstream.response.bytes().await else {
+    let Ok(body) = upstream.body_bytes().await else {
         return;
     };
     let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) else {
@@ -152,6 +153,7 @@ fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> 
         path_and_query: path,
         headers: upstream_headers(&base, backend),
         body: Bytes::new(),
+        stream: false,
     }
 }
 

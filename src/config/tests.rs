@@ -38,6 +38,12 @@ fn minimal_config_applies_defaults() {
     assert_eq!(c.logging.format, LogFormat::Text);
     assert_eq!(c.upstream.retries, 2);
     assert_eq!(c.upstream.connect_timeout, Duration::from_secs(10));
+    assert_eq!(c.upstream.non_stream_timeout, Duration::from_secs(900));
+    assert_eq!(
+        c.upstream.stream_first_byte_timeout,
+        Duration::from_secs(300)
+    );
+    assert_eq!(c.upstream.stream_idle_timeout, Duration::from_secs(60));
     assert!(matches!(
         c.backends["local"].credential,
         CredentialConfig::None
@@ -90,7 +96,9 @@ body_dir = "/tmp/bodies"
 
 [upstream]
 connect_timeout = "3s"
-read_timeout = "2m"
+non_stream_timeout = "10m"
+stream_first_byte_timeout = "2m"
+stream_idle_timeout = "30s"
 retries = 1
 retry_backoff = "50ms"
 retry_on_status = [502, 503]
@@ -128,7 +136,12 @@ default_model = "qwen"
         c.logging.body_dir.as_deref(),
         Some(std::path::Path::new("/tmp/bodies"))
     );
-    assert_eq!(c.upstream.read_timeout, Duration::from_secs(120));
+    assert_eq!(c.upstream.non_stream_timeout, Duration::from_secs(600));
+    assert_eq!(
+        c.upstream.stream_first_byte_timeout,
+        Duration::from_secs(120)
+    );
+    assert_eq!(c.upstream.stream_idle_timeout, Duration::from_secs(30));
     assert_eq!(c.upstream.retry_on_status, vec![502, 503]);
     assert_eq!(
         c.upstream.ca_certificate.as_deref(),
@@ -705,7 +718,9 @@ token = "secret"
 
 [upstream]
 connect_timeout = "0s"
-read_timeout = "0s"
+non_stream_timeout = "0s"
+stream_first_byte_timeout = "0s"
+stream_idle_timeout = "0s"
 
 [backends.local]
 url = "http://127.0.0.1:1234"
@@ -716,10 +731,12 @@ id = "gemma"
 backend = "local"
 "#;
     let problems = problems(text);
-    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert_eq!(problems.len(), 5, "{problems:?}");
     for field in [
         "upstream.connect_timeout",
-        "upstream.read_timeout",
+        "upstream.non_stream_timeout",
+        "upstream.stream_first_byte_timeout",
+        "upstream.stream_idle_timeout",
         "backends.local.credential.timeout",
     ] {
         assert!(problems.iter().any(|p| p.contains(field)), "{problems:?}");
@@ -744,6 +761,97 @@ fn backend_kind_defaults_to_anthropic_and_accepts_openai() {
     assert_eq!(
         parse(&text).unwrap().backends["local"].kind,
         BackendKind::OpenAi
+    );
+}
+
+#[test]
+fn v1_auth_none_requires_loopback_listen() {
+    let p = problems(
+        r#"
+[server]
+listen = "0.0.0.0:8787"
+token = "t"
+v1_auth = "none"
+
+[backends.local]
+url = "http://127.0.0.1:1"
+
+[[models]]
+id = "m"
+backend = "local"
+"#,
+    );
+    assert!(
+        p.iter()
+            .any(|s| s.contains("v1_auth") && s.contains("loopback")),
+        "{p:?}"
+    );
+}
+
+#[test]
+fn passthrough_backend_allows_no_models_table() {
+    let c = parse(
+        r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+v1_auth = "none"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+"#,
+    )
+    .unwrap();
+    assert_eq!(c.server.v1_auth, V1Auth::None);
+    assert_eq!(c.backends["account"].kind, BackendKind::Passthrough);
+    assert!(c.models.is_empty());
+}
+
+#[test]
+fn passthrough_rejects_a_models_entry_and_a_second_passthrough() {
+    let p = problems(
+        r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+
+[backends.other]
+kind = "passthrough"
+url = "https://example.com"
+
+[[models]]
+id = "m"
+backend = "account"
+"#,
+    );
+    let joined = p.join("\n");
+    assert!(joined.contains("at most one"), "{joined}");
+    assert!(joined.contains("passthrough"), "{joined}");
+}
+
+#[test]
+fn passthrough_rejects_a_backend_credential() {
+    let p = problems(
+        r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+credential = { kind = "static", value = "sk" }
+"#,
+    );
+    assert!(
+        p.iter()
+            .any(|s| s.contains("credential") && s.contains("passthrough")),
+        "{p:?}"
     );
 }
 

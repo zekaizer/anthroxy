@@ -22,6 +22,7 @@ use crate::anthropic;
 use crate::config::BackendKind;
 use crate::config::view::REDACTED;
 use crate::observability::{Recorder, RequestRecord};
+use crate::routing::Routed;
 use crate::server::annotate::annotate_upstream_error;
 use crate::server::buffered::read_all;
 use crate::server::handlers::openai;
@@ -118,16 +119,46 @@ async fn handle(
     {
         note(exchange, |e| e.session(session));
     }
-    let resolution = state.registry.resolve(&requested_model).ok_or_else(|| {
-        note(exchange, |e| e.unrouted(&requested_model));
-        RouterError::unknown_model(&requested_model, &state.registry)
-    })?;
-    let route = resolution.route;
+    let routed = if let Some(resolution) = state.registry.lookup(&requested_model) {
+        Routed::Config(resolution)
+    } else if let Some(live) = &state.live {
+        let occupied = |id: &str| state.registry.lookup(id).is_some();
+        if let Some(route) = live
+            .lookup(&requested_model, &state.upstream, &parts.headers, occupied)
+            .await
+        {
+            Routed::Live(route)
+        } else {
+            match state.registry.resolve(&requested_model) {
+                Some(resolution) => Routed::Config(resolution),
+                None => {
+                    note(exchange, |e| e.unrouted(&requested_model));
+                    return Err(RouterError::unknown_model(
+                        &requested_model,
+                        &state.registry,
+                    ));
+                }
+            }
+        }
+    } else {
+        match state.registry.resolve(&requested_model) {
+            Some(resolution) => Routed::Config(resolution),
+            None => {
+                note(exchange, |e| e.unrouted(&requested_model));
+                return Err(RouterError::unknown_model(
+                    &requested_model,
+                    &state.registry,
+                ));
+            }
+        }
+    };
+    let route = routed.route();
+    let matched = routed.matched();
     let backend = &route.backend;
     note(exchange, |e| {
         e.routed(
             &requested_model,
-            resolution.matched,
+            matched,
             &route.id,
             &backend.name,
             backend.kind,
@@ -141,7 +172,7 @@ async fn handle(
         // Whatever the client sent: `routing.default_model` routes a name the
         // model table never saw, so the log takes it escaped and cut.
         requested_model = %short(&requested_model),
-        matched = ?resolution.matched,
+        matched = ?matched,
         upstream_model = %route.upstream_model,
         stream = peek.stream,
         body_bytes = body.len(),
@@ -150,11 +181,15 @@ async fn handle(
     // The translated body names the upstream model itself; only a relayed
     // body needs the rename here.
     let anthropic_kind = backend.kind == BackendKind::Anthropic;
-    let rename = (anthropic_kind && requested_model != route.upstream_model)
-        .then_some(route.upstream_model.as_str());
-    let body = match anthropic::rewrite(&body, rename, &backend.drop_fields, anthropic_kind)? {
-        Some(rewritten) => Bytes::from(rewritten),
-        None => body,
+    let body = if backend.kind == BackendKind::Passthrough {
+        body
+    } else {
+        let rename = (anthropic_kind && requested_model != route.upstream_model)
+            .then_some(route.upstream_model.as_str());
+        match anthropic::rewrite(&body, rename, &backend.drop_fields, anthropic_kind)? {
+            Some(rewritten) => Bytes::from(rewritten),
+            None => body,
+        }
     };
 
     let client_path = parts
@@ -163,7 +198,7 @@ async fn handle(
         .map(|p| p.as_str())
         .unwrap_or("/");
     let (path_and_query, body) = match backend.kind {
-        BackendKind::Anthropic => (client_path, body),
+        BackendKind::Anthropic | BackendKind::Passthrough => (client_path, body),
         BackendKind::OpenAi => {
             openai::prepare(&body, client_path, &backend.name, &route.upstream_model)?
         }
@@ -195,6 +230,7 @@ async fn handle(
             path_and_query,
             headers,
             body,
+            stream: peek.stream,
         })
         .await
     {
@@ -241,12 +277,14 @@ async fn handle(
     }
 
     let mut headers = response_headers(upstream.response.headers());
-    headers.insert(X_ROUTER_BACKEND.clone(), header_value(&backend.name));
-    headers.insert(X_ROUTER_MODEL.clone(), header_value(&route.id));
-    headers.insert(
-        X_ROUTER_UPSTREAM_MODEL.clone(),
-        header_value(&route.upstream_model),
-    );
+    if backend.kind != BackendKind::Passthrough {
+        headers.insert(X_ROUTER_BACKEND.clone(), header_value(&backend.name));
+        headers.insert(X_ROUTER_MODEL.clone(), header_value(&route.id));
+        headers.insert(
+            X_ROUTER_UPSTREAM_MODEL.clone(),
+            header_value(&route.upstream_model),
+        );
+    }
     let content_type = upstream
         .response
         .headers()
@@ -277,6 +315,7 @@ async fn handle(
             )
         });
         let (bytes, content_type) = match backend.kind {
+            BackendKind::Passthrough => (raw, content_type),
             BackendKind::Anthropic => {
                 match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
                     Some(annotated) => (Bytes::from(annotated), content_type),
@@ -301,26 +340,43 @@ async fn handle(
         Body::from(bytes)
     } else {
         match backend.kind {
-            // ADR-0003: relayed as it arrives.
-            BackendKind::Anthropic => {
+            BackendKind::Passthrough => {
                 let events = is_event_stream(upstream.response.headers());
-                let relay = Relay::new(
-                    upstream.response.bytes_stream(),
-                    span,
-                    started,
-                    recorder,
-                    cut,
-                );
+                let relay = Relay::new(upstream.bytes_stream(), span, started, recorder, cut);
                 match (exchange.take(), events) {
-                    (Some(exchange), true) => Body::from_stream(Pings::new(
-                        exchange.track(relay, content_type.as_deref()),
-                        PING_INTERVAL,
-                    )),
-                    (Some(exchange), false) => {
+                    (Some(exchange), _) => {
                         Body::from_stream(exchange.track(relay, content_type.as_deref()))
                     }
-                    (None, true) => Body::from_stream(Pings::new(relay, PING_INTERVAL)),
-                    (None, false) => Body::from_stream(relay),
+                    (None, _) => Body::from_stream(relay),
+                }
+            }
+            // ADR-0003: relayed as it arrives.
+            BackendKind::Anthropic => {
+                if !peek.stream {
+                    let raw = read_all(upstream, &backend.name, recorder).await?;
+                    tracing::info!(
+                        bytes = raw.len(),
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        "response body complete"
+                    );
+                    if let Some(exchange) = exchange.take() {
+                        exchange.finish_body(status.as_u16(), &raw, content_type.as_deref());
+                    }
+                    Body::from(raw)
+                } else {
+                    let events = is_event_stream(upstream.response.headers());
+                    let relay = Relay::new(upstream.bytes_stream(), span, started, recorder, cut);
+                    match (exchange.take(), events) {
+                        (Some(exchange), true) => Body::from_stream(Pings::new(
+                            exchange.track(relay, content_type.as_deref()),
+                            PING_INTERVAL,
+                        )),
+                        (Some(exchange), false) => {
+                            Body::from_stream(exchange.track(relay, content_type.as_deref()))
+                        }
+                        (None, true) => Body::from_stream(Pings::new(relay, PING_INTERVAL)),
+                        (None, false) => Body::from_stream(relay),
+                    }
                 }
             }
             BackendKind::OpenAi => {

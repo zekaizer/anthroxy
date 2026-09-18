@@ -119,13 +119,13 @@ fn dropped(name: &HeaderName, backend: &Backend) -> Option<DropReason> {
     if is_hop_by_hop(name) || *name == HOST || *name == CONTENT_LENGTH {
         return Some(DropReason::Framing);
     }
-    if *name == AUTHORIZATION || *name == X_API_KEY {
+    if (*name == AUTHORIZATION || *name == X_API_KEY) && !backend.forwards_client_auth {
         return Some(DropReason::ClientCredential);
     }
     if *name == ACCEPT_ENCODING {
         return Some(DropReason::Uncompressed);
     }
-    if backend.kind != BackendKind::Anthropic
+    if backend.kind == BackendKind::OpenAi
         && (*name == ANTHROPIC_VERSION || *name == ANTHROPIC_BETA)
     {
         return Some(DropReason::BackendKind);

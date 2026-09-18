@@ -36,11 +36,25 @@ pub struct ServerConfig {
     /// WSL2 instance under both NAT and mirrored networking.
     #[serde(default = "ServerConfig::default_listen")]
     pub listen: SocketAddr,
-    /// Static token Claude Code must present (`x-api-key` or bearer).
+    /// Static token the console presents, and `/v1` when [`V1Auth::Token`].
     pub token: String,
+    /// How `/v1/*` authenticates. The console always uses `token`.
+    #[serde(default)]
+    pub v1_auth: V1Auth,
     /// Largest accepted request body.
     #[serde(default = "ServerConfig::default_max_body", with = "byte_size")]
     pub max_body_bytes: usize,
+}
+
+/// `/v1` client authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum V1Auth {
+    /// `x-api-key` or `Authorization: Bearer` must equal `server.token`.
+    #[default]
+    Token,
+    /// No `/v1` authentication. `listen` must be loopback.
+    None,
 }
 
 impl ServerConfig {
@@ -124,9 +138,15 @@ pub enum LogFormat {
 pub struct UpstreamConfig {
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
-    /// Maximum silence between two chunks of an upstream response.
+    /// Non-stream: after connect, until the whole response body is finished.
     #[serde(with = "humantime_serde")]
-    pub read_timeout: Duration,
+    pub non_stream_timeout: Duration,
+    /// Stream: until the first body byte.
+    #[serde(with = "humantime_serde")]
+    pub stream_first_byte_timeout: Duration,
+    /// Stream: silence between subsequent body chunks; resets on each chunk.
+    #[serde(with = "humantime_serde")]
+    pub stream_idle_timeout: Duration,
     /// Additional attempts after a connection failure.
     pub retries: u32,
     /// Delay before the first retry; doubles on each further attempt.
@@ -143,7 +163,9 @@ impl Default for UpstreamConfig {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(10),
-            read_timeout: Duration::from_secs(300),
+            non_stream_timeout: Duration::from_secs(900),
+            stream_first_byte_timeout: Duration::from_secs(300),
+            stream_idle_timeout: Duration::from_secs(60),
             retries: 2,
             retry_backoff: Duration::from_millis(200),
             retry_on_status: Vec::new(),
@@ -160,6 +182,9 @@ pub enum BackendKind {
     #[default]
     Anthropic,
     OpenAi,
+    /// Origin whose model list is fetched live and whose requests are relayed
+    /// byte-for-byte, including the client's `Authorization`.
+    Passthrough,
 }
 
 #[derive(Debug, Clone, Deserialize)]

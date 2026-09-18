@@ -144,6 +144,7 @@ fn kind_label(backend: &Backend, style: &Style) -> String {
     match backend.kind {
         BackendKind::Anthropic => String::new(),
         BackendKind::OpenAi => format!("  {}", style.dim("(openai)")),
+        BackendKind::Passthrough => format!("  {}", style.dim("(passthrough)")),
     }
 }
 
