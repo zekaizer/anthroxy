@@ -6,6 +6,7 @@ mod headers;
 pub mod network;
 pub mod probe;
 mod retry;
+mod timeout;
 
 #[cfg(test)]
 mod tests;
@@ -21,3 +22,4 @@ pub use headers::{
     response_headers, sent_headers, upstream_headers,
 };
 pub use retry::{Decision, RetryPolicy, is_connection_failure};
+pub use timeout::{BodyClock, BodyError, TimedBody, TimeoutClock, Timeouts};

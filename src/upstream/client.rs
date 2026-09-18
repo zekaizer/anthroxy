@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use futures_util::Stream;
 use http::{HeaderMap, Method, StatusCode};
 
-use super::{Backend, Decision, RetryPolicy};
+use super::{
+    Backend, BodyClock, BodyError, Decision, RetryPolicy, TimedBody, TimeoutClock, Timeouts,
+};
 use crate::config::{BackendConfig, UpstreamConfig, origin};
 use crate::credential::CredentialError;
 
@@ -15,6 +18,7 @@ use crate::credential::CredentialError;
 pub struct UpstreamClient {
     http: reqwest::Client,
     retry: RetryPolicy,
+    timeouts: Timeouts,
 }
 
 pub struct UpstreamRequest<'a> {
@@ -26,6 +30,8 @@ pub struct UpstreamRequest<'a> {
     /// added per attempt.
     pub headers: HeaderMap,
     pub body: Bytes,
+    /// Whether the client asked for an event stream. Chooses the stream clocks.
+    pub stream: bool,
 }
 
 pub struct UpstreamResponse {
@@ -38,6 +44,7 @@ pub struct UpstreamResponse {
     pub credential_refreshed: bool,
     /// From first attempt to response headers.
     pub latency: Duration,
+    body: BodyClock,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +85,12 @@ pub enum UpstreamError {
         "backend `{backend}` sent a response body over {limit} bytes, more than the router reads whole"
     )]
     BodyTooLarge { backend: String, limit: usize },
+    /// One of the configured upstream clocks ran out.
+    #[error("backend `{backend}`: upstream.{clock} elapsed")]
+    TimedOut {
+        backend: String,
+        clock: TimeoutClock,
+    },
 }
 
 /// The error with its full source chain, e.g. `error sending request: ... : Connection refused`.
@@ -123,7 +136,6 @@ pub fn http_client(
 ) -> Result<reqwest::ClientBuilder, ClientBuildError> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
-        .read_timeout(config.read_timeout)
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none());
     let proxies = proxies(backends);
@@ -180,14 +192,19 @@ impl UpstreamClient {
         config: &UpstreamConfig,
         backends: &BTreeMap<String, BackendConfig>,
     ) -> Result<Self, ClientBuildError> {
-        Ok(Self::new(
-            http_client(config, backends)?.build()?,
-            RetryPolicy::from_config(config),
-        ))
+        Ok(Self {
+            http: http_client(config, backends)?.build()?,
+            retry: RetryPolicy::from_config(config),
+            timeouts: Timeouts::from_config(config),
+        })
     }
 
     pub fn new(http: reqwest::Client, retry: RetryPolicy) -> Self {
-        Self { http, retry }
+        Self {
+            http,
+            retry,
+            timeouts: Timeouts::default(),
+        }
     }
 
     /// Forwards `request`, returning as soon as response headers arrive.
@@ -220,13 +237,33 @@ impl UpstreamClient {
                 headers.insert(name, value);
             }
             tracing::debug!(attempt, %url, "sending upstream request");
-            let outcome = self
+            let attempt_start = tokio::time::Instant::now();
+            let header_deadline = attempt_start
+                + if request.stream {
+                    self.timeouts.stream_first_byte
+                } else {
+                    self.timeouts.non_stream
+                };
+            let clock = if request.stream {
+                TimeoutClock::StreamFirstByte
+            } else {
+                TimeoutClock::NonStream
+            };
+            let send = self
                 .http
                 .request(request.method.clone(), &url)
                 .headers(headers)
                 .body(request.body.clone())
-                .send()
-                .await;
+                .send();
+            let outcome = match tokio::time::timeout_at(header_deadline, send).await {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    return Err(UpstreamError::TimedOut {
+                        backend: backend.name.clone(),
+                        clock,
+                    });
+                }
+            };
             match outcome {
                 Ok(response) => {
                     let status = response.status();
@@ -252,6 +289,11 @@ impl UpstreamClient {
                                 attempts: attempt,
                                 credential_refreshed,
                                 latency: started.elapsed(),
+                                body: BodyClock {
+                                    stream: request.stream,
+                                    deadline: header_deadline,
+                                    idle: self.timeouts.stream_idle,
+                                },
                             });
                         }
                     }
@@ -272,5 +314,21 @@ impl UpstreamClient {
                 },
             }
         }
+    }
+}
+
+impl UpstreamResponse {
+    pub fn bytes_stream(self) -> TimedBody<impl Stream<Item = Result<Bytes, reqwest::Error>>> {
+        TimedBody::new(self.response.bytes_stream(), self.body)
+    }
+
+    pub async fn body_bytes(self) -> Result<Bytes, BodyError> {
+        use futures_util::StreamExt;
+        let mut stream = self.bytes_stream();
+        let mut out = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            out.extend_from_slice(&chunk?);
+        }
+        Ok(Bytes::from(out))
     }
 }

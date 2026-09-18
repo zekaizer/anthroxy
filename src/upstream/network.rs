@@ -92,7 +92,9 @@ pub fn log(config: &Config) {
     let upstream = &config.upstream;
     tracing::info!(
         connect_timeout = %humantime::format_duration(upstream.connect_timeout),
-        read_timeout = %humantime::format_duration(upstream.read_timeout),
+        non_stream_timeout = %humantime::format_duration(upstream.non_stream_timeout),
+        stream_first_byte_timeout = %humantime::format_duration(upstream.stream_first_byte_timeout),
+        stream_idle_timeout = %humantime::format_duration(upstream.stream_idle_timeout),
         retries = upstream.retries,
         ca_certificate = network.ca_certificate.as_deref(),
         ssl_cert_file = network.ssl_cert_file.as_deref(),

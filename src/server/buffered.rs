@@ -6,7 +6,7 @@ use bytes::{Bytes, BytesMut};
 use crate::observability::Recorder;
 use crate::server::RouterError;
 use crate::server::relay::RelayOutcome;
-use crate::upstream::{UpstreamError, UpstreamResponse};
+use crate::upstream::{BodyError, UpstreamError, UpstreamResponse};
 
 /// Largest body read whole; a backend that sends more is failed rather than
 /// buffered without bound.
@@ -20,22 +20,29 @@ pub async fn read_all(
     backend: &str,
     recorder: Option<Recorder>,
 ) -> Result<Bytes, RouterError> {
-    let mut response = upstream.response;
+    use futures_util::StreamExt;
+    let mut stream = upstream.bytes_stream();
     let mut body = BytesMut::new();
     let read = loop {
-        match response.chunk().await {
-            Ok(Some(chunk)) if body.len() + chunk.len() > MAX_BUFFERED_BYTES => {
+        match stream.next().await {
+            Some(Ok(chunk)) if body.len() + chunk.len() > MAX_BUFFERED_BYTES => {
                 break Err(UpstreamError::BodyTooLarge {
                     backend: backend.to_owned(),
                     limit: MAX_BUFFERED_BYTES,
                 });
             }
-            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
-            Ok(None) => break Ok(body.freeze()),
-            Err(source) => {
+            Some(Ok(chunk)) => body.extend_from_slice(&chunk),
+            None => break Ok(body.freeze()),
+            Some(Err(BodyError::Upstream(source))) => {
                 break Err(UpstreamError::Body {
                     backend: backend.to_owned(),
                     source,
+                });
+            }
+            Some(Err(BodyError::TimedOut(clock))) => {
+                break Err(UpstreamError::TimedOut {
+                    backend: backend.to_owned(),
+                    clock,
                 });
             }
         }

@@ -91,7 +91,8 @@ impl RouterError {
                 | UpstreamError::Transport { backend, .. }
                 | UpstreamError::Redirected { backend, .. }
                 | UpstreamError::Body { backend, .. }
-                | UpstreamError::BodyTooLarge { backend, .. },
+                | UpstreamError::BodyTooLarge { backend, .. }
+                | UpstreamError::TimedOut { backend, .. },
             )
             | RouterError::Translate { backend, .. }
             | RouterError::NotOnOpenAi { backend, .. }

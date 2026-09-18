@@ -195,6 +195,7 @@ async fn handle(
             path_and_query,
             headers,
             body,
+            stream: peek.stream,
         })
         .await
     {
@@ -303,24 +304,31 @@ async fn handle(
         match backend.kind {
             // ADR-0003: relayed as it arrives.
             BackendKind::Anthropic => {
-                let events = is_event_stream(upstream.response.headers());
-                let relay = Relay::new(
-                    upstream.response.bytes_stream(),
-                    span,
-                    started,
-                    recorder,
-                    cut,
-                );
-                match (exchange.take(), events) {
-                    (Some(exchange), true) => Body::from_stream(Pings::new(
-                        exchange.track(relay, content_type.as_deref()),
-                        PING_INTERVAL,
-                    )),
-                    (Some(exchange), false) => {
-                        Body::from_stream(exchange.track(relay, content_type.as_deref()))
+                if !peek.stream {
+                    let raw = read_all(upstream, &backend.name, recorder).await?;
+                    tracing::info!(
+                        bytes = raw.len(),
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        "response body complete"
+                    );
+                    if let Some(exchange) = exchange.take() {
+                        exchange.finish_body(status.as_u16(), &raw, content_type.as_deref());
                     }
-                    (None, true) => Body::from_stream(Pings::new(relay, PING_INTERVAL)),
-                    (None, false) => Body::from_stream(relay),
+                    Body::from(raw)
+                } else {
+                    let events = is_event_stream(upstream.response.headers());
+                    let relay = Relay::new(upstream.bytes_stream(), span, started, recorder, cut);
+                    match (exchange.take(), events) {
+                        (Some(exchange), true) => Body::from_stream(Pings::new(
+                            exchange.track(relay, content_type.as_deref()),
+                            PING_INTERVAL,
+                        )),
+                        (Some(exchange), false) => {
+                            Body::from_stream(exchange.track(relay, content_type.as_deref()))
+                        }
+                        (None, true) => Body::from_stream(Pings::new(relay, PING_INTERVAL)),
+                        (None, false) => Body::from_stream(relay),
+                    }
                 }
             }
             BackendKind::OpenAi => {

@@ -24,7 +24,18 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     // so it is worth saying that here it expires instead of lifting.
     for (field, value) in [
         ("upstream.connect_timeout", config.upstream.connect_timeout),
-        ("upstream.read_timeout", config.upstream.read_timeout),
+        (
+            "upstream.non_stream_timeout",
+            config.upstream.non_stream_timeout,
+        ),
+        (
+            "upstream.stream_first_byte_timeout",
+            config.upstream.stream_first_byte_timeout,
+        ),
+        (
+            "upstream.stream_idle_timeout",
+            config.upstream.stream_idle_timeout,
+        ),
     ] {
         if value.is_zero() {
             problems.push(format!(

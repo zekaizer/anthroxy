@@ -124,9 +124,15 @@ pub enum LogFormat {
 pub struct UpstreamConfig {
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
-    /// Maximum silence between two chunks of an upstream response.
+    /// Non-stream: after connect, until the whole response body is finished.
     #[serde(with = "humantime_serde")]
-    pub read_timeout: Duration,
+    pub non_stream_timeout: Duration,
+    /// Stream: until the first body byte.
+    #[serde(with = "humantime_serde")]
+    pub stream_first_byte_timeout: Duration,
+    /// Stream: silence between subsequent body chunks; resets on each chunk.
+    #[serde(with = "humantime_serde")]
+    pub stream_idle_timeout: Duration,
     /// Additional attempts after a connection failure.
     pub retries: u32,
     /// Delay before the first retry; doubles on each further attempt.
@@ -143,7 +149,9 @@ impl Default for UpstreamConfig {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(10),
-            read_timeout: Duration::from_secs(300),
+            non_stream_timeout: Duration::from_secs(900),
+            stream_first_byte_timeout: Duration::from_secs(300),
+            stream_idle_timeout: Duration::from_secs(60),
             retries: 2,
             retry_backoff: Duration::from_millis(200),
             retry_on_status: Vec::new(),

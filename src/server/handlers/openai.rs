@@ -64,13 +64,7 @@ pub async fn body(
     if stream && is_event_stream(upstream.response.headers()) {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
         headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-        let relay = Relay::new(
-            upstream.response.bytes_stream(),
-            span,
-            started,
-            recorder,
-            cut,
-        );
+        let relay = Relay::new(upstream.bytes_stream(), span, started, recorder, cut);
         let translator = translate::Translator::new(relay, upstream_model, backend);
         let body = match exchange.take() {
             Some(exchange) => Body::from_stream(Pings::new(

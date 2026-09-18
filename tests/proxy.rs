@@ -813,6 +813,81 @@ async fn refreshes_command_credential_on_401_and_retries_once() {
 }
 
 #[tokio::test]
+async fn a_non_stream_body_that_never_arrives_trips_non_stream_timeout() {
+    let upstream = MockUpstream::start(|_| {
+        Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(Body::from_stream(futures_util::stream::pending::<
+                Result<bytes::Bytes, std::io::Error>,
+            >()))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(
+        &upstream.url(),
+        "[upstream]\nnon_stream_timeout = \"150ms\"\n",
+    ))
+    .await;
+    let started = Instant::now();
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 502);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("non_stream_timeout"), "{message}");
+}
+
+#[tokio::test]
+async fn a_quiet_stream_after_the_first_chunk_trips_idle_timeout() {
+    let upstream = MockUpstream::start(|_| {
+        let first = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(bytes::Bytes::from(
+                "event: ping\ndata: {\"type\":\"ping\"}\n\n",
+            ))
+        });
+        let rest = futures_util::stream::pending::<Result<bytes::Bytes, std::io::Error>>();
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(first.chain(rest)))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(
+        &upstream.url(),
+        "[upstream]\nstream_idle_timeout = \"150ms\"\n",
+    ))
+    .await;
+    let mut body = messages_body("fast");
+    body["stream"] = Value::Bool(true);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let mut stream = res.bytes_stream();
+    let first = stream.next().await.unwrap().unwrap();
+    assert!(!first.is_empty());
+    let started = Instant::now();
+    let next = stream.next().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(next, Some(Err(_)) | None),
+        "idle timeout should end the stream, got {next:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_credential_refresh_does_not_spend_the_retry_budget() {
     // 401 once, then the retryable status for as many attempts as the budget
     // allows; the refresh re-send must not be one of them.
