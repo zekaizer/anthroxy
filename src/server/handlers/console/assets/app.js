@@ -177,6 +177,24 @@ function kindBadge(text) {
 }
 
 /// An annotation on something a client sent, not on the router's own state.
+/// A filter with the way to empty it. Clearing dispatches `input`, so what
+/// the field already drives is what runs, and whether the button shows is
+/// left to CSS, which sees a value the page set as well as one typed.
+function clearable(input) {
+  const clear = h("button", {
+    type: "button",
+    class: "quiet clear",
+    title: "Clear the filter",
+    "aria-label": "Clear the filter",
+    onclick: () => {
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    },
+  }, "\u00d7");
+  return h("span", { class: "field" }, input, clear);
+}
+
 function tag(text) {
   return h("span", { class: "badge tag" }, text);
 }
@@ -1002,7 +1020,7 @@ function requests(view, selected) {
 
   replace(master,
     panel("Recent", h("span", { class: "muted" }, "newest first; kept in memory until restart"),
-      h("div", { class: "controls" }, filter, h("label", null, errorsOnly, " Errors only")),
+      h("div", { class: "controls" }, clearable(filter), h("label", null, errorsOnly, " Errors only")),
       recent),
     detail);
   view.append(inFlight, master);

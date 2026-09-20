@@ -470,3 +470,74 @@ async fn recordings_are_private_to_the_user_running_the_router() {
         assert_eq!(mode(&entries[0].join(name)), 0o600, "{name}");
     }
 }
+
+/// A stream is only worth watching while it runs, so the response file grows
+/// as chunks arrive rather than appearing whole at the end.
+#[tokio::test]
+async fn records_a_stream_chunk_by_chunk_while_it_runs() {
+    let upstream = MockUpstream::start(|_| {
+        // Big enough that a chunk crosses the flush threshold on its own.
+        let events = futures_util::stream::iter(0..6).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            Ok::<_, std::io::Error>(format!("data: {{\"n\":{i},\"pad\":\"{}\"}}\n\n", "x".repeat(16 * 1024)))
+        });
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(events))
+            .unwrap()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!("[logging]\nbody_dir = \"{}\"\n", dir.path().display());
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+
+    let mut res = router
+        .post("/v1/messages", &body("smart", true))
+        .send()
+        .await
+        .unwrap()
+        .bytes_stream();
+
+    // Read two events, then look at the log while four are still to come.
+    let mut read = 0;
+    while read < 2 {
+        let chunk = res.next().await.expect("stream ended early").unwrap();
+        read += chunk.iter().filter(|b| **b == b'\n').count() / 2;
+    }
+    let partial = wait_for_growing_response(dir.path()).await;
+    assert!(
+        partial > 0,
+        "the response file should hold what has arrived, not wait for the end"
+    );
+
+    while let Some(chunk) = res.next().await {
+        chunk.unwrap();
+    }
+    let entries = wait_for_entries(dir.path(), 1).await;
+    let sse = std::fs::read_to_string(entries[0].join("response.sse")).unwrap();
+    assert_eq!(sse.matches("data:").count(), 6, "every event ends up recorded");
+    assert!(
+        sse.len() > partial,
+        "the file kept growing after the look, not rewritten from scratch"
+    );
+}
+
+/// Bytes in the one entry's response file, once it has any. The wait is
+/// bounded well under what the rest of the stream takes, so seeing bytes here
+/// means they were written while the exchange was still running.
+async fn wait_for_growing_response(dir: &Path) -> usize {
+    for _ in 0..20 {
+        let entry = std::fs::read_dir(dir)
+            .ok()
+            .and_then(|rd| rd.flatten().map(|e| e.path()).next());
+        if let Some(entry) = entry {
+            let size = crate::support::body_log::response_size(&entry);
+            if size > 0 {
+                return size;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no response bytes were recorded while the stream was running");
+}

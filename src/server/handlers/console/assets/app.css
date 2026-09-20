@@ -386,16 +386,19 @@ td.model .sub { white-space: nowrap; }
 }
 /* The session as a rail down a row's first cell. A run of rows in one session
    shares a colour and so reads as one bar, notched where the run starts so two
-   runs the palette gave the same hue still part; a hover lifts one session's
-   rail wherever it appears. Colour here classifies rather than judges, which
-   is the badge taxonomy's one standing exception, held to the rail and the
-   chip; the number beside it is what carries the identity for a reader who
-   cannot see the colour or meets it a second time once the palette wraps.
-   Classes, not inline style: CSP. */
+   runs the palette gave the same hue still part; the rails stand back until a
+   hover brings one session's forward wherever it appears. Colour here
+   classifies rather than judges, which is the badge taxonomy's one standing
+   exception, held to the rail and the chip; the number beside it is what
+   carries the identity for a reader who cannot see the colour or meets it a
+   second time once the palette wraps. Classes, not inline style: CSP. */
 td.rail { position: relative; }
-td.rail::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--space-1); background: var(--line); }
+td.rail::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--space-1); background: var(--line); opacity: 0.55; }
 td.rail-start::before { top: var(--space-1); }
-td.rail.lit::before { width: var(--space-2); }
+/* Hovering a session brings its rail forward by colour, not by size: a rail
+   that grew moved the text beside it, and the run one is reading is the last
+   thing that should shift. */
+td.rail.lit::before { opacity: 1; }
 td.rail.hue-252::before { background: hsl(252, 48%, 62%); }
 td.rail.hue-70::before  { background: hsl(70, 48%, 46%); }
 td.rail.hue-288::before { background: hsl(288, 48%, 64%); }
@@ -438,6 +441,25 @@ button.badge:hover:not(:disabled) { border-color: currentColor; }
 .controls { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-3); }
 .controls label { display: inline-flex; gap: var(--space-1); align-items: center; font-size: var(--text-sm); }
 .controls label:has(select) { flex: 1 1 20rem; min-width: 0; }
+/* A filter and the way to empty it. The button sits inside the field, so the
+   row is the same size whether the filter holds anything or not, and CSS
+   decides whether it shows: the page sets this value as well as the reader,
+   and `:placeholder-shown` sees both. */
+.field { position: relative; display: flex; flex: 1 1 18rem; max-width: 34rem; min-width: 0; }
+.controls .field input[type="text"] { flex: 1; max-width: none; padding-right: var(--space-5); }
+.field .clear {
+  position: absolute;
+  top: 50%;
+  right: var(--space-1);
+  transform: translateY(-50%);
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  justify-content: center;
+  font-size: var(--text-md);
+}
+.field input[type="text"]:placeholder-shown + .clear { visibility: hidden; }
+
 .controls select { flex: 1; min-width: 0; max-width: 100%; }
 .controls input[type="text"] { flex: 1 1 18rem; max-width: 34rem; }
 .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; height: var(--control-h); }

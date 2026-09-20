@@ -236,9 +236,19 @@ function recordings(view, opened) {
     // The inspector needs the width the list is using, and a conversation
     // drawn above the list used to push it off the page entirely.
     listPanel.hidden = Boolean(opened);
-    const box = h("div");
-    replace(inspector, box);
-    if (!opened || !data) return;
+    // The box is kept while the same recording stays open: a recording still
+    // being written is re-read every second, and a fresh box would leave
+    // `inspect` nothing to carry the reader's place over from.
+    if (!opened || !data) {
+      replace(inspector);
+      box = null;
+      return;
+    }
+    if (!box || boxFor !== opened) {
+      box = h("div");
+      boxFor = opened;
+      replace(inspector, box);
+    }
     // Newer and older follow the list as filtered, or the whole list when
     // the filter hides the opened entry.
     const filtered = shown();
@@ -246,6 +256,10 @@ function recordings(view, opened) {
     const at = entries.findIndex((e) => e.name === opened);
     inspect(box, opened, at < 0 ? null : entries[at].files, { newer: entries[at - 1], older: at < 0 ? undefined : entries[at + 1] }, data.entries);
   };
+
+  let box = null;
+
+  let boxFor = null;
 
   let drawn = null;
   const load = async () => {
@@ -290,13 +304,33 @@ function recordings(view, opened) {
     }
   });
 
-  const listPanel = panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list);
+  const listPanel = panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, clearable(filter)), list);
   view.append(inspector, listPanel);
+  /// Whether the open recording is one the router is still writing, which is
+  /// what makes it worth re-reading.
+  const openIsRunning = () => {
+    const entry = opened && data ? data.entries.find((e) => e.name === opened) : null;
+    return Boolean(entry) && !entry.outcome && !entry.unreadable;
+  };
   const poll = polled(list, load);
   poll();
-  // Only while the list is what is on screen: re-reading it under an open
-  // recording would fetch that recording's files again every few seconds.
+  // Only while the list is what is on screen: re-reading it under a finished
+  // recording would fetch that recording's files again for nothing.
   every(5000, () => { if (!opened) poll(); });
+  // A stream grows under the reader, so the one case worth re-reading is an
+  // open recording still being written. Only its summary and body are drawn
+  // again; the full redraw waits for the end, where it settles the result and
+  // the sizes for good.
+  every(1000, async () => {
+    if (!openIsRunning()) return;
+    try {
+      data = await api("/api/recordings");
+    } catch {
+      return;
+    }
+    if (openIsRunning()) await live?.refresh();
+    else poll();
+  });
   return open;
 }
 
@@ -344,10 +378,16 @@ function entryFacts(e) {
 /// `files` are the entry's files as listed; without them every known name is
 /// tried. `neighbors` holds the listed entries just `newer` and `older`;
 /// `listed` is the whole list, where earlier requests of the session are found.
+/// The open recording and how to read it again, while it is one the router
+/// is still writing. Null whenever nothing is open or the open one is done.
+let live = null;
+
 async function inspect(target, name, files, neighbors, listed) {
+  live = null;
   // Find text belongs to the recording it was typed in: carried into another
   // one it hides everything and reads as a recording with nothing in it.
-  if (state.inspected !== name) {
+  const opening = state.inspected !== name;
+  if (opening) {
     state.requestFind = "";
     state.inspected = name;
   }
@@ -395,7 +435,7 @@ async function inspect(target, name, files, neighbors, listed) {
       replace(viewSwitch, VIEWS.map(([id, label]) =>
         h("button", { type: "button", "aria-pressed": state.recordingView === id ? "true" : "false", onclick: () => { state.recordingView = id; draw(); } }, label)));
       const file = exchange.files[state.recordingPart];
-      replace(body, state.recordingView === "raw" ? rawView(exchange, file) : sectionsView(exchange, state.recordingPart));
+      rerender(body, state.recordingView === "raw" ? rawView(exchange, file) : sectionsView(exchange, state.recordingPart));
     };
     const step = (label, entry) => h("button", {
       type: "button",
@@ -405,13 +445,27 @@ async function inspect(target, name, files, neighbors, listed) {
       onclick: () => go("recordings", entry.name),
     }, label);
     const title = exchange.meta ? exchange.meta.request_id : name;
-    replace(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
+    rerender(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
       facts,
       h("div", { class: "controls" }, partSwitch, viewSwitch),
       body));
     draw();
-    // Clear of the sticky header, which "nearest" would leave it under.
-    target.scrollIntoView({ block: "start" });
+    // Reading a growing recording again rebuilds the summary and the body
+    // alone. Rebuilding the panel around them is what a reader sees as a
+    // flicker, and none of it has changed.
+    live = {
+      name,
+      refresh: async () => {
+        const grown = await firstRecordedFile(name, responses);
+        if (!grown || grown.text === exchange.files.response?.text) return;
+        exchange.files.response = grown;
+        exchange.parsed = {};
+        draw();
+      },
+    };
+    // Clear of the sticky header, which "nearest" would leave it under. Only
+    // on opening: doing it on every re-read would pull the page about.
+    if (opening) target.scrollIntoView({ block: "start" });
   });
 }
 
