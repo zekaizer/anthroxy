@@ -724,7 +724,10 @@ function requestView(exchange) {
       show(state.requestSection);
     }, 150);
   });
-  show(sections.some((s) => s.id === state.requestSection) ? state.requestSection : "prompt");
+  // A request that answers tool calls has no turn to show, so it opens on
+  // what it carries rather than on a section that would say only that.
+  const wanted = !prompt && state.requestSection === "prompt" ? "messages" : state.requestSection;
+  show(sections.some((s) => s.id === wanted) ? wanted : "prompt");
   return [h("div", { class: "controls" }, find, found), h("div", { class: "inspect" }, nav, content)];
 }
 
