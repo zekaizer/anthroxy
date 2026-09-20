@@ -1189,7 +1189,7 @@ function statsContent(data) {
         : null,
     }),
     card("Output speed", fmt.rate(total.output_tokens_per_second)));
-  const compare = h("div");
+  const compare = h("div", { class: "compare" });
   const picks = [];
   const drawCompare = () => {
     markCompared(report, picks);

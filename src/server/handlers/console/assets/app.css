@@ -314,6 +314,10 @@ tr.clickable:hover td { background: var(--surface-hover); }
 tr.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 tr.selected td { background: var(--accent-soft); }
 tr.selected td:first-child { box-shadow: inset 2px 0 var(--accent); }
+/* The comparison stands off the table it was picked from by what every other
+   part of the page stands off the one before it. Empty while nothing is
+   picked, where a margin would be a gap with nothing in it. */
+.compare:not(:empty) { margin-top: var(--space-4); }
 /* A model picked for the comparison is marked in the colour of its own line
    down there, so the row and the line are read as one thing. */
 tr.compared-1 td:first-child { box-shadow: inset 2px 0 var(--series-1); }
