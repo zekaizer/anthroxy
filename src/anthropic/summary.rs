@@ -14,7 +14,8 @@ pub struct RequestSummary {
     /// the text the user typed in the latest user message that has some,
     /// a message sent while the model was working, or a slash or shell
     /// command; system reminders and Claude Code's notices are left out.
-    /// `None` when no user message carries one.
+    /// `None` when the turn started without one — a notice woke the model —
+    /// or no user message carries one.
     pub prompt: Option<String>,
     /// What the request sends when its last message carries no prompt, on one
     /// line: the tools whose results it returns and the notices it holds.
@@ -36,30 +37,41 @@ const INTERRUPTED: [&str; 2] = [
     "[Request interrupted by user for tool use]",
 ];
 
-/// How user text Claude Code writes itself begins, and what it is. Matched at
-/// the start of the text only, so the user's own words that mention one stay
-/// text. Kept in step with the console's `NOTICES`.
-const NOTICES: [(&str, &str); 17] = [
-    ("<local-command-caveat>", "command output"),
-    ("<local-command-stdout>", "command output"),
-    ("<local-command-stderr>", "command output"),
-    ("<bash-stdout>", "shell output"),
-    ("<bash-stderr>", "shell output"),
-    ("<task-notification>", "task notification"),
-    ("<ide_opened_file>", "ide context"),
-    ("<ide_selection>", "ide context"),
-    ("Stop hook feedback:", "hook feedback"),
-    ("Goal check-in:", "goal check-in"),
-    ("A session-scoped Stop hook is now active", "goal set"),
+/// How user text Claude Code writes itself begins, what it is, and whether it
+/// wakes the model with nothing typed — which starts a turn of its own, so the
+/// prompt above it belongs to the turn before. Matched at the start of the text
+/// only, so the user's own words that mention one stay text. Kept in step with
+/// the console's `NOTICES`.
+const NOTICES: [(&str, &str, bool); 17] = [
+    ("<local-command-caveat>", "command output", false),
+    ("<local-command-stdout>", "command output", false),
+    ("<local-command-stderr>", "command output", false),
+    ("<bash-stdout>", "shell output", false),
+    ("<bash-stderr>", "shell output", false),
+    ("<task-notification>", "task notification", true),
+    ("<ide_opened_file>", "ide context", false),
+    ("<ide_selection>", "ide context", false),
+    ("Stop hook feedback:", "hook feedback", true),
+    ("Goal check-in:", "goal check-in", true),
+    ("A session-scoped Stop hook is now active", "goal set", true),
     (
         "This session is being continued from a previous conversation",
         "compaction summary",
+        false,
     ),
-    ("Base directory for this skill:", "skill"),
-    ("Another Claude session sent a message:", "agent message"),
-    ("Continue from where you left off.", "continue"),
-    ("[Your previous response had no visible output.", "continue"),
-    ("[Image: original ", "image note"),
+    ("Base directory for this skill:", "skill", false),
+    (
+        "Another Claude session sent a message:",
+        "agent message",
+        true,
+    ),
+    ("Continue from where you left off.", "continue", true),
+    (
+        "[Your previous response had no visible output.",
+        "continue",
+        true,
+    ),
+    ("[Image: original ", "image note", false),
 ];
 
 const TOOL_USES: [&str; 3] = ["tool_use", "server_tool_use", "mcp_tool_use"];
@@ -77,18 +89,30 @@ pub fn summarize(body: &[u8]) -> RequestSummary {
     let Ok(body) = serde_json::from_slice::<Body>(body) else {
         return RequestSummary::default();
     };
-    let prompt = body
-        .messages
-        .iter()
-        .rev()
-        .filter(|m| role(m) == Some("user"))
-        .find_map(|m| read(m.get("content")).prompt)
-        .map(|text| one_line(&text));
+    let prompt = turn_prompt(&body.messages).map(|text| one_line(&text));
     RequestSummary {
         messages: body.messages.len(),
         prompt,
         step: step(&body.messages).map(|text| one_line(&text)),
     }
+}
+
+/// The prompt of the turn the last message belongs to: the typed text of the
+/// newest user message that carries some, read backwards. A user message that
+/// only wakes the model — a notice with no prompt and no tool result to carry
+/// the running turn — starts a turn of its own, and the reading stops there
+/// rather than borrowing the prompt of the turn before it.
+fn turn_prompt(messages: &[Value]) -> Option<String> {
+    for message in messages.iter().rev().filter(|m| role(m) == Some("user")) {
+        let read = read(message.get("content"));
+        if read.prompt.is_some() {
+            return read.prompt;
+        }
+        if read.wakes && read.results.is_empty() {
+            return None;
+        }
+    }
+    None
 }
 
 fn role(message: &Value) -> Option<&str> {
@@ -101,6 +125,8 @@ struct Read<'a> {
     prompt: Option<String>,
     /// Claude Code's notices, in order, each once.
     notices: Vec<&'static str>,
+    /// One of those notices wakes the model with nothing typed.
+    wakes: bool,
     /// `tool_use_id` of each tool result, in order; `None` for one without.
     results: Vec<Option<&'a str>>,
     reminders: bool,
@@ -155,8 +181,9 @@ fn read(content: Option<&Value>) -> Read<'_> {
             match classify(own.trim()) {
                 Piece::Empty => {}
                 Piece::Prompt(_) if command => command = false,
-                Piece::Notice(label) => {
+                Piece::Notice(label, wakes) => {
                     command = false;
+                    read.wakes |= wakes;
                     if !read.notices.contains(&label) {
                         read.notices.push(label);
                     }
@@ -202,7 +229,8 @@ enum Piece {
     Prompt(String),
     /// A slash or shell command, as the user typed it.
     Command(String),
-    Notice(&'static str),
+    /// A notice, and whether it wakes the model with nothing typed.
+    Notice(&'static str, bool),
 }
 
 /// What a trimmed stretch of user text outside reminders is.
@@ -211,10 +239,10 @@ fn classify(text: &str) -> Piece {
         return Piece::Empty;
     }
     if INTERRUPTED.contains(&text) {
-        return Piece::Notice("interrupted");
+        return Piece::Notice("interrupted", false);
     }
-    if let Some((_, label)) = NOTICES.iter().find(|(start, _)| text.starts_with(start)) {
-        return Piece::Notice(label);
+    if let Some((_, label, wakes)) = NOTICES.iter().find(|(start, ..)| text.starts_with(start)) {
+        return Piece::Notice(label, *wakes);
     }
     if (text.starts_with("<command-name>") || text.starts_with("<command-message>"))
         && let Some(name) = tagged(text, "command-name")

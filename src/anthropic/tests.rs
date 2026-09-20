@@ -591,36 +591,16 @@ fn summary_reads_claude_code_notices_as_what_they_are() {
     assert_eq!(summary.prompt.as_deref(), Some("! git status"));
     assert_eq!(summary.step, None);
 
+    // A notice Claude Code adds to the turn that is already running: the
+    // turn's prompt still names what the request is for.
     for (notice, label) in [
-        (
-            "Stop hook feedback:\n[ship it]: not done yet",
-            "hook feedback",
-        ),
-        ("Goal check-in: «ship it» is still active", "goal check-in"),
-        (
-            "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>",
-            "task notification",
-        ),
         (
             "<local-command-stdout>Set effort level to high</local-command-stdout>",
             "command output",
         ),
         (
-            "This session is being continued from a previous conversation that ran out of context.\n\nSummary: ...",
-            "compaction summary",
-        ),
-        (
             "Base directory for this skill: /home/u/.claude/skills/diagnose\n\n# Diagnose",
             "skill",
-        ),
-        (
-            "Another Claude session sent a message:\n<agent-message from=\"a1\">\n[Subagent hand-back] report",
-            "agent message",
-        ),
-        ("Continue from where you left off.", "continue"),
-        (
-            "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
-            "continue",
         ),
         (
             "[Image: original 1400x2175, displayed at 1287x2000. Multiply coordinates by 1.09 to map to original image.]",
@@ -647,6 +627,51 @@ fn summary_reads_claude_code_notices_as_what_they_are() {
         );
         assert_eq!(summary.step.as_deref(), Some(label), "{notice}");
     }
+
+    // A notice that wakes the model with nothing typed: the turn before it
+    // ended, and its prompt is not what this request is for.
+    for (notice, label) in [
+        (
+            "Stop hook feedback:\n[ship it]: not done yet",
+            "hook feedback",
+        ),
+        ("Goal check-in: «ship it» is still active", "goal check-in"),
+        ("A session-scoped Stop hook is now active", "goal set"),
+        (
+            "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>",
+            "task notification",
+        ),
+        ("Continue from where you left off.", "continue"),
+        (
+            "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
+            "continue",
+        ),
+        (
+            "Another Claude session sent a message:\n\nready",
+            "agent message",
+        ),
+    ] {
+        let summary = body(json!([
+            {"role": "user", "content": "Fix the build."},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": notice}
+        ]));
+        assert_eq!(summary.prompt, None, "{notice}");
+        assert_eq!(summary.step.as_deref(), Some(label), "{notice}");
+    }
+
+    // The same notice delivered with tool results is the running turn being
+    // told something, not a turn of its own.
+    let summary = body(json!([
+        {"role": "user", "content": "Fix the build."},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+            {"type": "text", "text": "<task-notification>\n<status>completed</status>\n</task-notification>"}
+        ]}
+    ]));
+    assert_eq!(summary.prompt.as_deref(), Some("Fix the build."));
+    assert_eq!(summary.step.as_deref(), Some("← Edit · task notification"));
 
     let summary = body(json!([
         {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context."},
