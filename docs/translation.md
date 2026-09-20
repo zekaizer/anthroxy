@@ -49,7 +49,7 @@ A failure crosses the IR like anything else: each side's codec decodes its own e
 
 The kind comes from the HTTP status where the status says something, and from the names the document uses (`error.type`, `error.code`, spelled loosely across servers) where it does not: a 503 that calls itself `overloaded_error` reaches the client as `overloaded_error`, not `api_error`. Inside an event stream there is no status at all, so the document's own names are all there is.
 
-A 4xx/5xx from the backend keeps its status; the message starts with `[backend <name>, HTTP <status>]`. A failure inside the stream (connection lost, malformed frame, an error frame) is one `error` event carrying the same kind.
+A 4xx/5xx from the backend keeps its status — that is what the transport said and what a retry policy reads — so a server that answers `500` with `invalid_api_key` reaches the client as HTTP 500 carrying `authentication_error`. The type and the status may disagree that way; the type is the more honest of the two. The message starts with `[backend <name>, HTTP <status>]`. A failure inside the stream (connection lost, malformed frame, an error frame) is one `error` event carrying the same kind.
 
 ## What the IR buys
 
