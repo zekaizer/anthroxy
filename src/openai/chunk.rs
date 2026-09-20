@@ -12,8 +12,9 @@ use crate::ir::{Event, Failure};
 
 /// Arguments held for tool calls still waiting for a function name. The SSE
 /// parser caps one frame; nothing else caps what a stream accumulates across
-/// them, and a call is only held because its name has not arrived.
-pub const MAX_PENDING_ARGUMENTS: usize = 1024 * 1024;
+/// them. Well above any call a backend names in its first delta, as this
+/// wire format has one do.
+pub const MAX_PENDING_ARGUMENTS: usize = 8 * 1024 * 1024;
 /// Tool calls one stream may open.
 pub const MAX_CALLS: usize = 256;
 
@@ -29,7 +30,7 @@ pub struct ChunkDecoder {
     /// Arguments held across every pending call.
     pending: usize,
     /// A limit was passed; the stream's tool calls are no longer followed.
-    cut_off: bool,
+    stopped: bool,
 }
 
 #[derive(Debug)]
@@ -103,7 +104,7 @@ impl ChunkDecoder {
     }
 
     fn tool_call_delta(&mut self, call: &Value, events: &mut Vec<Event>) {
-        if self.cut_off {
+        if self.stopped {
             return;
         }
         let call = tool_call(call);
@@ -118,7 +119,7 @@ impl ChunkDecoder {
         };
         self.last = Some(index);
         if !self.calls.contains_key(&index) && self.calls.len() == MAX_CALLS {
-            self.cut_off(
+            self.stop_following(
                 format!("the stream opened more than {MAX_CALLS} tool calls"),
                 events,
             );
@@ -144,7 +145,7 @@ impl ChunkDecoder {
         self.pending += call.arguments.len();
         let Some(name) = call.name else {
             if self.pending > MAX_PENDING_ARGUMENTS {
-                self.cut_off(
+                self.stop_following(
                     format!(
                         "tool call {index} held more than {MAX_PENDING_ARGUMENTS} bytes of arguments without a function name"
                     ),
@@ -161,8 +162,8 @@ impl ChunkDecoder {
 
     /// Stops following tool calls and reports why: what is held is released,
     /// and the error closes the stream for the client.
-    fn cut_off(&mut self, why: String, events: &mut Vec<Event>) {
-        self.cut_off = true;
+    fn stop_following(&mut self, why: String, events: &mut Vec<Event>) {
+        self.stopped = true;
         self.calls.clear();
         self.pending = 0;
         events.push(Event::Error(Failure::upstream(why)));
