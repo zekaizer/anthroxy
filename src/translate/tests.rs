@@ -145,7 +145,7 @@ fn response_round_trips_through_the_ir() {
     assert_eq!(out["usage"], json!({"input_tokens": 1, "output_tokens": 2}));
     let error = response(br#"{"error": {"message": "boom"}}"#, "m");
     assert!(
-        matches!(error, Err(ResponseError::Backend(ref m)) if m == "boom"),
+        matches!(error, Err(ResponseError::Backend(ref m)) if m.message == "boom"),
         "{error:?}"
     );
 }

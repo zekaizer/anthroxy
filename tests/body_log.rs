@@ -479,7 +479,10 @@ async fn records_a_stream_chunk_by_chunk_while_it_runs() {
         // Big enough that a chunk crosses the flush threshold on its own.
         let events = futures_util::stream::iter(0..6).then(|i| async move {
             tokio::time::sleep(Duration::from_millis(120)).await;
-            Ok::<_, std::io::Error>(format!("data: {{\"n\":{i},\"pad\":\"{}\"}}\n\n", "x".repeat(16 * 1024)))
+            Ok::<_, std::io::Error>(format!(
+                "data: {{\"n\":{i},\"pad\":\"{}\"}}\n\n",
+                "x".repeat(16 * 1024)
+            ))
         });
         Response::builder()
             .status(200)
@@ -516,7 +519,11 @@ async fn records_a_stream_chunk_by_chunk_while_it_runs() {
     }
     let entries = wait_for_entries(dir.path(), 1).await;
     let sse = std::fs::read_to_string(entries[0].join("response.sse")).unwrap();
-    assert_eq!(sse.matches("data:").count(), 6, "every event ends up recorded");
+    assert_eq!(
+        sse.matches("data:").count(),
+        6,
+        "every event ends up recorded"
+    );
     assert!(
         sse.len() > partial,
         "the file kept growing after the look, not rewritten from scratch"

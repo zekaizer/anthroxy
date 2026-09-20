@@ -1,10 +1,12 @@
 //! The intermediate representation between the Anthropic Messages API and
 //! other chat APIs (ADR-0010). Requests are a typed document; responses are
 //! a sequence of events that both a stream and a completed message fold
-//! from. Catalog rows are [`Model`]. Nothing here names a wire format.
+//! from. Catalog rows are [`Model`]; a refusal, or an answer the router
+//! could not read, is a [`Failure`]. Nothing here names a wire format.
 
 mod catalog;
 mod event;
+mod failure;
 mod message;
 mod request;
 
@@ -13,6 +15,7 @@ mod tests;
 
 pub use catalog::{Effort, Model};
 pub use event::{Event, StopReason, Usage};
+pub use failure::{Failure, FailureKind};
 pub use message::{Block, Message};
 pub use request::{
     Image, Message as RequestMessage, Part, Request, Role, TEXT_SEPARATOR, Tool, ToolChoice,

@@ -1,3 +1,5 @@
+use super::Failure;
+
 /// One step of a response. A decoder emits these in order; an encoder turns
 /// them into its wire format without buffering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,8 +25,9 @@ pub enum Event {
     },
     Finish(StopReason),
     Usage(Usage),
-    /// The backend reported a failure; nothing meaningful follows.
-    Error(String),
+    /// The backend failed, or sent something the router could not read;
+    /// nothing meaningful follows.
+    Error(Failure),
     Done,
 }
 

@@ -210,7 +210,13 @@ async fn print_serves_fixture_store_without_refresh() {
     let mock = MockAuth::start().await;
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("xai-oauth.json");
-    write_store(&store, "at-fixture", "rt-old", &far_expiry(), &mock.token_url);
+    write_store(
+        &store,
+        "at-fixture",
+        "rt-old",
+        &far_expiry(),
+        &mock.token_url,
+    );
 
     let (code, stdout, stderr) = run_print(&store);
     assert_eq!(code, 0, "stderr={stderr}");
@@ -230,10 +236,7 @@ async fn print_serves_fixture_store_without_refresh() {
         Duration::from_secs(10),
     );
     let cred = source.credential().await.unwrap().unwrap();
-    assert_eq!(
-        cred.header_pair().1.to_str().unwrap(),
-        "Bearer at-fixture"
-    );
+    assert_eq!(cred.header_pair().1.to_str().unwrap(), "Bearer at-fixture");
 }
 
 #[tokio::test(flavor = "multi_thread")]

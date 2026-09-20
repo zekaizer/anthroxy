@@ -8,7 +8,7 @@ use super::common::{
     ParseError, content_events, error_document, first_choice, parse_object, push_tool_call,
     stop_reason, tool_call, usage_event,
 };
-use crate::ir::Event;
+use crate::ir::{Event, Failure};
 
 /// Decodes one `data:` payload at a time, carrying the tool-call state a
 /// stream needs: which calls have started, and the deltas of a call whose
@@ -44,7 +44,9 @@ impl ChunkDecoder {
             .into_iter()
             .filter(|(_, call)| matches!(call, Call::Pending { .. }))
             .map(|(index, _)| {
-                Event::Error(format!("tool call {index} never received a function name"))
+                Event::Error(Failure::upstream(format!(
+                    "tool call {index} never received a function name"
+                )))
             })
             .collect()
     }
@@ -59,8 +61,11 @@ impl ChunkDecoder {
             return Ok(events);
         }
         let root = parse_object(data.as_bytes())?;
-        if let Some(message) = error_document(&root) {
-            return Ok(vec![Event::Error(message)]);
+        if error_document(&root).is_some() {
+            return Ok(vec![Event::Error(super::decode_error(
+                None,
+                data.as_bytes(),
+            ))]);
         }
         let mut events = Vec::new();
         if !self.started {

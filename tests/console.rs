@@ -508,7 +508,10 @@ url = "{url}"
     let account = &probe["backends"][0];
     assert_eq!(account["name"], "account");
     assert!(
-        account["models"]["skipped"].as_str().unwrap().contains("Authorization"),
+        account["models"]["skipped"]
+            .as_str()
+            .unwrap()
+            .contains("Authorization"),
         "{account}"
     );
     assert!(account["models"].get("status").is_none());

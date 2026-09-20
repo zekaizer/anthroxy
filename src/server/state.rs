@@ -12,11 +12,11 @@ use serde::Serialize;
 use super::{ClientToken, ServerBuildError};
 use crate::activity::Activity;
 use crate::config::Config;
+use crate::ir::Model;
 use crate::observability::BodyLog;
 use crate::routing::{LiveCatalog, Registry};
 use crate::stats::StatsLog;
 use crate::upstream::UpstreamClient;
-use crate::upstream::probe::ListedModel;
 
 /// Configuration-derived state, built once per (re)load.
 pub struct Snapshot {
@@ -141,7 +141,7 @@ pub struct AppState {
     /// Exchanges in flight and recently finished; survives reloads.
     pub activity: Arc<Activity>,
     /// Model lists from the console's last probe, by backend name.
-    probed: Arc<Mutex<HashMap<String, Vec<ListedModel>>>>,
+    probed: Arc<Mutex<HashMap<String, Vec<Model>>>>,
     /// Set once by a stop whose grace period ran out.
     cut: tokio::sync::watch::Sender<bool>,
 }
@@ -290,14 +290,14 @@ impl AppState {
     }
 
     /// Model lists from the console's last probe, by backend name.
-    pub fn probed(&self) -> HashMap<String, Vec<ListedModel>> {
+    pub fn probed(&self) -> HashMap<String, Vec<Model>> {
         self.probed
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
 
-    pub fn set_probed(&self, listed: HashMap<String, Vec<ListedModel>>) {
+    pub fn set_probed(&self, listed: HashMap<String, Vec<Model>>) {
         *self
             .probed
             .lock()

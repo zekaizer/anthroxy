@@ -187,6 +187,18 @@ pub(super) fn error_document(root: &Map<String, Value>) -> Option<String> {
     None
 }
 
+/// The names an error document gives its failure, most specific first:
+/// `error.type` and `error.code`, or the same fields on a bare error object.
+pub(super) fn error_names(root: &Map<String, Value>) -> impl Iterator<Item = &str> {
+    let error = match root.get("error") {
+        Some(Value::Object(fields)) => fields,
+        _ => root,
+    };
+    ["type", "code"]
+        .into_iter()
+        .filter_map(|field| str_field(error, field))
+}
+
 /// `error.message`, a bare error string, or the error value itself.
 fn error_text(error: &Value) -> String {
     match error {

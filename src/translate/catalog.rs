@@ -7,10 +7,12 @@ use crate::openai;
 
 /// Decode an origin model list through the IR, then encode Anthropic/Claude Code rows.
 pub fn catalog(kind: BackendKind, bytes: &[u8]) -> Vec<ModelObject> {
-    anthropic::encode_models(&decode(kind, bytes))
+    anthropic::encode_models(&models(kind, bytes))
 }
 
-fn decode(kind: BackendKind, bytes: &[u8]) -> Vec<Model> {
+/// An origin model list as IR rows, by the codec the backend's kind calls
+/// for. The only place a decoder is chosen.
+pub fn models(kind: BackendKind, bytes: &[u8]) -> Vec<Model> {
     match kind {
         BackendKind::OpenAi => openai::decode_models(bytes),
         BackendKind::Anthropic | BackendKind::Passthrough => {

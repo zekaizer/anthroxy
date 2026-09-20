@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{Event, StopReason, Usage};
+use super::{Event, Failure, StopReason, Usage};
 
 /// A completed response: the events of one stream folded together.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,8 +28,8 @@ impl Message {
     /// Folds `events` with the block rules the stream encoder applies:
     /// consecutive deltas of one kind share a block, a different kind or a
     /// `Finish` closes it, tool calls are keyed by their index. `Err`
-    /// carries the message of an `Event::Error`.
-    pub fn from_events(events: impl IntoIterator<Item = Event>) -> Result<Self, String> {
+    /// carries the failure of an `Event::Error`.
+    pub fn from_events(events: impl IntoIterator<Item = Event>) -> Result<Self, Failure> {
         let mut message = Self {
             id: String::new(),
             model: String::new(),
@@ -84,7 +84,7 @@ impl Message {
                     open = false;
                 }
                 Event::Usage(usage) => message.usage = usage,
-                Event::Error(text) => return Err(text),
+                Event::Error(failure) => return Err(failure),
                 Event::Done => break,
             }
         }

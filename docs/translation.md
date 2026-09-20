@@ -2,6 +2,12 @@
 
 anthroxy speaks the Anthropic Messages API to Claude Code. A backend with `kind = "openai"` speaks OpenAI Chat Completions instead, so every request and response crosses a translation layer. This page describes that layer; ADR-0010 records the decisions behind it.
 
+## The rule
+
+Everything a non-Anthropic backend sends or receives crosses the IR. That covers the chat request and its answer, but also the model list, the error body, and anything a probe or a CLI subcommand reads from such a backend. Each side has one codec — `anthropic/` knows the Messages API and the IR, `openai/` knows Chat Completions and the IR — and `translate/` is the only module that holds both ends.
+
+A shortcut is a defect even when it is short: no reading a field out of one format to write it into the other, no second parser for a shape a codec already decodes. When a new thing has to cross, it gets a place in `ir/` first.
+
 ## The shape
 
 ```
@@ -18,7 +24,9 @@ JSON document     ◄── anthropic::encode_message ◄── ir::Message ◄�
 
 The middle column is the intermediate representation (IR, `src/ir/`). It names no wire format. The Anthropic codecs (`src/anthropic/`) know only the Messages API and the IR; the OpenAI codecs (`src/openai/`) know only Chat Completions and the IR. The one place that holds both ends is `src/translate/`, and the axum-facing glue is `src/server/handlers/openai.rs`. A backend without a kind never enters any of this: its bytes are relayed as before.
 
-`GET /v1/models` from a live origin is the same split: `openai::decode_models` or `anthropic::decode_models` → `ir::Model` → `anthropic::encode_models` (Claude Code catalog fields: `context_window`, `runtime`, `thinking`). `translate::catalog` is the only function that chooses a decoder by backend kind.
+A probe (`anthroxy check`, the console) reads a backend the same way: `translate::models` for the list, `translate::failure` for an error body. There is no second parser anywhere.
+
+`GET /v1/models` from a live origin is the same split: `openai::decode_models` or `anthropic::decode_models` → `ir::Model` → `anthropic::encode_models` (Claude Code catalog fields: `context_window`, `runtime`, `thinking`). `translate::models` is the only function that chooses a catalog decoder by backend kind.
 
 ## Request
 
@@ -37,7 +45,11 @@ The middle column is the intermediate representation (IR, `src/ir/`). It names n
 
 ## Errors
 
-A 4xx/5xx from the backend keeps its status; its body becomes an Anthropic error document whose type follows the status and whose message starts with `[backend <name>, HTTP <status>]`. A failure inside the stream (connection lost, malformed frame, an error frame) is one `error` event of type `api_error`. Claude Code shows both.
+A failure crosses the IR like anything else: each side's codec decodes its own error body into `ir::Failure` — a `FailureKind` the client can act on, plus what the origin said — and `anthropic::encode_error` writes the Messages error document from it. `translate::failure` is the only place an error decoder is chosen by backend kind.
+
+The kind comes from the HTTP status where the status says something, and from the names the document uses (`error.type`, `error.code`, spelled loosely across servers) where it does not: a 503 that calls itself `overloaded_error` reaches the client as `overloaded_error`, not `api_error`. Inside an event stream there is no status at all, so the document's own names are all there is.
+
+A 4xx/5xx from the backend keeps its status — that is what the transport said and what a retry policy reads — so a server that answers `500` with `invalid_api_key` reaches the client as HTTP 500 carrying `authentication_error`. The type and the status may disagree that way; the type is the more honest of the two. The message starts with `[backend <name>, HTTP <status>]`. A failure inside the stream (connection lost, malformed frame, an error frame) is one `error` event carrying the same kind.
 
 ## What the IR buys
 

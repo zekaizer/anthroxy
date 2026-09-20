@@ -1,7 +1,9 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::ir::{Image, Part, Request, RequestMessage, Role, Tool, ToolChoice};
+use crate::ir::{
+    Failure, FailureKind, Image, Part, Request, RequestMessage, Role, Tool, ToolChoice,
+};
 
 fn request(messages: Vec<RequestMessage>) -> Request {
     Request {
@@ -412,11 +414,11 @@ fn finish_reasons_usage_done_and_errors() {
     assert_eq!(
         d.decode(r#"{"error": {"message": "overloaded", "type": "server_error"}}"#)
             .unwrap(),
-        vec![Event::Error("overloaded".into())]
+        vec![Event::Error(Failure::upstream("overloaded"))]
     );
     assert_eq!(
         d.decode(r#"{"error": "plain text"}"#).unwrap(),
-        vec![Event::Error("plain text".into())]
+        vec![Event::Error(Failure::upstream("plain text"))]
     );
     assert!(matches!(d.decode("not json"), Err(ParseError::NotJson(_))));
     assert!(matches!(d.decode("[1, 2]"), Err(ParseError::NotJson(_))));
@@ -525,25 +527,66 @@ fn completed_response_yields_the_stream_events() {
 
 #[test]
 fn error_message_prefers_the_documented_field() {
+    let message = |raw: &[u8]| decode_error(None, raw).message;
     assert_eq!(
-        error_message(
+        message(
             br#"{"error": {"message": "bad key", "type": "invalid_request_error", "code": null}}"#
         ),
         "bad key"
     );
-    assert_eq!(error_message(br#"{"error": "quota"}"#), "quota");
+    assert_eq!(message(br#"{"error": "quota"}"#), "quota");
     assert_eq!(
-        error_message(br#"{"detail": "Not Found"}"#),
+        message(br#"{"detail": "Not Found"}"#),
         r#"{"detail": "Not Found"}"#
     );
-    assert_eq!(
-        error_message(b"  <html>gateway</html>\n"),
-        "<html>gateway</html>"
-    );
-    assert_eq!(error_message(b""), "");
+    assert_eq!(message(b"  <html>gateway</html>\n"), "<html>gateway</html>");
+    assert_eq!(message(b""), "");
     let long = "x".repeat(300);
-    assert_eq!(error_message(long.as_bytes()).len(), 200);
-    assert_eq!(error_message(b"\xff\xfe"), "\u{FFFD}\u{FFFD}");
+    assert_eq!(message(long.as_bytes()).len(), 200);
+    assert_eq!(message(b"\xff\xfe"), "\u{FFFD}\u{FFFD}");
+}
+
+#[test]
+fn the_status_names_the_kind_and_the_body_fills_in_where_it_cannot() {
+    // A status the API defines wins over whatever the body calls it.
+    assert_eq!(
+        decode_error(
+            Some(429),
+            br#"{"error": {"message": "slow", "type": "server_error"}}"#
+        )
+        .kind,
+        FailureKind::RateLimit
+    );
+    // 500 and 503 say only "it failed", so the document's own name is taken.
+    assert_eq!(
+        decode_error(
+            Some(503),
+            br#"{"error": {"message": "busy", "type": "overloaded_error"}}"#
+        )
+        .kind,
+        FailureKind::Overloaded
+    );
+    assert_eq!(
+        decode_error(
+            Some(500),
+            br#"{"error": {"message": "no key", "code": "invalid_api_key"}}"#
+        )
+        .kind,
+        FailureKind::Authentication
+    );
+    // Inside a stream there is no status at all.
+    assert_eq!(
+        decode_error(
+            None,
+            br#"{"error": {"message": "nope", "type": "server_error"}}"#
+        )
+        .kind,
+        FailureKind::Upstream
+    );
+    assert_eq!(
+        decode_error(Some(500), b"upstream died").kind,
+        FailureKind::Upstream
+    );
 }
 
 // ---- review hardening ----
@@ -605,7 +648,7 @@ fn a_call_that_never_gets_a_name_is_reported_at_the_end() {
     .unwrap();
     let tail = d.finish();
     assert!(
-        matches!(&tail[..], [Event::Error(m)] if m.contains("3") && m.contains("name")),
+        matches!(&tail[..], [Event::Error(f)] if f.message.contains("3") && f.message.contains("name")),
         "{tail:?}"
     );
     assert_eq!(ChunkDecoder::new().finish(), vec![]);
@@ -616,14 +659,12 @@ fn vllm_style_error_objects_are_errors() {
     let mut d = ChunkDecoder::new();
     let vllm =
         r#"{"object":"error","message":"prompt too long","type":"BadRequestError","code":400}"#;
-    assert_eq!(
-        d.decode(vllm).unwrap(),
-        vec![Event::Error("prompt too long".into())]
-    );
-    assert_eq!(error_message(vllm.as_bytes()), "prompt too long");
+    let failure = Failure::new(FailureKind::InvalidRequest, "prompt too long");
+    assert_eq!(d.decode(vllm).unwrap(), vec![Event::Error(failure.clone())]);
+    assert_eq!(decode_error(None, vllm.as_bytes()), failure);
     assert!(matches!(
         decode_response(vllm.as_bytes()),
-        Ok(events) if events == vec![Event::Error("prompt too long".into())]
+        Ok(events) if events == vec![Event::Error(failure)]
     ));
 }
 
@@ -971,5 +1012,34 @@ fn a_backend_that_says_nothing_about_caching_is_not_one_that_cached_nothing() {
             thinking_tokens: 0,
         })),
         "{events:?}"
+    );
+}
+
+#[test]
+fn model_lists_give_up_their_context_window_whatever_the_server_calls_it() {
+    let rows = decode_models(
+        br#"{"data": [
+            {"id": "vllm", "max_model_len": 32768},
+            {"id": "lmstudio", "max_context_length": 131072, "loaded_context_length": 8192},
+            {"id": "openrouter", "context_length": 200000},
+            {"id": "bedrock", "max_input_tokens": 12000},
+            {"id": "plain"},
+            {"id": "odd", "max_model_len": "big"}
+        ]}"#,
+    );
+    let windows: Vec<(&str, Option<u64>)> = rows
+        .iter()
+        .map(|m| (m.id.as_str(), m.context_window))
+        .collect();
+    assert_eq!(
+        windows,
+        [
+            ("vllm", Some(32768)),
+            ("lmstudio", Some(8192)),
+            ("openrouter", Some(200000)),
+            ("bedrock", Some(12000)),
+            ("plain", None),
+            ("odd", None),
+        ]
     );
 }
