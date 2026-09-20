@@ -76,5 +76,42 @@ and filter and range state in the URL.
 
 `cargo test` does not see any of this: the assets are served as files and the
 tests are black-box HTTP. A change to `app.css`, `app.js` or `recordings.js`
-is verified by driving the page — every tab it touches, in light and dark, at
-a wide and a narrow viewport, collecting page exceptions and console errors.
+is checked by driving the page.
+
+**Measure it; do not look at it.** Every fault this console has shipped was
+one a screenshot did not show and a number would have: a line 30px tall
+beside lines of 17.4, a detail panel 30px wider than its box, a colour that
+lost to a rule with one more class in it, a table column that pushed a table
+into a scroll, a section flush against the one above it. A screenshot is for
+the last question — does this read well — and answers none of the others.
+
+Drive the page with a headless browser and assert:
+
+1. **Overflow, everywhere, at every width.** `scrollWidth - clientWidth` for
+   the document *and* for every `.table-wrap`, `.detail` and `pre`. A page
+   that does not scroll can still hold a table that does. Widths: 1920, 1440,
+   1280, 1100, 900, 700, 430.
+2. **A new element against the ones beside it.** Its computed `font`,
+   `line-height`, `height` and `color` next to its neighbours' in the same
+   line. This is what catches a control that brought a component's height
+   with it, and a colour lost to specificity.
+3. **Spacing against the page's own.** The gap between a new block and its
+   neighbours, against the gaps between the blocks already there. The number
+   to match is whatever the rest of the page uses, not a number that looks
+   about right.
+4. **Both themes**, every assertion.
+5. **Every state the change has**: at rest, hover, selected, disabled, focus.
+   Note that `tr.clickable:hover` outranks `tr.selected`, so a selected row
+   under the pointer takes the hover colour; that is the console's own
+   behaviour and not a fault.
+6. **No page exceptions and no console errors**, collected while driving.
+7. **Redraws, if anything redraws on a poll.** Frames over 50ms, whether the
+   panel node survives, whether any frame sees an empty body, whether what
+   the reader opened and scrolled to is still open and scrolled.
+
+**A number that was already there is not a regression.** Before calling one,
+stash the change, rebuild, take the same measurement, and compare. The
+narrow-window scroll inside the thirteen-column tables reads as a fault and
+is not one: the untouched tables do it too.
+
+**Then screenshot**, for what measurement cannot reach.
