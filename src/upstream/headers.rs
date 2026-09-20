@@ -250,8 +250,11 @@ pub fn sent_headers(
     if let Some((header, value)) = credential {
         sent.insert(header.name.to_string(), (value, HeaderSource::Credential));
     }
+    // A `host` the backend forces is what the HTTP client sends; the URL's
+    // authority is only what it frames when none is set.
     if let Some(host) = host(&backend.url) {
-        sent.insert(HOST.to_string(), (host, HeaderSource::Transport));
+        sent.entry(HOST.to_string())
+            .or_insert((host, HeaderSource::Transport));
     }
     if body_len > 0 {
         sent.insert(

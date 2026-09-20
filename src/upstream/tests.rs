@@ -442,3 +442,17 @@ fn the_logged_request_target_keeps_the_url_userinfo_out() {
         "https://<redacted>@gw.corp/v1/messages"
     );
 }
+
+#[test]
+fn a_forced_host_is_reported_as_the_backend_s_not_the_url_s() {
+    let backend = backend(&[], &[("host", "gateway.example.corp")]);
+    let headers = upstream_headers(&client_headers(), &backend);
+    let sent = sent_headers(&backend, &headers, None, 0, SecretView::Masked);
+    let host = sent.iter().find(|h| h.name == "host").unwrap();
+    // What went on the wire: the forced value, which the HTTP client keeps.
+    assert_eq!(
+        (host.value.as_str(), host.source),
+        ("gate…corp", HeaderSource::Backend)
+    );
+    assert_eq!(sent.iter().filter(|h| h.name == "host").count(), 1);
+}
