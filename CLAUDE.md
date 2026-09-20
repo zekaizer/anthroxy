@@ -39,6 +39,7 @@ cargo fmt
   - `cli/` — clap grammar and one file per subcommand.
   - `text.rs` — escaping and cutting for anything the router did not choose that reaches a message or a log line.
   - `private_fs.rs` — owner-only directory creation, writes and appends for files that hold what a user sent or did; the count of writes still queued, which a stop waits for.
+- `scripts/` — helpers that are not the binary: `console-check` drives the web console and says where to look.
 - `tests/` — black-box tests: `proxy.rs`/`body_log.rs`/`openai.rs`/`activity.rs`/`console.rs`/`reload.rs` against a mock backend in `tests/support/`, `cli.rs` against the binary.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed docs.
@@ -56,5 +57,5 @@ This file stays short. Details live under `docs/` and are read only when a task 
 - `docs/adr/README.md` — read before writing or changing an ADR.
 - `docs/adr/NNNN-*.md` — read the ADR covering an area before changing that area.
 - `docs/claude-code.md` — read when a question is about what Claude Code does before the router sees a request: which models reach its picker, the context window it assumes, whether MCP tools are deferred.
-- `docs/console-design.md` — read before changing `server/console/assets/`: the token scales, the badge taxonomy and what colour is allowed to mean.
+- `docs/console-design.md` — read before changing `server/console/assets/`: the token scales, the badge taxonomy, what colour is allowed to mean, and how a change is checked (`scripts/console-check`).
 - `docs/translation.md` — read before changing `ir/`, `openai/`, `translate/` or the Anthropic codecs: how an `openai` backend is served and what the IR is for.
