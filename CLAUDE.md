@@ -7,6 +7,7 @@ Rust binary. A single-endpoint gateway in front of several Anthropic-API-compati
 - Language: Rust, edition 2024.
 - Ingress is always Claude Code speaking the Anthropic Messages API. Other clients are out of scope.
 - Runtime target: Windows 11 WSL2 (Ubuntu). Claude Code on the Windows host must reach it as well.
+- A backend that does not speak the Anthropic Messages API is reached only through the IR. Everything crossing it — chat requests, response documents, event streams, model lists, error bodies, and whatever a probe or the CLI reads from it — is decoded into `ir/` by that format's codec and encoded out by the other. A shortcut that maps one wire format onto the other directly is not allowed, and `translate/` stays the only module naming both.
 
 ## Commands
 

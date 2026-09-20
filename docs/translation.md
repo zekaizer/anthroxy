@@ -2,6 +2,12 @@
 
 anthroxy speaks the Anthropic Messages API to Claude Code. A backend with `kind = "openai"` speaks OpenAI Chat Completions instead, so every request and response crosses a translation layer. This page describes that layer; ADR-0010 records the decisions behind it.
 
+## The rule
+
+Everything a non-Anthropic backend sends or receives crosses the IR. That covers the chat request and its answer, but also the model list, the error body, and anything a probe or a CLI subcommand reads from such a backend. Each side has one codec — `anthropic/` knows the Messages API and the IR, `openai/` knows Chat Completions and the IR — and `translate/` is the only module that holds both ends.
+
+A shortcut is a defect even when it is short: no reading a field out of one format to write it into the other, no second parser for a shape a codec already decodes. When a new thing has to cross, it gets a place in `ir/` first.
+
 ## The shape
 
 ```
