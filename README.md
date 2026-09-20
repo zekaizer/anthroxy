@@ -13,7 +13,7 @@ Claude Code ──► anthroxy ──┬──► vLLM              (Qwen, …)
 
 What the router does:
 
-- **Model discovery.** `GET /v1/models` lists the configured models so Claude Code can offer them in `/model` (needs `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`).
+- **Model discovery.** `GET /v1/models` lists the configured models so Claude Code can offer them in `/model` (needs `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and only ids containing `claude` or `anthropic` reach the picker; see Notes).
 - **Routing by `model`.** Each request goes to the backend that serves the named model; the model name is rewritten to what that backend calls it. Aliases let Claude Code's built-in model ids land on your backends too.
 - **Per-backend credentials.** None, a static key, an environment variable, or a shell command that is re-run periodically (for tokens another program keeps fresh). Claude Code itself only ever sees one static router token.
 - **Verbatim passthrough.** Unknown request fields, beta headers and response bodies are relayed as-is; streaming responses are forwarded chunk by chunk, with a `ping` event every 15 seconds the backend stays quiet so a slow first token does not make Claude Code give up and retry (ADR-0014).
@@ -80,6 +80,7 @@ Then, in the shell that runs Claude Code:
 export ANTHROPIC_BASE_URL='http://localhost:8787'
 export ANTHROPIC_AUTH_TOKEN='<token from the config>'
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1'
+export ENABLE_TOOL_SEARCH='auto'          # keep MCP tools out of the context (see Notes)
 export ANTHROPIC_MODEL='gemma-local'      # the model Claude Code starts with
 claude
 ```
@@ -168,6 +169,8 @@ Notes:
 - Backends are reached at the URL the file names: `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` in the environment are ignored, so an ambient proxy cannot take a backend request, and the credential on it, somewhere the configuration never named. A backend that answers only through a proxy names it as `proxy = "http://proxy.corp:3128"` (`https://` as well; `http://user:${PROXY_PASSWORD}@proxy.corp:3128` sends basic auth, and the userinfo is redacted wherever the configuration is shown). The proxy belongs to the backend's origin, so backends sharing a scheme, host and port must name the same proxy or none. An `https` backend is tunnelled with `CONNECT` and still verified end to end; a TLS-intercepting proxy needs its CA, above. See ADR-0012.
 - Edits take effect on `SIGHUP` (`kill -HUP <pid>`, `anthroxy service reload`, or the console's Reload button): models, backends, credentials, token, body capture and upstream settings swap atomically; in-flight requests finish on the old configuration. `server.listen` and the log level and format need a restart instead, and a reload that changes one of them says so. A file that fails to load leaves the running configuration untouched and logs the error.
 - Claude Code assumes a 200k context window for a model it does not know, so it will not compact a session in time for a smaller local model and the backend answers with a context-size error. Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in Claude Code's environment to the real window (for example `32768`, or `500000` for a larger one). It applies only to models whose name is not a Claude model id, so Anthropic models keep their own window; every unknown model in the session shares the one value, so set it to the smallest window among them. The `context_window` in `GET /v1/models` does not change what Claude Code assumes.
+- Claude Code loads MCP tool definitions on demand only when it believes the endpoint forwards `tool_reference` blocks, and it does not believe that of a `ANTHROPIC_BASE_URL` it does not recognise: every MCP tool definition is sent up front instead, which on a large MCP set costs more context than the conversation. Set `ENABLE_TOOL_SEARCH` in Claude Code's environment to `auto` (defer once the definitions grow large), `auto:N` (defer past N percent of the window) or `true` (always defer). The router forwards the blocks either way.
+- Only model ids containing `claude` or `anthropic` (case-insensitive) survive Claude Code's discovery filter and reach the `/model` picker. A model named for what the backend calls it, such as `grok-4.6` or `gemma-local`, is discovered and dropped silently. Give it an id or `aliases` entry that carries one of those words, or name it in `ANTHROPIC_MODEL` and `ANTHROPIC_CUSTOM_MODEL_OPTION`, which bypass discovery. Routing itself is unaffected: an id the picker never shows still serves requests that name it.
 - Claude Code sends background requests (session titles, small tasks) naming its own default models. Give one of your models those names as `aliases`, or set `routing.default_model`, so they are served instead of failing.
 
 ## Commands
