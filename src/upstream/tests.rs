@@ -58,6 +58,7 @@ fn client_headers() -> HeaderMap {
         ("content-length", "123"),
         ("connection", "keep-alive"),
         ("transfer-encoding", "chunked"),
+        ("proxy-authorization", "Basic cHJveHk6c2VjcmV0"),
         ("accept-encoding", "gzip"),
         ("x-api-key", "client-token"),
         ("authorization", "Bearer client-token"),
@@ -86,6 +87,7 @@ fn upstream_headers_drop_hop_by_hop_and_client_auth() {
         "content-length",
         "connection",
         "transfer-encoding",
+        "proxy-authorization",
         "accept-encoding",
         "x-api-key",
         "authorization",
@@ -197,6 +199,7 @@ fn every_header_the_backend_does_not_see_says_why() {
     assert_eq!(reason("host").1, DropReason::Framing);
     assert_eq!(reason("content-length").1, DropReason::Framing);
     assert_eq!(reason("connection").1, DropReason::Framing);
+    assert_eq!(reason("proxy-authorization").1, DropReason::Framing);
     assert_eq!(reason("accept-encoding").1, DropReason::Uncompressed);
     assert_eq!(reason("anthropic-version").1, DropReason::BackendKind);
     assert_eq!(reason("anthropic-beta").1, DropReason::BackendKind);
@@ -290,6 +293,7 @@ fn response_headers_drop_framing_only() {
     up.insert("content-length", HeaderValue::from_static("10"));
     up.insert("transfer-encoding", HeaderValue::from_static("chunked"));
     up.insert("connection", HeaderValue::from_static("close"));
+    up.insert("proxy-authenticate", HeaderValue::from_static("Basic"));
     up.insert("request-id", HeaderValue::from_static("req_up"));
     up.insert(
         "anthropic-ratelimit-requests-remaining",
@@ -390,4 +394,65 @@ fn ca_certificate_must_be_a_readable_pem_file() {
     assert!(error.to_string().contains("empty.pem"), "{error}");
 
     assert!(http_client(&UpstreamConfig::default(), &Default::default()).is_ok());
+}
+
+#[test]
+fn the_backoff_has_a_ceiling() {
+    let policy = RetryPolicy {
+        max_retries: 20,
+        backoff: Duration::from_secs(1),
+        retry_on_status: vec![503],
+    };
+    // Doubling unchecked, the tenth failure would wait over eight minutes and
+    // the twentieth six days: a request nobody is still waiting for.
+    for failure in 1..=policy.max_retries {
+        let Decision::Retry(delay) = policy.on_status(failure, StatusCode::SERVICE_UNAVAILABLE)
+        else {
+            panic!("failure {failure} gave up");
+        };
+        assert!(delay <= MAX_BACKOFF, "failure {failure} waits {delay:?}");
+    }
+    assert_eq!(
+        policy.on_status(4, StatusCode::SERVICE_UNAVAILABLE),
+        Decision::Retry(Duration::from_secs(8)),
+        "below the ceiling it still doubles"
+    );
+}
+
+#[test]
+fn the_logged_request_target_keeps_the_url_userinfo_out() {
+    let backend = Backend::from_config(
+        "gw",
+        &BackendConfig {
+            kind: BackendKind::Anthropic,
+            url: "https://gw-user:url-secret@gw.corp".into(),
+            models_path: BackendConfig::default_models_path(),
+            live_models: false,
+            credential: CredentialConfig::None,
+            headers: Default::default(),
+            anthropic_beta: Vec::new(),
+            drop_headers: Vec::new(),
+            drop_fields: Vec::new(),
+            proxy: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        super::client::shown_target(&backend, "/v1/messages"),
+        "https://<redacted>@gw.corp/v1/messages"
+    );
+}
+
+#[test]
+fn a_forced_host_is_reported_as_the_backend_s_not_the_url_s() {
+    let backend = backend(&[], &[("host", "gateway.example.corp")]);
+    let headers = upstream_headers(&client_headers(), &backend);
+    let sent = sent_headers(&backend, &headers, None, 0, SecretView::Masked);
+    let host = sent.iter().find(|h| h.name == "host").unwrap();
+    // What went on the wire: the forced value, which the HTTP client keeps.
+    assert_eq!(
+        (host.value.as_str(), host.source),
+        ("gate…corp", HeaderSource::Backend)
+    );
+    assert_eq!(sent.iter().filter(|h| h.name == "host").count(), 1);
 }

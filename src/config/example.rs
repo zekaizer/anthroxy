@@ -59,6 +59,7 @@ stream_idle_timeout = "60s"
 # Extra attempts after a connection failure (never after a timeout, never once
 # the response has started).
 retries = 2
+# Doubled on each further attempt, up to 30s.
 retry_backoff = "200ms"
 # Upstream status codes retried like a connection failure, e.g. [502, 503].
 retry_on_status = []

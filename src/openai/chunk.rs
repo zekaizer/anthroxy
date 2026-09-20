@@ -10,6 +10,14 @@ use super::common::{
 };
 use crate::ir::{Event, Failure};
 
+/// Arguments held for tool calls still waiting for a function name. The SSE
+/// parser caps one frame; nothing else caps what a stream accumulates across
+/// them. Well above any call a backend names in its first delta, as this
+/// wire format has one do.
+pub const MAX_PENDING_ARGUMENTS: usize = 8 * 1024 * 1024;
+/// Tool calls one stream may open.
+pub const MAX_CALLS: usize = 256;
+
 /// Decodes one `data:` payload at a time, carrying the tool-call state a
 /// stream needs: which calls have started, and the deltas of a call whose
 /// name has not arrived yet.
@@ -19,6 +27,10 @@ pub struct ChunkDecoder {
     calls: BTreeMap<u32, Call>,
     /// The call an unnumbered delta without `id` or name continues.
     last: Option<u32>,
+    /// Arguments held across every pending call.
+    pending: usize,
+    /// A limit was passed; the stream's tool calls are no longer followed.
+    stopped: bool,
 }
 
 #[derive(Debug)]
@@ -92,6 +104,9 @@ impl ChunkDecoder {
     }
 
     fn tool_call_delta(&mut self, call: &Value, events: &mut Vec<Event>) {
+        if self.stopped {
+            return;
+        }
         let call = tool_call(call);
         let index = match call.index {
             Some(index) => index,
@@ -103,6 +118,13 @@ impl ChunkDecoder {
             },
         };
         self.last = Some(index);
+        if !self.calls.contains_key(&index) && self.calls.len() == MAX_CALLS {
+            self.stop_following(
+                format!("the stream opened more than {MAX_CALLS} tool calls"),
+                events,
+            );
+            return;
+        }
         let entry = self.calls.entry(index).or_insert(Call::Pending {
             id: None,
             arguments: String::new(),
@@ -120,11 +142,30 @@ impl ChunkDecoder {
             id.get_or_insert_with(|| new_id.to_owned());
         }
         arguments.push_str(call.arguments);
+        self.pending += call.arguments.len();
         let Some(name) = call.name else {
+            if self.pending > MAX_PENDING_ARGUMENTS {
+                self.stop_following(
+                    format!(
+                        "tool call {index} held more than {MAX_PENDING_ARGUMENTS} bytes of arguments without a function name"
+                    ),
+                    events,
+                );
+            }
             return;
         };
         let (id, arguments) = (id.take(), std::mem::take(arguments));
+        self.pending -= arguments.len();
         *entry = Call::Started;
         push_tool_call(index, id, name, arguments, events);
+    }
+
+    /// Stops following tool calls and reports why: what is held is released,
+    /// and the error closes the stream for the client.
+    fn stop_following(&mut self, why: String, events: &mut Vec<Event>) {
+        self.stopped = true;
+        self.calls.clear();
+        self.pending = 0;
+        events.push(Event::Error(Failure::upstream(why)));
     }
 }

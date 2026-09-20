@@ -11,7 +11,7 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub use chunk::ChunkDecoder;
+pub use chunk::{ChunkDecoder, MAX_CALLS, MAX_PENDING_ARGUMENTS};
 pub use common::ParseError;
 pub use error::decode as decode_error;
 pub use models::decode as decode_models;

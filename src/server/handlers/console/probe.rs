@@ -99,7 +99,7 @@ pub async fn probe(
         reports.push(json!({
             "name": backend.name,
             "kind": backend.kind,
-            "url": backend.url,
+            "url": backend.shown_url(),
             "proxy": snapshot
                 .config
                 .backends

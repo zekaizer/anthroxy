@@ -21,5 +21,5 @@ pub use headers::{
     X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, dropped_headers, header_value, is_event_stream,
     response_headers, sent_headers, upstream_headers,
 };
-pub use retry::{Decision, RetryPolicy, is_connection_failure};
+pub use retry::{Decision, MAX_BACKOFF, RetryPolicy, is_connection_failure};
 pub use timeout::{BodyClock, BodyError, TimedBody, TimeoutClock, Timeouts};

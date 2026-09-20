@@ -26,7 +26,7 @@ pub fn masked(config: &Config) -> Value {
                 name.clone(),
                 json!({
                     "kind": backend.kind,
-                    "url": backend.url,
+                    "url": redacted_url(&backend.url),
                     "models_path": backend.models_path,
                     "live_models": backend.live_models,
                     "credential": credential(&backend.credential),
@@ -235,7 +235,7 @@ backend = "a"
 token = "t"
 
 [backends.a]
-url = "https://gw.corp"
+url = "https://gw-user:url-secret@gw.corp"
 proxy = "http://alice:proxy-secret@proxy.corp:3128"
 
 [backends.b]
@@ -256,9 +256,14 @@ backend = "a"
         );
         assert_eq!(view["backends"]["b"]["proxy"], "http://proxy.corp:3128");
         assert_eq!(view["backends"]["c"]["proxy"], Value::Null);
+        assert_eq!(view["backends"]["a"]["url"], "https://<redacted>@gw.corp");
         let shown = view.to_string();
         assert!(
             !shown.contains("alice") && !shown.contains("proxy-secret"),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("gw-user") && !shown.contains("url-secret"),
             "{shown}"
         );
 

@@ -283,31 +283,35 @@ fn header_safe(text: &str) -> bool {
 /// The request path is appended to this URL unchanged, so it may carry a path
 /// prefix but nothing that has to stay last.
 fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
+    // Userinfo here may be a password, and a rejected URL is quoted back in
+    // a log line and to the console.
+    let shown = redacted_url(url);
     match url.parse::<http::Uri>() {
         Ok(uri) if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.host().is_none() => {
             problems.push(format!(
-                "{field}: `{url}` must be an http:// or https:// origin"
+                "{field}: `{shown}` must be an http:// or https:// origin"
             ));
         }
         Ok(uri) if uri.query().is_some() || url.contains('#') => {
             problems.push(format!(
-                "{field}: `{url}` must carry no query or fragment; the request path is appended to it"
+                "{field}: `{shown}` must carry no query or fragment; the request path is appended to it"
             ));
         }
         Ok(_) => {}
-        Err(e) => problems.push(format!("{field}: `{url}` is not a valid URL ({e})")),
+        Err(e) => problems.push(format!("{field}: `{shown}` is not a valid URL ({e})")),
     }
 }
 
 /// Headers the router itself never forwards, so naming one to drop says
 /// nothing.
-const ALREADY_DROPPED: [&str; 6] = [
+const ALREADY_DROPPED: [&str; 7] = [
     "host",
     "content-length",
     "authorization",
     "x-api-key",
     "accept-encoding",
     "connection",
+    "proxy-authorization",
 ];
 
 /// Headers the backend needs to read the request the router sends it.

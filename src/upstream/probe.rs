@@ -288,7 +288,7 @@ mod tests {
                 models_path: BackendConfig::default_models_path(),
                 live_models: false,
                 credential: CredentialConfig::Static {
-                    value: "key-1234567890".into(),
+                    value: "key-123456789012".into(),
                     header: CredentialHeader::bearer(),
                 },
                 headers: [
@@ -318,10 +318,10 @@ mod tests {
             [
                 ("accept", "application/json", HeaderSource::Default),
                 ("anthropic-beta", "oauth-2025-04-20", HeaderSource::Backend),
-                ("anthropic-version", "2023…1-01", HeaderSource::Backend),
+                ("anthropic-version", "**********", HeaderSource::Backend),
                 (
                     "authorization",
-                    "Bearer key-…7890",
+                    "Bearer key-…9012",
                     HeaderSource::Credential
                 ),
                 ("host", authority.as_str(), HeaderSource::Transport),
@@ -341,12 +341,12 @@ mod tests {
     async fn credential_line_is_the_source_plus_the_masked_value() {
         let mut with_key = backend("a", None).await;
         with_key.credential = crate::credential::build(&CredentialConfig::Static {
-            value: "key-1234567890".into(),
+            value: "key-123456789012".into(),
             header: CredentialHeader::x_api_key(),
         })
         .unwrap();
         let probe = probe(&client(), &with_key).await;
-        assert_eq!(probe.credential.unwrap(), "static (key-…7890)");
+        assert_eq!(probe.credential.unwrap(), "static (key-…9012)");
         assert!(matches!(
             probe.models,
             Some(ModelsProbe::Answered { status: 200, .. })

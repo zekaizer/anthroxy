@@ -218,6 +218,8 @@ impl UpstreamClient {
     ) -> Result<UpstreamResponse, UpstreamError> {
         let backend = request.backend;
         let url = format!("{}{}", backend.url, request.path_and_query);
+        // Logged instead of `url`, whose userinfo reqwest sends as basic auth.
+        let shown = shown_target(backend, request.path_and_query);
         let started = Instant::now();
         let mut attempt: u32 = 0;
         // Of the retry budget; the credential re-send below is not one of them.
@@ -236,7 +238,7 @@ impl UpstreamClient {
                 let (name, value) = credential.header_pair();
                 headers.insert(name, value);
             }
-            tracing::debug!(attempt, %url, "sending upstream request");
+            tracing::debug!(attempt, url = %shown, "sending upstream request");
             let attempt_start = tokio::time::Instant::now();
             let header_deadline = attempt_start
                 + if request.stream {
@@ -315,6 +317,11 @@ impl UpstreamClient {
             }
         }
     }
+}
+
+/// The request target as a log line may carry it.
+pub(super) fn shown_target(backend: &Backend, path_and_query: &str) -> String {
+    format!("{}{path_and_query}", backend.shown_url())
 }
 
 impl UpstreamResponse {

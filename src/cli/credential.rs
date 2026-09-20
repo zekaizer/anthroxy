@@ -411,13 +411,17 @@ mod tests {
 
     #[test]
     fn a_successful_run_masks_the_credential_and_says_when_it_is_re_run() {
-        let attempt = ran("shell", Ok(run("exit 0", "  tok-abcdefgh \n", "")), text());
+        let attempt = ran(
+            "shell",
+            Ok(run("exit 0", "  tok-abcdefghijkl \n", "")),
+            text(),
+        );
         assert!(attempt.ok);
         assert_eq!(attempt.headline, "exit 0 in 12 ms");
         assert_eq!(
             attempt.details,
             [
-                ("credential", "tok-…efgh (12 chars)".to_owned()),
+                ("credential", "tok-…ijkl (16 chars)".to_owned()),
                 ("re-run in", "5m".to_owned()),
             ]
         );
@@ -429,7 +433,7 @@ mod tests {
             "shell",
             Ok(run(
                 "exit 0",
-                "tok-abcdefgh",
+                "tok-abcdefghijkl",
                 "keychain: using default store",
             )),
             text(),
@@ -447,10 +451,14 @@ mod tests {
             reveal: true,
             ..text()
         };
-        let attempt = ran("shell", Ok(run("exit 0", "tok-abcdefgh\n", "")), reading);
+        let attempt = ran(
+            "shell",
+            Ok(run("exit 0", "tok-abcdefghijkl\n", "")),
+            reading,
+        );
         assert_eq!(
             attempt.details[0],
-            ("credential", "tok-abcdefgh".to_owned())
+            ("credential", "tok-abcdefghijkl".to_owned())
         );
     }
 
@@ -458,7 +466,7 @@ mod tests {
     fn json_output_reports_the_expiry_it_carries() {
         let expires_at = SystemTime::now() + Duration::from_secs(3600);
         let stdout = format!(
-            r#"{{"token": "tok-abcdefgh", "expires_at": "{}"}}"#,
+            r#"{{"token": "tok-abcdefghijkl", "expires_at": "{}"}}"#,
             humantime::format_rfc3339_seconds(expires_at)
         );
         let reading = Reading {
@@ -491,10 +499,10 @@ mod tests {
 
     #[test]
     fn an_env_credential_reports_whether_the_variable_is_set() {
-        let set = variable("service", Some("key-1234567890".to_owned()), false);
+        let set = variable("service", Some("key-123456789012".to_owned()), false);
         assert!(set.ok);
         assert_eq!(set.headline, "set");
-        assert_eq!(set.details, [("value", "key-…7890 (14 chars)".to_owned())]);
+        assert_eq!(set.details, [("value", "key-…9012 (16 chars)".to_owned())]);
 
         let unset = variable("service", None, false);
         assert!(!unset.ok);
@@ -505,7 +513,7 @@ mod tests {
     #[test]
     fn render_puts_every_environment_under_the_backend_with_its_details() {
         let attempts = [
-            ran("shell", Ok(run("exit 0", "tok-abcdefgh", "")), text()),
+            ran("shell", Ok(run("exit 0", "tok-abcdefghijkl", "")), text()),
             ran(
                 "service",
                 Ok(run("exit 127", "", "sh: 1: jq: not found\nsecond line")),
@@ -523,7 +531,7 @@ mod tests {
             "\
 claude  command `x | jq -r .t`
   shell    ✓ exit 0 in 12 ms
-      credential  tok-…efgh (12 chars)
+      credential  tok-…ijkl (16 chars)
       re-run in   5m
   service  ✗ exit 127 in 12 ms
       stderr      sh: 1: jq: not found

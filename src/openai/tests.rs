@@ -1043,3 +1043,69 @@ fn model_lists_give_up_their_context_window_whatever_the_server_calls_it() {
         ]
     );
 }
+
+#[test]
+fn a_tool_call_waiting_for_its_name_cannot_grow_without_bound() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let piece = "x".repeat(64 * 1024);
+    let mut reported = None;
+    for _ in 0..(MAX_PENDING_ARGUMENTS / piece.len()) + 2 {
+        let events = d
+            .decode(&chunk(
+                json!({"tool_calls": [{"index": 0, "function": {"arguments": piece}}]}),
+                None,
+            ))
+            .unwrap();
+        if let Some(Event::Error(failure)) = events.first() {
+            reported = Some(failure.message.clone());
+            break;
+        }
+    }
+    let reported = reported.expect("a call that never names itself is cut off");
+    assert!(reported.contains("tool call"), "{reported}");
+    // Nothing is held for it afterwards.
+    assert_eq!(d.finish(), vec![]);
+}
+
+#[test]
+fn a_stream_cannot_open_unboundedly_many_tool_calls() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let mut reported = None;
+    for index in 0..MAX_CALLS + 2 {
+        let events = d
+            .decode(&chunk(
+                json!({"tool_calls": [{"index": index, "id": format!("call_{index}"), "function": {"name": "read", "arguments": "{}"}}]}),
+                None,
+            ))
+            .unwrap();
+        if let Some(Event::Error(failure)) = events.first() {
+            reported = Some((index, failure.message.clone()));
+            break;
+        }
+    }
+    let (index, message) = reported.expect("a stream of tool calls is cut off");
+    assert_eq!(index, MAX_CALLS, "{message}");
+    assert!(message.contains("tool call"), "{message}");
+}
+
+#[test]
+fn an_index_too_large_for_the_ir_starts_its_own_call() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    d.decode(&chunk(json!({"tool_calls": [{"index": 0, "id": "call_a", "function": {"name": "read", "arguments": "{}"}}]}), None))
+        .unwrap();
+    // Truncated to `u32` this index is 0, which would fold the call into the
+    // one already started and lose its name.
+    let events = d
+        .decode(&chunk(json!({"tool_calls": [{"index": 4_294_967_296u64, "id": "call_b", "function": {"name": "bash", "arguments": "{}"}}]}), None))
+        .unwrap();
+    assert!(
+        matches!(&events[0], Event::ToolCallStart { index: 1, name, .. } if name == "bash"),
+        "{events:?}"
+    );
+}

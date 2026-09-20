@@ -23,7 +23,7 @@ pub async fn status(
             json!({
                 "name": backend.name,
                 "kind": backend.kind,
-                "url": backend.url,
+                "url": backend.shown_url(),
                 "credential": backend.credential.status(),
                 "drop_fields": backend.drop_fields,
                 "drop_headers": snapshot

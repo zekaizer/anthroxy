@@ -76,7 +76,12 @@ pub(super) struct ToolCall<'a> {
 pub(super) fn tool_call(call: &Value) -> ToolCall<'_> {
     let function = call.get("function");
     ToolCall {
-        index: call.get("index").and_then(Value::as_u64).map(|i| i as u32),
+        // An index the IR cannot hold is no index: the call is numbered
+        // after the ones before it rather than folded into one of them.
+        index: call
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| u32::try_from(i).ok()),
         id: call.get("id").and_then(Value::as_str),
         name: function.and_then(|f| f.get("name")).and_then(Value::as_str),
         arguments: function

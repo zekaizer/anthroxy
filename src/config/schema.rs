@@ -149,7 +149,8 @@ pub struct UpstreamConfig {
     pub stream_idle_timeout: Duration,
     /// Additional attempts after a connection failure.
     pub retries: u32,
-    /// Delay before the first retry; doubles on each further attempt.
+    /// Delay before the first retry; doubles on each further attempt, up to
+    /// [`crate::upstream::MAX_BACKOFF`].
     #[serde(with = "humantime_serde")]
     pub retry_backoff: Duration,
     /// Upstream status codes that are retried like a connection failure.

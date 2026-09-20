@@ -85,7 +85,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
                 "  {}  {}  {}{}",
                 style.dim("-"),
                 style.bold(&backend.name),
-                style.dim(&backend.url),
+                style.dim(&backend.shown_url()),
                 kind_label(backend, style)
             );
             println!("       credential: {}", backend.credential.describe());
@@ -210,7 +210,7 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
     println!(
         "  {mark}  {}  {}{}",
         style.bold(&backend.name),
-        style.dim(&backend.url),
+        style.dim(&backend.shown_url()),
         kind_label(backend, style)
     );
     println!("       {credential_line}");
