@@ -25,6 +25,8 @@ const state = {
   arg: null,
   timers: [],
   statsRange: "7d",
+  /// Models the statistics draw against one another, in the order picked.
+  statsCompared: [],
   envFormat: "sh",
   requestsFilter: "",
   errorsOnly: false,
@@ -1187,11 +1189,20 @@ function statsContent(data) {
         : null,
     }),
     card("Output speed", fmt.rate(total.output_tokens_per_second)));
-  const modelRows = report.models.map((row) => statsRow(row, h("td", null, h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))));
+  const compare = h("div");
+  const boxes = [];
+  const drawCompare = () => {
+    syncCompareBoxes(report, boxes);
+    rerender(compare, comparePanel(report, drawCompare));
+  };
+  const modelRows = report.models.map((row) =>
+    statsRow(row, h("td", null, compareBox(report, row, boxes, drawCompare),
+      h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))));
   const dayRows = report.days.map((row) => statsRow(row, h("td", { class: "nowrap mono" }, row.key)));
   const headers = (first) => [first, ["Requests", "num"], ["Errors", "num"], ["Retried", "num"], ["Left", "num"],
     ["First byte p50 / p95", "num"], ["Duration p50 / p95", "num"], ["Input", "num"], ["Output", "num"],
     ["Cache read", "num"], ["Cache write", "num"], ["Cache hit", "num"], ["Speed", "num"]];
+  drawCompare();
   return [
     cards,
     report.series.length
@@ -1199,6 +1210,7 @@ function statsContent(data) {
       : null,
     h("h3", null, "By model"),
     table(headers("Model"), modelRows, { empty: "No request in this range." }),
+    compare,
     report.fallbacks.length
       ? [h("h3", null, "Names no route serves"),
         h("p", { class: "note" }, "Claude Code asked for these names. The default model served them, or nothing did and the request failed with 404. Give a model the name as an alias to serve it on purpose."),
@@ -1218,6 +1230,103 @@ function statsContent(data) {
       h("code", null, "--enable-cache-report"), " off, so a silent backend is not one that never hit. Files: ",
       h("code", null, data.dir), "."),
   ];
+}
+
+/// How many models the charts can hold apart at once: the series palette was
+/// validated as a set of three, and a fourth line would be a colour nobody
+/// checked against the rest.
+const COMPARED_MAX = 3;
+/// Requests no route served are a group, not a model: their latency is a
+/// 404's, so they are not offered for comparison.
+const UNROUTED = "(unrouted)";
+
+/// Models picked for the comparison, in the order picked, dropping any the
+/// range no longer holds.
+function compared(report) {
+  const has = new Set(report.models.map((row) => row.key));
+  state.statsCompared = state.statsCompared.filter((key) => has.has(key));
+  return state.statsCompared;
+}
+
+/// The box that puts a model into the comparison. Absent for `(unrouted)`.
+/// Its state is set by [`syncCompareBoxes`], not here: picking one model
+/// changes what every other box may do, and the table around them is drawn
+/// once per reading.
+function compareBox(report, row, boxes, redraw) {
+  if (row.key === UNROUTED) return null;
+  const box = h("input", {
+    type: "checkbox",
+    class: "compare-box",
+    "aria-label": `Compare ${row.key}`,
+    onchange: () => {
+      const picked = compared(report);
+      state.statsCompared = box.checked
+        ? [...picked.filter((key) => key !== row.key), row.key]
+        : picked.filter((key) => key !== row.key);
+      redraw();
+    },
+  });
+  boxes.push({ key: row.key, box });
+  return box;
+}
+
+/// What each box may do, given what is already picked.
+function syncCompareBoxes(report, boxes) {
+  const picked = compared(report);
+  for (const { key, box } of boxes) {
+    box.checked = picked.includes(key);
+    box.disabled = !box.checked && picked.length >= COMPARED_MAX;
+    box.title = box.disabled
+      ? `Comparing ${COMPARED_MAX} models at a time; clear one first`
+      : `Compare ${key}`;
+  }
+}
+
+/// Measures that are one number a bucket, which is what can be drawn for
+/// several models on one axis. A composition, such as the token split, is
+/// not among them: stacked bars for three models read as nine. Every measure
+/// here is a line, bars included: stacking three models would add them up,
+/// which answers a question nobody asked of a comparison.
+const COMPARE_CHARTS = [
+  { title: "Requests", kind: "lines", integer: true, axis: "count", format: "int", of: (row) => row.requests },
+  { title: "Error rate", kind: "lines", axis: "pct", format: "pct", of: (row) => (row.requests ? row.errors / row.requests : null) },
+  { title: "Time to first byte", subtitle: "p50", kind: "lines", axis: "ms", format: "ms", of: (row) => row.ttfb_p50_ms },
+  { title: "Output speed", subtitle: "tokens per second of streamed answers", kind: "lines", axis: "rate", format: "rate", of: (row) => row.output_tokens_per_second },
+];
+
+/// The models picked, drawn against one another. Colour means the model in
+/// here and nowhere else on the page, so the block says which models it
+/// holds and closes around them; the dashes carry the same apart for a
+/// reader the colours do not.
+function comparePanel(report, redraw) {
+  const picked = compared(report);
+  if (!picked.length) return null;
+  const keys = report.series.map((row) => row.key);
+  const series = picked.map((key, i) => ({
+    label: key,
+    cls: `s${i + 1}`,
+    dash: i,
+    values: (report.model_series[key] || []).map((row) => row),
+  }));
+  const clear = h("button", { type: "button", class: "small" ,
+    onclick: () => { state.statsCompared = []; redraw(); } }, "Clear");
+  return panel(picked.length > 1 ? "Models compared" : `Model ${picked[0]}`, clear,
+    h("div", { class: "charts" }, COMPARE_CHARTS.map((measure) => chart({
+      title: measure.title,
+      subtitle: measure.subtitle,
+      kind: measure.kind,
+      integer: measure.integer,
+      axis: axisFormat[measure.axis],
+      format: fmt[measure.format],
+      keys,
+      bucket: report.bucket,
+      series: series.map((one) => ({
+        label: one.label,
+        cls: one.cls,
+        dash: one.dash,
+        values: one.values.map(measure.of),
+      })),
+    }))));
 }
 
 function statsRow(row, first) {
@@ -1269,6 +1378,7 @@ const axisFormat = {
   compact: (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(v >= 1e4 ? 0 : 1)}K` : String(Math.round(v))),
   ms: (v) => (v >= 1000 ? `${(v / 1000).toFixed(v % 1000 ? 1 : 0)} s` : `${Math.round(v)} ms`),
   rate: (v) => (v < 10 && v % 1 ? v.toFixed(1) : String(Math.round(v))),
+  pct: (v) => `${(v * 100).toFixed(v < 0.1 ? 1 : 0)}%`,
 };
 
 /// Four ticks or so on clean numbers from zero.
@@ -1466,7 +1576,7 @@ function drawChart(plot, tip, spec, width) {
           marks.append(svg("circle", { class: `dot fill-${series.cls}`, cx: cx(i), cy: y(v), r: 4 }));
         }
       });
-      if (d) marks.prepend(svg("path", { class: `line stroke-${series.cls}`, d }));
+      if (d) marks.prepend(svg("path", { class: `line stroke-${series.cls}${series.dash ? ` dash-${series.dash}` : ""}`, d }));
     }
   }
 

@@ -495,6 +495,7 @@ dl.facts dd { margin: 0; overflow-wrap: anywhere; }
 figure.chart { position: relative; margin: 0; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-2) var(--space-2) var(--space-1); }
 figure.chart figcaption { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); font-weight: 600; font-size: var(--text-sm); margin-bottom: var(--space-1); }
 .chart .legend { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-weight: 400; font-size: var(--text-xs); color: var(--muted); }
+.compare-box { margin-right: var(--space-2); vertical-align: -2px; }
 .legend-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: var(--space-1); vertical-align: -1px; }
 .legend-key.line { width: 14px; height: 2px; border-radius: 1px; vertical-align: 3px; }
 .chart .plot { width: 100%; }
@@ -511,6 +512,10 @@ figure.chart figcaption { display: flex; flex-wrap: wrap; align-items: baseline;
 .chart .fill-s2 { fill: var(--series-2); }
 .chart .fill-s3 { fill: var(--series-3); }
 .chart .fill-crit { fill: var(--critical); }
+/* A second and third line are told apart by their dashes as well as their
+   colour, for the reader the colours do not reach. */
+.chart .line.dash-1 { stroke-dasharray: 7 4; }
+.chart .line.dash-2 { stroke-dasharray: 2 4; }
 .chart .stroke-s1 { stroke: var(--series-1); }
 .chart .stroke-s2 { stroke: var(--series-2); }
 .chart .stroke-s3 { stroke: var(--series-3); }
