@@ -214,18 +214,78 @@ function sessionHue(id) {
   return best;
 }
 
-/// Session id as a chip whose colour is the session's, not the row's state.
-/// Hue is a class, not an inline style: the page CSP forbids the latter.
-function sessionChip(id, short, extra) {
-  const shown = short && id.length > 16 ? `${id.slice(0, 16)}…` : id;
-  const click = extra && extra.onclick;
-  return h(click ? "button" : "span", {
-    type: click ? "button" : undefined,
-    class: `badge session-chip hue-${sessionHue(id)}`,
-    title: id,
-    ...(extra || {}),
-  }, shown);
+const sessionNumbers = new Map();
+
+/// Sessions counted in the order the console first draws one. A colour cannot
+/// be said out loud and the palette wraps around; the number is what tells
+/// two sessions apart once their hues are close or the same.
+function sessionNumber(id) {
+  const had = sessionNumbers.get(id);
+  if (had !== undefined) return had;
+  const next = sessionNumbers.size + 1;
+  sessionNumbers.set(id, next);
+  return next;
 }
+
+/// The first cell of a row carries the session as a coloured rail down its
+/// left edge. `previous` is the session of the row above, so a run of rows in
+/// one session draws as one unbroken bar, notched where the run starts. Hue is
+/// a class, not an inline style: the page CSP forbids the latter.
+function railCell(session, previous) {
+  if (!session) return { class: "nowrap rail" };
+  const start = session === previous ? "" : " rail-start";
+  return { class: `nowrap rail hue-${sessionHue(session)}${start}`, "data-session": session };
+}
+
+/// The session's number, among the small print under the row's time. The rail
+/// beside it is what the eye follows; this is what says which session it is
+/// once two runs share a hue. Clicking narrows the list to that session.
+function sessionMark(session, filterBy) {
+  if (!session) return null;
+  return h("button", {
+    type: "button",
+    class: "link session-mark",
+    title: `Show only session ${session}`,
+    "aria-label": `Show only session ${session}`,
+    onclick: (event) => { event.stopPropagation(); filterBy(session); },
+  }, `s${sessionNumber(session)}`);
+}
+
+/// Session id in full, for a detail panel: the one place it is spelled out,
+/// carrying the colour and number the list showed so it reads as the same
+/// session. `copy` is defined below and runs only on a click.
+function sessionFact(id) {
+  const button = h("button", { class: "small copy", type: "button" }, "Copy");
+  button.addEventListener("click", () => copy(id, button));
+  return h("div", { class: "session-fact" },
+    h("span", { class: `badge session-chip hue-${sessionHue(id)}`, title: id },
+      h("span", { class: "session-number" }, String(sessionNumber(id))), id),
+    button);
+}
+
+let litSession = null;
+
+/// Hovering any row of a session lifts that session's rail wherever it
+/// appears, which is how two sessions the palette gave nearby hues stay
+/// apart. One listener serves every table.
+function lightSession(session) {
+  // The lists redraw on a poll, which takes the class with the old rows while
+  // the pointer has not moved, so the same session still has to be re-lit.
+  if (session === litSession && (!session || document.querySelector("td.rail.lit"))) return;
+  litSession = session;
+  for (const cell of document.querySelectorAll("td.rail.lit")) cell.classList.remove("lit");
+  if (!session) return;
+  for (const cell of document.querySelectorAll(`td.rail[data-session="${CSS.escape(session)}"]`)) {
+    cell.classList.add("lit");
+  }
+}
+
+document.addEventListener("mouseover", (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const row = target ? target.closest("tr") : null;
+  const cell = row ? row.querySelector("td.rail[data-session]") : null;
+  lightSession(cell ? cell.dataset.session : null);
+});
 
 const HEALTH_KIND = { ok: "ok", attention: "warn", trouble: "err" };
 
@@ -824,6 +884,11 @@ function aliasesSnippet(status) {
 
 function requests(view, selected) {
   const filter = h("input", { type: "text", placeholder: "Filter by model, backend, id, session or status", value: state.requestsFilter });
+  const narrowTo = (session) => {
+    filter.value = session;
+    state.requestsFilter = session;
+    draw();
+  };
   const errorsOnly = h("input", { type: "checkbox" });
   errorsOnly.checked = state.errorsOnly;
   const inFlight = h("div", { class: "strip" });
@@ -849,11 +914,12 @@ function requests(view, selected) {
     // row is a third of the first screen spent saying so.
     rerender(inFlight, running.length
       ? table(
-        ["Started", "Session", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
-        running.map((v) =>
-          openRow({ class: "clickable", "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
-            h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub mono" }, v.id)),
-            h("td", null, sessionNote(v) || "–"),
+        ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
+        running.map((v, i) =>
+          openRow({ class: "clickable", "aria-label": rowLabel(v) }, () => go("requests", v.id),
+            h("td", railCell(v.session, running[i - 1] && running[i - 1].session),
+              fmt.clock(v.received_at),
+              h("div", { class: "sub mono" }, v.id, v.session ? [" · ", sessionMark(v.session, narrowTo)] : null)),
             h("td", { class: "mono wrap-anywhere" }, modelCell(v)),
             h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
             h("td", null, statusBadge(v.status)),
@@ -866,17 +932,21 @@ function requests(view, selected) {
     const rows = [];
     let day = null;
     const matching = data.recent.filter(matches);
+    let above = null;
     for (const v of matching.slice(0, shown)) {
       // A clock alone is ambiguous once the router has run past midnight, and
       // a date on every row is the same date seventeen times.
       const at = new Date(v.received_at).toDateString();
       if (at !== day) {
         day = at;
-        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 10 }, dayLabel(v.received_at))));
+        // `above` is left alone: a day bar between two rows of one session is
+        // not a break in the session.
+        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 9 }, dayLabel(v.received_at))));
       }
-      rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": `Request ${v.id}` }, () => go("requests", v.id),
-        h("td", { class: "nowrap" }, fmt.clock(v.received_at), h("div", { class: "sub" }, rel(v.received_at))),
-        h("td", null, sessionNote(v) || "–"),
+      rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": rowLabel(v) }, () => go("requests", v.id),
+        h("td", railCell(v.session, above && above.session),
+          fmt.clock(v.received_at),
+          h("div", { class: "sub" }, rel(v.received_at), v.session ? [" · ", sessionMark(v.session, narrowTo)] : null)),
         h("td", { class: "mono model" }, modelCell(v), pathNote(v),
           v.source === "console" ? h("div", null, kindBadge("console")) : null),
         h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
@@ -890,13 +960,14 @@ function requests(view, selected) {
         h("td", null, outcomeBadge(v),
           v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
           v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null)));
+      above = v;
     }
     const hidden = matching.length - Math.min(shown, matching.length);
     const more = h("button", { type: "button", class: "small" },
       `Show ${fmt.int(Math.min(LIST_PAGE, hidden))} more of ${fmt.int(hidden)} not shown`);
     more.addEventListener("click", () => { shown += LIST_PAGE; draw(); });
     rerender(recent, table(
-      ["Time", "Session", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
+      ["Time", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
       rows,
       { empty: "No finished request since the router started." }),
       hidden ? h("p", { class: "note" }, more) : null);
@@ -987,8 +1058,9 @@ function pathNote(v) {
   return v.path === "/v1/messages" ? null : h("div", { class: "sub" }, v.path);
 }
 
-function sessionNote(v) {
-  return v.session ? sessionChip(v.session) : null;
+/// What a screen reader hears in place of the rail's colour.
+function rowLabel(v) {
+  return v.session ? `Request ${v.id}, session ${sessionNumber(v.session)}` : `Request ${v.id}`;
 }
 
 function modelCell(v) {
@@ -1008,7 +1080,7 @@ async function showRequest(target, id, scroll) {
     rerender(target, panel(`Request ${v.id}`, [recording, close],
       h("dl", { class: "facts" },
         fact("Received", `${fmt.time(v.received_at)} from ${v.peer || "–"}${v.source === "console" ? " (console test)" : ""}`),
-        v.session ? fact("Session", sessionChip(v.session)) : null,
+        v.session ? fact("Session", sessionFact(v.session)) : null,
         fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
         fact("Model", v.requested_model ? `${v.requested_model}${v.model ? ` → ${v.model} (${v.matched})` : " (no route)"}` : "–"),
         fact("Backend", v.backend ? `${v.backend} (${v.kind}), upstream model ${v.upstream_model}` : "–"),

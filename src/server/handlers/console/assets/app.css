@@ -384,6 +384,44 @@ td.model .sub { white-space: nowrap; }
   .session-chip.hue-324 { color: hsl(324, 70%, 84%); background: hsl(324, 40%, 20%); border-color: hsl(324, 35%, 38%); }
   .session-chip.hue-102 { color: hsl(102, 70%, 78%); background: hsl(102, 40%, 16%); border-color: hsl(102, 35%, 32%); }
 }
+/* The session as a rail down a row's first cell. A run of rows in one session
+   shares a colour and so reads as one bar, notched where the run starts so two
+   runs the palette gave the same hue still part; a hover lifts one session's
+   rail wherever it appears. Colour here classifies rather than judges, which
+   is the badge taxonomy's one standing exception, held to the rail and the
+   chip; the number beside it is what carries the identity for a reader who
+   cannot see the colour or meets it a second time once the palette wraps.
+   Classes, not inline style: CSP. */
+td.rail { position: relative; }
+td.rail::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--space-1); background: var(--line); }
+td.rail-start::before { top: var(--space-1); }
+td.rail.lit::before { width: var(--space-2); }
+td.rail.hue-252::before { background: hsl(252, 48%, 62%); }
+td.rail.hue-70::before  { background: hsl(70, 48%, 46%); }
+td.rail.hue-288::before { background: hsl(288, 48%, 64%); }
+td.rail.hue-178::before { background: hsl(178, 48%, 44%); }
+td.rail.hue-324::before { background: hsl(324, 48%, 62%); }
+td.rail.hue-102::before { background: hsl(102, 48%, 42%); }
+/* The number among the small print under the row's time, on every row. It is
+   a `link` button so it flows with that line, and takes the line's colour and
+   size rather than the accent: the rail is what the eye follows, a number in
+   the session's colour too would say it twice, and a face or a height of its
+   own would set the line off from the same line in every other column. */
+button.session-mark { color: inherit; font-size: inherit; }
+button.session-mark:hover { color: var(--text); text-decoration: underline; }
+/* The number beside the full id, where a detail panel spells the session out. */
+.session-fact { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.session-fact .badge { white-space: normal; overflow-wrap: anywhere; }
+.session-number { margin-right: var(--space-1); opacity: 0.75; }
+@media (prefers-color-scheme: dark) {
+  td.rail.hue-252::before { background: hsl(252, 45%, 56%); }
+  td.rail.hue-70::before  { background: hsl(70, 45%, 48%); }
+  td.rail.hue-288::before { background: hsl(288, 45%, 58%); }
+  td.rail.hue-178::before { background: hsl(178, 45%, 46%); }
+  td.rail.hue-324::before { background: hsl(324, 45%, 56%); }
+  td.rail.hue-102::before { background: hsl(102, 45%, 44%); }
+}
+
 /* A badge that is also the way to what it reports. */
 button.badge { height: auto; cursor: pointer; }
 button.badge:hover:not(:disabled) { border-color: currentColor; }

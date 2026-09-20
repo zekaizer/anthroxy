@@ -81,12 +81,12 @@ function recordings(view, opened) {
   /// One row per attempt. A request Claude Code sent again unchanged — after
   /// a stream it could not read, as a rule — follows the one it repeats, so
   /// the newest stands for the group and the rest fold under it.
-  const groupRows = (group) => {
+  const groupRows = (group, previous) => {
     const [newest, ...repeats] = group;
-    const lead = row(newest);
+    const lead = row(newest, previous);
     if (!repeats.length) return [lead];
     const folded = repeats.map((e) => {
-      const tr = row(e);
+      const tr = row(e, newest.session);
       tr.classList.add("attempt");
       tr.hidden = true;
       return tr;
@@ -137,7 +137,18 @@ function recordings(view, opened) {
     return out;
   };
 
-  const row = (e) => {
+  /// Groups drawn in order, each told the session of the row above it, so a
+  /// run of rows in one session draws as one rail. Every group holds one
+  /// session, so the run carries over from the group before.
+  const rowsFor = (list, previous) => list.flatMap((group) => {
+    const drawn = groupRows(group, previous);
+    previous = group[0].session;
+    return drawn;
+  });
+
+  const narrowTo = (session) => { filter.value = session; state.recordingsFilter = session; refilter(); };
+
+  const row = (e, previous) => {
     const remove = h("button", { type: "button", class: "small danger" }, "Delete");
     remove.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -155,12 +166,16 @@ function recordings(view, opened) {
     });
     const tr = openRow({
       class: `clickable ${e.name === opened ? "selected" : ""}`,
-      "aria-label": `Recording ${e.request_id}`,
+      "aria-label": e.session
+        ? `Recording ${e.request_id}, session ${sessionNumber(e.session)}`
+        : `Recording ${e.request_id}`,
     }, () => go("recordings", e.name),
-      h("td", { class: "nowrap" }, fmt.time(e.at)),
+      h("td", railCell(e.session, previous),
+        fmt.time(e.at),
+        e.session ? h("div", { class: "sub" }, sessionMark(e.session, narrowTo)) : null),
       h("td", { class: "prompt-cell" },
         entryPrompt(e),
-        h("div", { class: "sub entry-facts" }, entryFacts(e, (session) => { filter.value = session; state.recordingsFilter = session; refilter(); }))),
+        h("div", { class: "sub entry-facts" }, entryFacts(e))),
       h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
       h("td", null, statusBadge(e.status)),
       h("td", null, entryOutcome(e)),
@@ -189,10 +204,11 @@ function recordings(view, opened) {
       replace(more, `Show ${fmt.int(Math.min(LIST_PAGE, grouped.length - limit))} more of ${fmt.int(grouped.length - limit)} not shown`);
     };
     const grouped = groups(entries);
-    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["On disk", "num"], ""], grouped.slice(0, limit).flatMap(groupRows),
+    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["On disk", "num"], ""], rowsFor(grouped.slice(0, limit), null),
       { empty: needle ? "No recording matches." : "No recording yet." });
     more.addEventListener("click", () => {
-      append(drawn.querySelector("tbody"), grouped.slice(limit, limit + LIST_PAGE).flatMap(groupRows));
+      const last = grouped[limit - 1];
+      append(drawn.querySelector("tbody"), rowsFor(grouped.slice(limit, limit + LIST_PAGE), last && last[0].session));
       limit += LIST_PAGE;
       label();
     });
@@ -312,17 +328,11 @@ function entryPrompt(e) {
   return h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own");
 }
 
-/// Message count, session and request id under an entry's prompt; the
-/// session filters the list to its entries.
-function entryFacts(e, filterBy) {
+/// Message count and request id under an entry's prompt. The session is not
+/// among them: the row's rail carries it.
+function entryFacts(e) {
   const facts = [];
   if (e.messages !== null && e.messages !== undefined) facts.push(`${e.messages} message(s)`);
-  if (e.session) {
-    facts.push(sessionChip(e.session, true, {
-      title: `Show only session ${e.session}`,
-      onclick: (event) => { event.stopPropagation(); filterBy(e.session); },
-    }));
-  }
   if (e.stream !== null && e.stream !== undefined) facts.push(e.stream ? "stream" : "whole response");
   if (e.path && !/^\/v1\/(messages|chat\/completions)(\?|$)/.test(e.path)) facts.push(h("span", { class: "mono" }, e.path));
   facts.push(h("span", { class: "mono" }, e.request_id));
@@ -484,6 +494,7 @@ function summaryFacts(exchange) {
   const usage = response && !(response instanceof Error) && response.usage ? usageText(response.usage) : null;
   return h("dl", { class: "facts" },
     fact("Request", `${m.method} ${m.path}${m.stream ? " (stream)" : ""}, ${fmt.time(m.received_at)}`),
+    m.session ? fact("Session", sessionFact(m.session)) : null,
     fact("Route", [h("span", { class: "mono" }, route.join(" ")), ` on ${m.backend}`]),
     fact("Result", [statusBadge(m.status), " ", recordedOutcome(m), m.outcome && m.outcome !== "complete" ? ` ${m.outcome}` : "",
       m.attempts > 1 ? `, ${m.attempts} attempts` : "",

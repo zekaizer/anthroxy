@@ -56,4 +56,5 @@ This file stays short. Details live under `docs/` and are read only when a task 
 - `docs/adr/README.md` — read before writing or changing an ADR.
 - `docs/adr/NNNN-*.md` — read the ADR covering an area before changing that area.
 - `docs/claude-code.md` — read when a question is about what Claude Code does before the router sees a request: which models reach its picker, the context window it assumes, whether MCP tools are deferred.
+- `docs/console-design.md` — read before changing `server/console/assets/`: the token scales, the badge taxonomy and what colour is allowed to mean.
 - `docs/translation.md` — read before changing `ir/`, `openai/`, `translate/` or the Anthropic codecs: how an `openai` backend is served and what the IR is for.
