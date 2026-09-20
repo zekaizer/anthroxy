@@ -85,7 +85,22 @@ lost to a rule with one more class in it, a table column that pushed a table
 into a scroll, a section flush against the one above it. A screenshot is for
 the last question — does this read well — and answers none of the others.
 
-Drive the page with a headless browser and assert:
+**Read the diff against this page first.** It is the cheapest check and the
+one most often skipped, and both halves of it were broken repeatedly while
+the session rail and the model comparison were written:
+
+- **Every length, size, radius and colour is a token.** A `3px` rail, a `6px`
+  margin, a `10px/14px` font: each was written, none survived review. If a
+  value is not on a scale above, the rule is drawing something the components
+  already draw.
+- **Every control is an existing component before it is a new one.** A button
+  that reads as text is `button.link`, not a fresh set of resets — the fresh
+  set missed the height the component already handles, and the line it sat in
+  grew by 13px. Check the component inventory before adding to it.
+- **Colour still means judgement.** A new badge that names a category is
+  `kind`. The session is the one exception and stays one.
+
+Then drive the page with a headless browser and assert:
 
 1. **Overflow, everywhere, at every width.** `scrollWidth - clientWidth` for
    the document *and* for every `.table-wrap`, `.detail` and `pre`. A page
