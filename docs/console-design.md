@@ -41,6 +41,11 @@ Four shapes, and the taxonomy is the point.
 | `kind` | a classification | neutral, no colour |
 | `tag` | an annotation on what a client sent | dashed border |
 
+A rail down a cell's left edge is the other way a row says what it belongs to,
+and there are two of them: the session's, on the first cell, in its hue, and
+the turn's on the Recordings list, neutral because a line is enough to bracket
+rows that already sit next to each other. A third would be one too many.
+
 **Colour means judgement.** A classification never gets one: that is why `kind`
 is neutral, and why a new badge that merely names a category must be `kind`
 rather than a fifth colour.

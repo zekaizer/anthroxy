@@ -408,10 +408,11 @@ td.rail { position: relative; }
 td.rail::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--space-1); background: var(--line); opacity: 0.55; }
 td.rail-start::before { top: var(--space-1); }
 /* The turn a row belongs to, as a second rail down the cell that says what
-   the row sends: it runs under the row that opens the turn, down the requests
-   that answer it, and stops where the next turn begins. A session is a colour
-   and a turn is a line — neither is a judgement, and only the session keeps
-   the badge taxonomy's one exception. */
+   the row sends. It runs beside the requests that answer a turn and stops at
+   the row that opens it, which carries none: a run of railed rows and the
+   bare one they meet is one turn, whichever way the list is read. A session
+   is a colour and a turn is a line — neither is a judgement, and only the
+   session keeps the badge taxonomy's one exception. */
 td.turn-rail::before { opacity: 1; background: var(--line-strong); }
 /* Hovering a session brings its rail forward by colour, not by size: a rail
    that grew moved the text beside it, and the run one is reading is the last
