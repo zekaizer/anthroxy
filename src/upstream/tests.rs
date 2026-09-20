@@ -414,3 +414,27 @@ fn the_backoff_has_a_ceiling() {
         "below the ceiling it still doubles"
     );
 }
+
+#[test]
+fn the_logged_request_target_keeps_the_url_userinfo_out() {
+    let backend = Backend::from_config(
+        "gw",
+        &BackendConfig {
+            kind: BackendKind::Anthropic,
+            url: "https://gw-user:url-secret@gw.corp".into(),
+            models_path: BackendConfig::default_models_path(),
+            live_models: false,
+            credential: CredentialConfig::None,
+            headers: Default::default(),
+            anthropic_beta: Vec::new(),
+            drop_headers: Vec::new(),
+            drop_fields: Vec::new(),
+            proxy: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        super::client::shown_target(&backend, "/v1/messages"),
+        "https://<redacted>@gw.corp/v1/messages"
+    );
+}
