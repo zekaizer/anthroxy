@@ -389,8 +389,8 @@ function entryPrompt(e, starts) {
 /// A turn opens with a request that carries its own prompt. Claude Code also
 /// wakes the model with nothing typed — a task notification, a stop hook —
 /// and those requests carry no prompt; the first of them names the notice
-/// rather than the tool results it returns, which is what parts one woken
-/// turn from the next.
+/// rather than returning tool results, which is what parts one woken turn
+/// from the next.
 function turnsOf(entries) {
   const turns = new Map();
   const open = new Map();
@@ -399,7 +399,7 @@ function turnsOf(entries) {
     const session = e.session || `entry:${e.name}`;
     const prompt = e.prompt || null;
     const held = open.get(session);
-    const answers = Boolean(e.step) && e.step.startsWith("←");
+    const answers = Boolean(e.step) && e.step.startsWith("returns ");
     const starts = !held || !e.step || prompt !== held.prompt || (prompt === null && !answers);
     if (starts) open.set(session, { at: new Date(e.at).getTime(), prompt });
     turns.set(e.name, { starts, offset: new Date(e.at).getTime() - open.get(session).at });
@@ -1263,8 +1263,10 @@ function blockKinds(blocks, ctx) {
   const counts = new Map();
   for (const b of blocks) {
     let label = b.kind === "other" ? b.type : b.kind.replace("_", " ");
-    if (b.kind === "tool_use") label = `→ ${b.name}`;
-    if (b.kind === "tool_result") label = `← ${(ctx.calls.get(b.id) || {}).name || "result"}${b.isError ? " (error)" : ""}`;
+    // What the message does with the tool, said the way the list says it:
+    // an arrow is a notation a reader has to be taught.
+    if (b.kind === "tool_use") label = `calls ${b.name}`;
+    if (b.kind === "tool_result") label = `returns ${(ctx.calls.get(b.id) || {}).name || "a result"}${b.isError ? " (error)" : ""}`;
     if (b.kind === "text" && b.text.includes("<system-reminder>")) label = b.text.replace(REMINDER, "").trim() ? "text + reminder" : "reminder";
     if (b.notice) label = b.notice;
     if (b.command) label = "command";

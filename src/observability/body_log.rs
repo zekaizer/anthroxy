@@ -659,7 +659,7 @@ mod tests {
             std::fs::create_dir(&entry).unwrap();
             std::fs::write(
                 entry.join("meta.json"),
-                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "stream": true, "messages": 3, "prompt": "Read it", "step": "← Read", "session": "s-1", "request_headers": []}}"#),
+                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "stream": true, "messages": 3, "prompt": "Read it", "step": "returns Read", "session": "s-1", "request_headers": []}}"#),
             )
             .unwrap();
             std::fs::write(entry.join("request.json"), "{}").unwrap();
@@ -684,7 +684,7 @@ mod tests {
         assert_eq!(newest.model.as_deref(), Some("fast"));
         assert_eq!(newest.messages, Some(3));
         assert_eq!(newest.prompt.as_deref(), Some("Read it"));
-        assert_eq!(newest.step.as_deref(), Some("← Read"));
+        assert_eq!(newest.step.as_deref(), Some("returns Read"));
         assert_eq!(newest.stream, Some(true));
         assert_eq!(newest.session.as_deref(), Some("s-1"));
         assert!(!newest.unreadable);

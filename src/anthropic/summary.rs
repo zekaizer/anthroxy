@@ -18,7 +18,8 @@ pub struct RequestSummary {
     /// or no user message carries one.
     pub prompt: Option<String>,
     /// What the request sends when its last message carries no prompt, on one
-    /// line: the tools whose results it returns and the notices it holds.
+    /// line and in words rather than a notation to learn: the tools whose
+    /// results it returns and the notices it holds.
     /// `None` when the last message carries the prompt.
     pub step: Option<String>,
 }
@@ -282,7 +283,7 @@ fn step(messages: &[Value]) -> Option<String> {
     }
     let mut parts = Vec::new();
     if !read.results.is_empty() {
-        parts.push(format!("← {}", tool_names(messages, &read.results)));
+        parts.push(format!("returns {}", tool_names(messages, &read.results)));
     }
     parts.extend(read.notices.iter().map(|label| (*label).to_owned()));
     if parts.is_empty() {

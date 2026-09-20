@@ -369,7 +369,7 @@ fn summary_names_the_last_prompt_without_reminders_or_tool_results() {
         RequestSummary {
             messages: 4,
             prompt: Some("What is in hostname.txt?".to_owned()),
-            step: Some("← Read".to_owned()),
+            step: Some("returns Read".to_owned()),
         }
     );
 }
@@ -390,7 +390,7 @@ fn summary_prompt_is_one_cut_line_and_absent_without_user_text() {
         RequestSummary {
             messages: 1,
             prompt: None,
-            step: Some("← tool".to_owned()),
+            step: Some("returns tool".to_owned()),
         }
     );
     assert_eq!(summarize(b"not json"), RequestSummary::default());
@@ -475,7 +475,7 @@ fn summary_tells_a_request_that_returns_tool_results_from_the_one_that_asks() {
         .as_bytes(),
     );
     assert_eq!(summary.prompt.as_deref(), Some("Fix the build."));
-    assert_eq!(summary.step.as_deref(), Some("← Read ×2, Bash, tool"));
+    assert_eq!(summary.step.as_deref(), Some("returns Read ×2, Bash, tool"));
 
     let summary = summarize(
         turn(json!({"role": "assistant", "content": "Partial"}))
@@ -517,7 +517,7 @@ fn summary_names_tool_results_by_what_each_call_did() {
     ]});
     assert_eq!(
         summarize(body.to_string().as_bytes()).step.as_deref(),
-        Some("← Bash Run the tests, Read summary.rs, Grep fn summarize +2 more")
+        Some("returns Bash Run the tests, Read summary.rs, Grep fn summarize +2 more")
     );
 
     let body = json!({"model": "m", "messages": [
@@ -529,7 +529,7 @@ fn summary_names_tool_results_by_what_each_call_did() {
     ]});
     assert_eq!(
         summarize(body.to_string().as_bytes()).step.as_deref(),
-        Some("← Bash git status")
+        Some("returns Bash git status")
     );
 }
 
@@ -671,7 +671,7 @@ fn summary_reads_claude_code_notices_as_what_they_are() {
         ]}
     ]));
     assert_eq!(summary.prompt.as_deref(), Some("Fix the build."));
-    assert_eq!(summary.step.as_deref(), Some("← Edit · task notification"));
+    assert_eq!(summary.step.as_deref(), Some("returns Edit · task notification"));
 
     let summary = body(json!([
         {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context."},
@@ -682,7 +682,7 @@ fn summary_reads_claude_code_notices_as_what_they_are() {
         ]}
     ]));
     assert_eq!(summary.prompt, None, "a compaction summary is no prompt");
-    assert_eq!(summary.step.as_deref(), Some("← Edit · task notification"));
+    assert_eq!(summary.step.as_deref(), Some("returns Edit · task notification"));
 
     let summary = body(json!([
         {"role": "user", "content": "please explain what <task-notification> means"}
