@@ -89,17 +89,22 @@ function firstPath(candidates) {
 
 async function browserType() {
   const fromEnv = env.CONSOLE_CHECK_PLAYWRIGHT;
-  const guesses = [
-    fromEnv,
-    join(homedir(), ".npm-global/lib/node_modules/playwright-core/index.mjs"),
-    join(homedir(), ".npm-global/lib/node_modules/agent-browser/node_modules/playwright-core/index.mjs"),
-    "/usr/lib/node_modules/playwright-core/index.mjs",
+  const packages = [
+    join(homedir(), ".npm-global/lib/node_modules/playwright-core"),
+    join(homedir(), ".npm-global/lib/node_modules/agent-browser/node_modules/playwright-core"),
+    "/usr/lib/node_modules/playwright-core",
   ];
+  const guesses = [fromEnv];
+  // Which of the two the package ships depends on how it was installed, and
+  // a CommonJS build imports with its exports under `default`.
+  for (const one of packages) guesses.push(join(one, "index.mjs"), join(one, "index.js"));
   const found = firstPath(guesses);
   if (!found) {
-    throw new Error("no playwright-core: set CONSOLE_CHECK_PLAYWRIGHT to its index.mjs");
+    throw new Error("no playwright-core: set CONSOLE_CHECK_PLAYWRIGHT to its index.mjs or index.js");
   }
-  const { chromium } = await import(found);
+  const loaded = await import(found);
+  const chromium = loaded.chromium || (loaded.default && loaded.default.chromium);
+  if (!chromium) throw new Error(`${found} exports no chromium`);
   return chromium;
 }
 
