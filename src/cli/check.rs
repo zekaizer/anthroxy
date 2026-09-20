@@ -170,6 +170,10 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
             ok = false;
             (style.err(&error.to_string()), None)
         }
+        Some(ModelsProbe::Skipped { reason }) => (
+            style.dim(&format!("GET {} skipped ({reason})", backend.models_path)),
+            None,
+        ),
         Some(ModelsProbe::Answered {
             status,
             latency,

@@ -53,6 +53,7 @@ pub async fn probe(
         let models = match probe.models {
             None => Value::Null,
             Some(ModelsProbe::Failed(problem)) => json!({"error": problem.to_string()}),
+            Some(ModelsProbe::Skipped { reason }) => json!({"skipped": reason}),
             Some(ModelsProbe::Answered {
                 status,
                 latency,

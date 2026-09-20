@@ -34,6 +34,9 @@ pub enum ModelsProbe {
         detail: Option<String>,
     },
     Failed(UpstreamError),
+    /// Not sent: a passthrough backend has no stored credential and the
+    /// catalog is fetched with the client's Authorization at request time.
+    Skipped { reason: String },
 }
 
 /// One entry of a backend's model list.
@@ -47,6 +50,15 @@ pub struct ListedModel {
 /// Never fails: every outcome is data for the report. `client` decides the
 /// timeouts and retries; `check` uses none.
 pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
+    if backend.forwards_client_auth {
+        return Probe {
+            credential: Ok(backend.credential.describe()),
+            request_headers: Vec::new(),
+            models: Some(ModelsProbe::Skipped {
+                reason: "forwards client Authorization; catalog is live per request".into(),
+            }),
+        };
+    }
     let credential = match backend.credential.credential().await {
         Ok(credential) => credential,
         Err(error) => {
@@ -226,6 +238,33 @@ mod tests {
 
     fn client() -> UpstreamClient {
         UpstreamClient::new(reqwest::Client::new(), RetryPolicy::never())
+    }
+
+    #[tokio::test]
+    async fn passthrough_is_not_probed() {
+        let backend = Backend::from_config(
+            "account",
+            &BackendConfig {
+                kind: BackendKind::Passthrough,
+                url: "http://127.0.0.1:1".into(),
+                models_path: BackendConfig::default_models_path(),
+                live_models: false,
+                credential: CredentialConfig::None,
+                headers: Default::default(),
+                anthropic_beta: Vec::new(),
+                drop_headers: Vec::new(),
+                drop_fields: Vec::new(),
+                proxy: None,
+            },
+        )
+        .unwrap();
+        let probe = super::probe(&client(), &backend).await;
+        match probe.models {
+            Some(ModelsProbe::Skipped { reason }) => {
+                assert!(reason.contains("Authorization"), "{reason}");
+            }
+            other => panic!("expected skip, got {other:?}"),
+        }
     }
 
     /// A backend listing one model. With a `gate`, it answers only once every

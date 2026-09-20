@@ -182,7 +182,7 @@ Notes:
 | Command | Purpose |
 | --- | --- |
 | `serve [--listen ADDR] [--body-dir DIR]` | Run the router. Prints a banner with the listen URL, backends and models. `SIGHUP` re-reads the file without dropping connections (everything except `server.listen`). |
-| `check [--no-probe] [--timeout 10s]` | Validate the file; acquire each credential and call `GET /v1/models` on each backend; flag upstream model names the backend does not list. Exit 1 on any problem. |
+| `check [--no-probe] [--timeout 10s]` | Validate the file; acquire each credential and call `GET /v1/models` on each backend (skipped for `kind = "passthrough"`: no stored key, catalog is live per request); flag upstream model names the backend does not list. Exit 1 on any problem. |
 | `credential [BACKEND…] [--as-service] [--reveal]` | Run each backend's credential command as the router runs it: exit status, timing, what it printed, the masked value with its length, any reported expiry and when the router would re-run it. `--as-service` runs it again in the systemd user service's environment and prints how that environment differs from this shell's. Exit 1 on any problem. |
 | `models` | The model table: id, backend, upstream name, picker label, aliases. |
 | `init [--force] [--stdout]` | Write (or print) a commented configuration with a fresh random token. |

@@ -478,6 +478,45 @@ async fn probe_lists_each_backends_models_and_feeds_the_context_limit() {
 }
 
 #[tokio::test]
+async fn probe_skips_passthrough_instead_of_reporting_401() {
+    let upstream = MockUpstream::start(|_| {
+        json_response(
+            401,
+            json!({
+                "type": "error",
+                "error": {"type": "authentication_error", "message": "x-api-key header is required"}
+            }),
+        )
+    })
+    .await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+v1_auth = "none"
+
+[backends.account]
+kind = "passthrough"
+url = "{url}"
+"#,
+        url = upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+    let (status, probe) = post_api(&router, "/api/probe", Value::Null).await;
+    assert_eq!(status, 200, "{probe}");
+    let account = &probe["backends"][0];
+    assert_eq!(account["name"], "account");
+    assert!(
+        account["models"]["skipped"].as_str().unwrap().contains("Authorization"),
+        "{account}"
+    );
+    assert!(account["models"].get("status").is_none());
+    assert!(account["models"].get("error").is_none());
+    assert!(upstream.received().is_empty());
+}
+
+#[tokio::test]
 async fn probe_shows_the_request_it_sent_and_the_route_it_took() {
     let upstream = MockUpstream::start(backend).await;
     // `far` answers only through the proxy, which the mock plays as well.

@@ -1583,6 +1583,7 @@ function probeContent(probe) {
       const models = backend.models;
       let modelLine;
       if (!models) modelLine = h("span", { class: "muted" }, "model list skipped: no credential");
+      else if (models.skipped) modelLine = h("span", { class: "muted" }, `model list skipped: ${models.skipped}`);
       else if (models.error) modelLine = h("span", { class: "error-text" }, models.error);
       else modelLine = [statusBadge(models.status), ` in ${fmt.ms(models.latency_ms)}`, models.detail ? h("span", { class: "error-text" }, `: ${models.detail}`) : null];
       const listed = models && models.listed ? models.listed.map((m) => {
