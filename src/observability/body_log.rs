@@ -12,7 +12,7 @@ use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 use tokio::sync::watch;
 
-use crate::private_fs::{PendingWrite, create_dir_private, write_private};
+use crate::private_fs::{PendingWrite, append_private, create_dir_private, write_private};
 use crate::server::relay::RelayOutcome;
 use crate::upstream::{DroppedHeader, SentHeader};
 
@@ -90,10 +90,18 @@ pub struct Recorder {
     dir: PathBuf,
     meta: Meta,
     started: Instant,
+    /// What has arrived and not yet been appended to the response file.
     response: Vec<u8>,
+    /// Everything that has arrived, appended or not, for `response_bytes`.
+    response_bytes: usize,
+    /// Whether any of the body is already on disk, which decides whether the
+    /// last of it is appended to that file or written as the whole of it.
+    flushed: bool,
+    last_flush: Instant,
     response_file: &'static str,
-    /// The initial write; the final write is ordered after it so `meta.json`
-    /// always ends in its complete form. Taken by the final write.
+    /// The write this recorder queued last, which the next one is ordered
+    /// after, so `meta.json` always ends in its complete form and appends
+    /// land in the order they arrived. Taken by the final write.
     pending: Option<tokio::task::JoinHandle<()>>,
     /// Tells a stop's cut from a client that left when dropped unfinished.
     cut: watch::Receiver<bool>,
@@ -176,6 +184,9 @@ impl BodyLog {
             meta,
             started,
             response: Vec::new(),
+            response_bytes: 0,
+            flushed: false,
+            last_flush: started,
             response_file: "response.bin",
             pending: Some(pending),
             cut,
@@ -399,6 +410,43 @@ fn write_files(
     })
 }
 
+/// How much of a body waits before it is appended, and how long. Fixed: a
+/// stream is followed in the console at this granularity.
+const FLUSH_BYTES: usize = 8 * 1024;
+const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Appends to a file off the request path, after `after` when given; failures
+/// are logged, never propagated. Unlike [`write_files`] a reader can catch
+/// this file part-written, which is the point: it is how a stream is watched
+/// while it runs.
+fn append_file(
+    dir: PathBuf,
+    name: &'static str,
+    bytes: Bytes,
+    after: Option<tokio::task::JoinHandle<()>>,
+) -> tokio::task::JoinHandle<()> {
+    let span = tracing::Span::current();
+    let pending = PendingWrite::begin();
+    let append = move || {
+        let _pending = pending;
+        let _guard = span.enter();
+        if let Err(error) = create_dir_private(&dir) {
+            tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
+            return;
+        }
+        let path = dir.join(name);
+        if let Err(error) = append_private(&path, &bytes) {
+            tracing::error!(path = %path.display(), %error, "cannot append to body log file");
+        }
+    };
+    tokio::spawn(async move {
+        if let Some(previous) = after {
+            let _ = previous.await;
+        }
+        let _ = tokio::task::spawn_blocking(append).await;
+    })
+}
+
 /// File name for the response body, by content type.
 fn response_file(headers: &HeaderMap) -> &'static str {
     let content_type = headers
@@ -443,11 +491,38 @@ impl Recorder {
     /// Records a fully buffered body and finishes.
     pub fn finish_with_body(mut self, body: &[u8]) {
         self.response.extend_from_slice(body);
+        self.response_bytes += body.len();
         self.finish(&RelayOutcome::Complete);
     }
 
+    /// A stream is worth watching while it runs, so what has arrived goes to
+    /// the response file rather than waiting for the end. The thresholds are
+    /// fixed: often enough to follow a stream, rarely enough that a chunk is
+    /// not a write. A stream that falls quiet holds what it has until the
+    /// next chunk, which is no loss — there is nothing new to see.
     pub fn chunk(&mut self, chunk: &Bytes) {
         self.response.extend_from_slice(chunk);
+        self.response_bytes += chunk.len();
+        if self.response.len() >= FLUSH_BYTES || self.last_flush.elapsed() >= FLUSH_INTERVAL {
+            self.flush();
+        }
+    }
+
+    /// Appends what has arrived since the last flush, ordered after the
+    /// writes already queued.
+    fn flush(&mut self) {
+        if self.response.is_empty() {
+            return;
+        }
+        let bytes = Bytes::from(std::mem::take(&mut self.response));
+        self.pending = Some(append_file(
+            self.dir.clone(),
+            self.response_file,
+            bytes,
+            self.pending.take(),
+        ));
+        self.flushed = true;
+        self.last_flush = Instant::now();
     }
 
     /// Writes the response body and the final `meta.json`.
@@ -463,18 +538,26 @@ impl Recorder {
                 RelayOutcome::ClientDisconnected => "client_disconnected".to_owned(),
                 RelayOutcome::Stopped => "stopped".to_owned(),
             },
-            response_bytes: self.response.len(),
+            response_bytes: self.response_bytes,
             duration_ms: self.started.elapsed().as_millis() as u64,
         });
-        write_files(
-            self.dir.clone(),
-            vec![
-                (
+        // A body already part-written is finished by appending the rest: a
+        // whole-file write would drop what a reader has been following.
+        if self.flushed {
+            self.flush();
+        } else {
+            self.pending = Some(write_files(
+                self.dir.clone(),
+                vec![(
                     self.response_file,
                     Bytes::from(std::mem::take(&mut self.response)),
-                ),
-                ("meta.json", to_pretty_json(&self.meta)),
-            ],
+                )],
+                self.pending.take(),
+            ));
+        }
+        write_files(
+            self.dir.clone(),
+            vec![("meta.json", to_pretty_json(&self.meta))],
             self.pending.take(),
         );
         tracing::debug!(dir = %self.dir.display(), "exchange recorded");
