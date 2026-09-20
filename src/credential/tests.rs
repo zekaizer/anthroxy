@@ -51,6 +51,10 @@ fn debug_and_mask_never_reveal_the_secret() {
     assert!(!dbg.contains("verysecret"), "{dbg}");
     assert_eq!(c.masked(), "sk-a…9999");
     assert_eq!(mask("short"), "*****");
+    // Four and four off a short secret would leave almost nothing hidden.
+    assert_eq!(mask("pw-9-chars"), "**********");
+    assert_eq!(mask("0123456789abcde"), "*".repeat(15));
+    assert_eq!(mask("0123456789abcdef"), "0123…cdef", "eight stay hidden");
 }
 
 #[tokio::test]
@@ -60,13 +64,13 @@ async fn fixed_none_and_static() {
     assert_eq!(none.describe(), "none");
 
     let fixed = build(&CredentialConfig::Static {
-        value: "key-1234567890".into(),
+        value: "key-123456789012".into(),
         header: CredentialHeader::x_api_key(),
     })
     .unwrap();
     assert_eq!(
         fixed.credential().await.unwrap(),
-        Some(Credential::new(CredentialHeader::x_api_key(), "key-1234567890").unwrap())
+        Some(Credential::new(CredentialHeader::x_api_key(), "key-123456789012").unwrap())
     );
     assert_eq!(
         fixed.describe(),
@@ -151,18 +155,18 @@ async fn command_output_is_trimmed_and_cached() {
     let dir = tempfile::tempdir().unwrap();
     let counter = dir.path().join("runs");
     let cmd = format!(
-        "echo run >> {} && printf '  tok-abcdefgh  \\n'",
+        "echo run >> {} && printf '  tok-abcdefghijkl  \\n'",
         counter.display()
     );
     let source = command(&cmd, Duration::from_secs(60), Duration::from_secs(5));
 
     assert_eq!(
         source.credential().await.unwrap(),
-        Some(bearer("tok-abcdefgh"))
+        Some(bearer("tok-abcdefghijkl"))
     );
     assert_eq!(
         source.credential().await.unwrap(),
-        Some(bearer("tok-abcdefgh"))
+        Some(bearer("tok-abcdefghijkl"))
     );
     assert_eq!(
         std::fs::read_to_string(&counter).unwrap().lines().count(),
@@ -170,7 +174,7 @@ async fn command_output_is_trimmed_and_cached() {
         "second call served from cache"
     );
 
-    source.invalidate(&bearer("tok-abcdefgh")).await;
+    source.invalidate(&bearer("tok-abcdefghijkl")).await;
     source.credential().await.unwrap();
     assert_eq!(
         std::fs::read_to_string(&counter).unwrap().lines().count(),
@@ -327,7 +331,7 @@ async fn a_failed_refresh_keeps_serving_a_value_that_has_not_expired() {
     let cmd = flaky(
         &counter,
         &flag,
-        r#"{"token": "tok-1234567890", "expires_at": 4102444800}"#,
+        r#"{"token": "tok-123456789012", "expires_at": 4102444800}"#,
     );
     let source = json_command(&cmd, Duration::ZERO);
     let token = source.credential().await.unwrap().unwrap();
@@ -338,7 +342,7 @@ async fn a_failed_refresh_keeps_serving_a_value_that_has_not_expired() {
     assert_eq!(source.credential().await.unwrap(), Some(token.clone()));
     assert_eq!(runs(&counter), 2, "no run again right after a failure");
     let status = source.status();
-    assert_eq!(status.masked.as_deref(), Some("tok-…7890"));
+    assert_eq!(status.masked.as_deref(), Some("tok-…9012"));
     assert!(
         status.refreshes[1]
             .error
@@ -363,11 +367,11 @@ async fn a_failed_refresh_serves_nothing_near_expiry_or_without_one() {
             "near-expiry",
             CommandOutput::Json,
             format!(
-                r#"{{"token": "tok-1234567890", "expires_at": {}}}"#,
+                r#"{{"token": "tok-123456789012", "expires_at": {}}}"#,
                 unix_secs(near)
             ),
         ),
-        ("text", CommandOutput::Text, "tok-1234567890".to_owned()),
+        ("text", CommandOutput::Text, "tok-123456789012".to_owned()),
     ] {
         let (counter, flag) = (
             dir.path().join(format!("{name}-runs")),
@@ -447,12 +451,12 @@ async fn json_expiry_accepts_the_epoch_shapes_a_token_store_writes() {
     let expires_at = SystemTime::now() + Duration::from_secs(3600);
     let millis = expires_at.duration_since(UNIX_EPOCH).unwrap().as_millis();
     let source = json_command(
-        &format!(r#"echo '{{"token": "tok-abcdefgh", "expires_at": {millis}.98}}'"#),
+        &format!(r#"echo '{{"token": "tok-abcdefghijkl", "expires_at": {millis}.98}}'"#),
         Duration::from_secs(3600),
     );
     assert_eq!(
         source.credential().await.unwrap(),
-        Some(bearer("tok-abcdefgh"))
+        Some(bearer("tok-abcdefghijkl"))
     );
 }
 
@@ -572,13 +576,13 @@ fn valid_for_is_the_refresh_interval_cut_short_by_the_expiry() {
 #[tokio::test]
 async fn fixed_status_is_the_masked_value_without_history() {
     let fixed = build(&CredentialConfig::Static {
-        value: "key-1234567890".into(),
+        value: "key-123456789012".into(),
         header: CredentialHeader::x_api_key(),
     })
     .unwrap();
     let status = fixed.status();
     assert_eq!(status.source, "static");
-    assert_eq!(status.masked.as_deref(), Some("key-…7890"));
+    assert_eq!(status.masked.as_deref(), Some("key-…9012"));
     assert!(status.refreshes.is_empty());
     assert_eq!(status.refresh_at, None);
 
@@ -590,7 +594,7 @@ async fn fixed_status_is_the_masked_value_without_history() {
 #[tokio::test]
 async fn command_status_reports_the_cached_value_and_each_run() {
     let source = CommandCredential::new(
-        r#"printf '{"token": "tok-1234567890", "expires_at": 4102444800}'"#.into(),
+        r#"printf '{"token": "tok-123456789012", "expires_at": 4102444800}'"#.into(),
         CommandOutput::Json,
         CredentialHeader::bearer(),
         Duration::from_secs(300),
@@ -604,7 +608,7 @@ async fn command_status_reports_the_cached_value_and_each_run() {
     let served = source.credential().await.unwrap().unwrap();
     source.credential().await.unwrap();
     let status = source.status();
-    assert_eq!(status.masked.as_deref(), Some("tok-…7890"));
+    assert_eq!(status.masked.as_deref(), Some("tok-…9012"));
     assert_eq!(
         status.expires_at,
         Some("2100-01-01T00:00:00Z".parse().unwrap())
@@ -620,7 +624,7 @@ async fn command_status_reports_the_cached_value_and_each_run() {
     );
     assert!(status.fetched_at.is_some_and(|t| t <= now));
     assert_eq!(status.refreshes.len(), 1, "a cache hit is not a run");
-    assert_eq!(status.refreshes[0].masked.as_deref(), Some("tok-…7890"));
+    assert_eq!(status.refreshes[0].masked.as_deref(), Some("tok-…9012"));
     assert_eq!(status.refreshes[0].error, None);
 
     source.invalidate(&served).await;

@@ -54,7 +54,9 @@ impl Credential {
         (self.header.name.clone(), value)
     }
 
-    /// First and last four characters, enough to tell two tokens apart in logs.
+    /// First and last four characters, enough to tell two tokens apart in
+    /// logs; a secret too short to keep [`HIDDEN`] characters back is
+    /// masked whole.
     pub fn masked(&self) -> String {
         mask(&self.secret)
     }
@@ -74,9 +76,13 @@ impl std::fmt::Debug for Credential {
     }
 }
 
+/// Characters a masked secret keeps back. A window of four and four off a
+/// ten-character secret would show eight of them.
+const HIDDEN: usize = 8;
+
 pub fn mask(secret: &str) -> String {
     let chars: Vec<char> = secret.chars().collect();
-    if chars.len() <= 8 {
+    if chars.len() < 8 + HIDDEN {
         return "*".repeat(chars.len());
     }
     let head: String = chars[..4].iter().collect();

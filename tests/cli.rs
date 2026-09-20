@@ -267,7 +267,7 @@ listen = "127.0.0.1:0"
 
 [backends.good]
 url = "http://127.0.0.1:1"
-credential = { kind = "command", command = "printf '  tok-abcdefgh \n'", refresh = "90s" }
+credential = { kind = "command", command = "printf '  tok-abcdefghijkl \n'", refresh = "90s" }
 
 [backends.bad]
 url = "http://127.0.0.1:1"
@@ -295,7 +295,7 @@ fn credential_reports_every_command_and_fails_on_a_broken_one() {
         .env_remove("ANTHROXY_TEST_ABSENT")
         .assert()
         .failure()
-        .stdout(predicate::str::contains("credential  tok-…efgh (12 chars)"))
+        .stdout(predicate::str::contains("credential  tok-…ijkl (16 chars)"))
         .stdout(predicate::str::contains("re-run in   1m 30s"))
         .stdout(predicate::str::contains("✗ exit 3 in"))
         .stdout(predicate::str::contains("stderr      boom"))
@@ -316,7 +316,7 @@ fn credential_takes_backend_names_and_reveals_on_request() {
         .args(["--config", path, "credential", "good"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("tok-…efgh"))
+        .stdout(predicate::str::contains("tok-…ijkl"))
         .stdout(predicate::str::contains("every credential acquired"))
         .stdout(predicate::str::contains("bad").not());
 
@@ -324,7 +324,7 @@ fn credential_takes_backend_names_and_reveals_on_request() {
         .args(["--config", path, "credential", "good", "--reveal"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("credential  tok-abcdefgh"));
+        .stdout(predicate::str::contains("credential  tok-abcdefghijkl"));
 
     bin()
         .args(["--config", path, "credential", "nope"])
