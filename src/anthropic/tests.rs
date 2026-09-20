@@ -1,4 +1,5 @@
 use super::*;
+use crate::anthropic::summary::{NOTICES, WAKING};
 use http::StatusCode;
 use serde_json::{Value, json};
 
@@ -369,7 +370,8 @@ fn summary_names_the_last_prompt_without_reminders_or_tool_results() {
         RequestSummary {
             messages: 4,
             prompt: Some("What is in hostname.txt?".to_owned()),
-            step: Some("← Read".to_owned()),
+            step: Some("returns Read".to_owned()),
+            answers: true,
         }
     );
 }
@@ -390,7 +392,8 @@ fn summary_prompt_is_one_cut_line_and_absent_without_user_text() {
         RequestSummary {
             messages: 1,
             prompt: None,
-            step: Some("← tool".to_owned()),
+            step: Some("returns tool".to_owned()),
+            answers: true,
         }
     );
     assert_eq!(summarize(b"not json"), RequestSummary::default());
@@ -475,7 +478,7 @@ fn summary_tells_a_request_that_returns_tool_results_from_the_one_that_asks() {
         .as_bytes(),
     );
     assert_eq!(summary.prompt.as_deref(), Some("Fix the build."));
-    assert_eq!(summary.step.as_deref(), Some("← Read ×2, Bash, tool"));
+    assert_eq!(summary.step.as_deref(), Some("returns Read ×2, Bash, tool"));
 
     let summary = summarize(
         turn(json!({"role": "assistant", "content": "Partial"}))
@@ -517,7 +520,7 @@ fn summary_names_tool_results_by_what_each_call_did() {
     ]});
     assert_eq!(
         summarize(body.to_string().as_bytes()).step.as_deref(),
-        Some("← Bash Run the tests, Read summary.rs, Grep fn summarize +2 more")
+        Some("returns Bash Run the tests, Read summary.rs, Grep fn summarize +2 more")
     );
 
     let body = json!({"model": "m", "messages": [
@@ -529,7 +532,7 @@ fn summary_names_tool_results_by_what_each_call_did() {
     ]});
     assert_eq!(
         summarize(body.to_string().as_bytes()).step.as_deref(),
-        Some("← Bash git status")
+        Some("returns Bash git status")
     );
 }
 
@@ -591,48 +594,62 @@ fn summary_reads_claude_code_notices_as_what_they_are() {
     assert_eq!(summary.prompt.as_deref(), Some("! git status"));
     assert_eq!(summary.step, None);
 
-    for (notice, label) in [
-        (
-            "Stop hook feedback:\n[ship it]: not done yet",
-            "hook feedback",
-        ),
-        ("Goal check-in: «ship it» is still active", "goal check-in"),
-        (
-            "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>",
-            "task notification",
-        ),
+    // What a notice does to the turn: one Claude Code adds to a turn already
+    // running leaves its prompt naming what the request is for; one that wakes
+    // the model with nothing typed opens a turn of its own, and the prompt
+    // above it belongs to the turn before.
+    for (notice, label, wakes) in [
         (
             "<local-command-stdout>Set effort level to high</local-command-stdout>",
             "command output",
-        ),
-        (
-            "This session is being continued from a previous conversation that ran out of context.\n\nSummary: ...",
-            "compaction summary",
+            false,
         ),
         (
             "Base directory for this skill: /home/u/.claude/skills/diagnose\n\n# Diagnose",
             "skill",
-        ),
-        (
-            "Another Claude session sent a message:\n<agent-message from=\"a1\">\n[Subagent hand-back] report",
-            "agent message",
-        ),
-        ("Continue from where you left off.", "continue"),
-        (
-            "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
-            "continue",
+            false,
         ),
         (
             "[Image: original 1400x2175, displayed at 1287x2000. Multiply coordinates by 1.09 to map to original image.]",
             "image note",
+            false,
         ),
         (
             "<ide_opened_file>The user opened the file /w/CLAUDE.md in the IDE.</ide_opened_file>",
             "ide context",
+            false,
         ),
         (
             "<ide_selection>The user selected lines 1 to 3.</ide_selection>",
             "ide context",
+            false,
+        ),
+        (
+            "Stop hook feedback:\n[ship it]: not done yet",
+            "hook feedback",
+            true,
+        ),
+        (
+            "Goal check-in: «ship it» is still active",
+            "goal check-in",
+            true,
+        ),
+        ("A session-scoped Stop hook is now active", "goal set", true),
+        (
+            "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>",
+            "task notification",
+            true,
+        ),
+        ("Continue from where you left off.", "continue", true),
+        (
+            "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
+            "continue",
+            true,
+        ),
+        (
+            "Another Claude session sent a message:\n\nready",
+            "agent message",
+            true,
         ),
     ] {
         let summary = body(json!([
@@ -640,13 +657,27 @@ fn summary_reads_claude_code_notices_as_what_they_are() {
             {"role": "assistant", "content": "Done."},
             {"role": "user", "content": notice}
         ]));
-        assert_eq!(
-            summary.prompt.as_deref(),
-            Some("Fix the build."),
-            "{notice}"
-        );
+        let kept = (!wakes).then_some("Fix the build.");
+        assert_eq!(summary.prompt.as_deref(), kept, "{notice}");
         assert_eq!(summary.step.as_deref(), Some(label), "{notice}");
+        assert!(!summary.answers, "{notice}");
     }
+
+    // The same notice delivered with tool results is the running turn being
+    // told something, not a turn of its own.
+    let summary = body(json!([
+        {"role": "user", "content": "Fix the build."},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+            {"type": "text", "text": "<task-notification>\n<status>completed</status>\n</task-notification>"}
+        ]}
+    ]));
+    assert_eq!(summary.prompt.as_deref(), Some("Fix the build."));
+    assert_eq!(
+        summary.step.as_deref(),
+        Some("returns Edit · task notification")
+    );
 
     let summary = body(json!([
         {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context."},
@@ -657,7 +688,10 @@ fn summary_reads_claude_code_notices_as_what_they_are() {
         ]}
     ]));
     assert_eq!(summary.prompt, None, "a compaction summary is no prompt");
-    assert_eq!(summary.step.as_deref(), Some("← Edit · task notification"));
+    assert_eq!(
+        summary.step.as_deref(),
+        Some("returns Edit · task notification")
+    );
 
     let summary = body(json!([
         {"role": "user", "content": "please explain what <task-notification> means"}
@@ -698,6 +732,54 @@ fn summary_reads_past_messages_and_blocks_it_cannot_make_sense_of() {
             messages: 4,
             prompt: Some("the prompt".to_owned()),
             step: None,
+            answers: false,
         }
     );
+}
+
+/// The console reads the same notices out of a body the router never parsed
+/// for it — a recording whose `meta.json` is gone — so it carries its own copy
+/// of both tables. A copy kept by hand drifts; this is what holds it.
+#[test]
+fn the_console_carries_the_same_notice_tables() {
+    const SCRIPT: &str = include_str!("../server/handlers/console/assets/recordings.js");
+
+    let expected: Vec<&str> = NOTICES
+        .iter()
+        .flat_map(|(start, label)| [*start, *label])
+        .collect();
+    assert_eq!(
+        js_strings(SCRIPT, "const NOTICES = ["),
+        expected,
+        "recordings.js NOTICES differs from the router's"
+    );
+    assert_eq!(
+        js_strings(SCRIPT, "const WAKING = ["),
+        WAKING,
+        "recordings.js WAKING differs from the router's"
+    );
+}
+
+/// Every double-quoted string of the array literal `opening` opens, in order.
+/// The tables it reads hold no escape, and a string carrying one would be read
+/// wrong rather than at all.
+fn js_strings<'a>(script: &'a str, opening: &str) -> Vec<&'a str> {
+    let at = script
+        .find(opening)
+        .unwrap_or_else(|| panic!("recordings.js has no `{opening}`"));
+    let body = &script[at + opening.len()..];
+    let end = body
+        .find("\n];")
+        .expect("the array literal is never closed");
+    let mut strings = Vec::new();
+    let mut rest = &body[..end];
+    while let Some(open) = rest.find('"') {
+        let after = &rest[open + 1..];
+        let close = after.find('"').expect("a string is never closed");
+        let text = &after[..close];
+        assert!(!text.contains('\\'), "escape in {text:?}: read it by hand");
+        strings.push(text);
+        rest = &after[close + 1..];
+    }
+    strings
 }

@@ -53,6 +53,9 @@ pub struct RequestRecord {
     /// [`crate::anthropic::RequestSummary`] words it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<String>,
+    /// The request returns tool results, so it carries on a turn already
+    /// running; what the console groups a turn by.
+    pub answers: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -225,6 +228,9 @@ pub struct EntrySummary {
     /// Absent for a request that carries its prompt, and in entries recorded
     /// before the field existed.
     pub step: Option<String>,
+    /// The request returns tool results; false for an entry recorded before
+    /// the field existed.
+    pub answers: bool,
     /// Claude Code's `x-claude-code-session-id` request header.
     pub session: Option<String>,
     /// `meta.json` is there but does not read as JSON, so every field above
@@ -302,6 +308,10 @@ impl BodyLog {
             messages: meta.get("messages").and_then(|v| v.as_u64()),
             prompt: text("prompt"),
             step: text("step"),
+            answers: meta
+                .get("answers")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
             session: text("session"),
             unreadable: unreadable_meta,
             name,
@@ -659,7 +669,7 @@ mod tests {
             std::fs::create_dir(&entry).unwrap();
             std::fs::write(
                 entry.join("meta.json"),
-                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "stream": true, "messages": 3, "prompt": "Read it", "step": "← Read", "session": "s-1", "request_headers": []}}"#),
+                format!(r#"{{"model": "fast", "backend": "mock", "path": "/v1/messages", "status": {status}, "outcome": "complete", "stream": true, "messages": 3, "prompt": "Read it", "step": "returns Read", "answers": true, "session": "s-1", "request_headers": []}}"#),
             )
             .unwrap();
             std::fs::write(entry.join("request.json"), "{}").unwrap();
@@ -684,7 +694,8 @@ mod tests {
         assert_eq!(newest.model.as_deref(), Some("fast"));
         assert_eq!(newest.messages, Some(3));
         assert_eq!(newest.prompt.as_deref(), Some("Read it"));
-        assert_eq!(newest.step.as_deref(), Some("← Read"));
+        assert_eq!(newest.step.as_deref(), Some("returns Read"));
+        assert!(newest.answers);
         assert_eq!(newest.stream, Some(true));
         assert_eq!(newest.session.as_deref(), Some("s-1"));
         assert!(!newest.unreadable);

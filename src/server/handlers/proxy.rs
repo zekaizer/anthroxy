@@ -472,6 +472,7 @@ fn request_record(
         messages: summary.messages,
         prompt: summary.prompt,
         step: summary.step,
+        answers: summary.answers,
     }
 }
 
