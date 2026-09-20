@@ -72,7 +72,8 @@ cargo fmt
   console and says where to look.
 - `tests/` — black-box tests:
   `proxy.rs`/`body_log.rs`/`openai.rs`/`activity.rs`/`console.rs`/`reload.rs`
-  against a mock backend in `tests/support/`, `cli.rs` against the binary.
+  against a mock backend in `tests/support/`, `cli.rs` against the binary,
+  `fuzz.rs` over every decoder that reads bytes the router did not write.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed
   docs.
