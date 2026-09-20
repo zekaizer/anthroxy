@@ -70,6 +70,8 @@ function recordings(view, opened) {
   const removeAll = h("button", { type: "button", class: "danger" }, "Delete all");
   let data = null;
   let limit = LIST_PAGE;
+  /// Which turn each drawn entry belongs to, by entry name.
+  let turns = new Map();
   const rows = new Map();
   /// Reveals the entry of a name that a group holds folded.
   const reveals = new Map();
@@ -150,6 +152,7 @@ function recordings(view, opened) {
   const narrowTo = (session) => { filter.value = session; state.recordingsFilter = session; refilter(); };
 
   const row = (e, previous) => {
+    const turn = turns.get(e.name) || { starts: true, offset: 0 };
     const remove = h("button", { type: "button", class: "small danger" }, "Delete");
     remove.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -173,9 +176,19 @@ function recordings(view, opened) {
     }, () => go("recordings", e.name),
       h("td", railCell(e.session, previous),
         fmt.time(e.at),
-        e.session ? h("div", { class: "sub" }, sessionMark(e.session, narrowTo)) : null),
-      h("td", { class: "prompt-cell" },
-        entryPrompt(e),
+        h("div", { class: "sub" },
+          e.session ? sessionMark(e.session, narrowTo) : null,
+          // Where the request sits in its turn, which the absolute time of a
+          // row among rows of other sessions does not say.
+          turn.starts ? null : [e.session ? " · " : null, `+${fmt.ms(turn.offset)}`])),
+      // The session's rail runs down the cell before this one; this one
+      // carries the turn, neutral because a turn classifies rather than
+      // judges. The row that opens a turn carries none, so a run of railed
+      // rows and the bare one they meet is one turn.
+      h("td", { class: `prompt-cell${turn.starts ? "" : " rail turn-rail"}` },
+        // A filter matches on the prompt too, so while one is on every row
+        // shows what it matched.
+        entryPrompt(e, turn.starts || Boolean(filter.value.trim())),
         h("div", { class: "sub entry-facts" }, entryFacts(e))),
       h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
       h("td", null, statusBadge(e.status)),
@@ -196,6 +209,7 @@ function recordings(view, opened) {
     }
     const needle = filter.value.trim();
     const entries = shown();
+    turns = turnsOf(entries);
     const more = h("button", { type: "button", class: "small" });
     const moreLine = h("p", { class: "note" }, more);
     // A group is one row with its attempts; both counts are in groups, so
@@ -205,7 +219,7 @@ function recordings(view, opened) {
       replace(more, `Show ${fmt.int(Math.min(LIST_PAGE, grouped.length - limit))} more of ${fmt.int(grouped.length - limit)} not shown`);
     };
     const grouped = groups(entries);
-    const drawn = table(["Time", "Prompt", "Model", "Status", "Outcome", ["On disk", "num"], ""], rowsFor(grouped.slice(0, limit), null),
+    const drawn = table(["Time", "Sends", "Model", "Status", "Outcome", ["On disk", "num"], ""], rowsFor(grouped.slice(0, limit), null),
       { empty: needle ? "No recording matches." : "No recording yet." });
     more.addEventListener("click", () => {
       const last = grouped[limit - 1];
@@ -355,12 +369,42 @@ function entryOutcome(e) {
   return [recordedOutcome(e), h("div", { class: "sub one-line", title: reason }, reason)];
 }
 
-/// The entry's prompt; for a later request of a turn, what it sends with the
-/// turn's prompt under it.
-function entryPrompt(e) {
-  if (e.step) return [h("div", { class: "mono" }, e.step), e.prompt ? h("div", { class: "sub one-line", title: e.prompt }, e.prompt) : null];
+/// What the entry sends: the prompt for the request that opens a turn, what
+/// it answers instead for every request after it. `starts` is set on the row
+/// that begins a turn in the list as drawn, which is the only one to repeat
+/// the turn's prompt: the turn's rail says which rows it is meant for.
+function entryPrompt(e, starts) {
+  if (e.step) {
+    return [h("div", { class: "mono" }, e.step),
+      starts && e.prompt ? h("div", { class: "sub one-line", title: e.prompt }, e.prompt) : null];
+  }
   if (e.prompt) return h("div", { class: "clamp" }, e.prompt);
   return h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own");
+}
+
+/// Which turn each entry of the drawn list belongs to: `{ starts, offset }`
+/// by entry name, where `starts` marks the request that opens the turn among
+/// the rows drawn and `offset` is the time since it.
+///
+/// A turn opens with a request that carries its own prompt. Claude Code also
+/// wakes the model with nothing typed — a task notification, a stop hook —
+/// and those requests carry no prompt; the first of them names the notice
+/// rather than the tool results it returns, which is what parts one woken
+/// turn from the next.
+function turnsOf(entries) {
+  const turns = new Map();
+  const open = new Map();
+  // The list is newest first; a turn is read the way it happened.
+  for (const e of [...entries].reverse()) {
+    const session = e.session || `entry:${e.name}`;
+    const prompt = e.prompt || null;
+    const held = open.get(session);
+    const answers = Boolean(e.step) && e.step.startsWith("←");
+    const starts = !held || !e.step || prompt !== held.prompt || (prompt === null && !answers);
+    if (starts) open.set(session, { at: new Date(e.at).getTime(), prompt });
+    turns.set(e.name, { starts, offset: new Date(e.at).getTime() - open.get(session).at });
+  }
+  return turns;
 }
 
 /// Message count and request id under an entry's prompt. The session is not
