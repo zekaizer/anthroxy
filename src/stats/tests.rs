@@ -515,7 +515,10 @@ fn every_model_gets_a_series_on_the_report_s_own_buckets() {
     assert_eq!(smart.iter().map(|r| r.requests).sum::<u64>(), 1);
     // The hour that held both models' absence is a zero, not a gap.
     let busy = fast.iter().position(|r| r.requests > 0).expect("fast ran");
-    assert_eq!(smart[busy].requests, 0, "a quiet bucket is present with zero");
+    assert_eq!(
+        smart[busy].requests, 0,
+        "a quiet bucket is present with zero"
+    );
     // Every bucket of every series is accounted for in the total.
     for (i, row) in report.series.iter().enumerate() {
         let per_model: u64 = report.model_series.values().map(|s| s[i].requests).sum();
