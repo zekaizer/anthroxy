@@ -55,8 +55,14 @@ cargo fmt
 
 This file stays short. Details live under `docs/` and are read only when a task needs them. When adding guidance, put it in a doc and list it here with its read-when condition.
 
+The README is for someone running the router, not for someone changing it: it stays short and sends detail here.
+
 - `docs/adr/README.md` — read before writing or changing an ADR.
 - `docs/adr/NNNN-*.md` — read the ADR covering an area before changing that area.
+- `docs/configuration.md` — read before changing `config/`, the CLI's configuration handling, or anything a configuration key controls; it is the user-facing reference for every key.
+- `docs/console.md` — read before changing what the console shows or what `server/console/`'s `/api/` routes answer.
+- `docs/http-api.md` — read before adding, removing or changing a route, a response header or an error body.
+- `docs/operating.md` — read before changing `service/`, the logs a request emits, or body capture.
 - `docs/claude-code.md` — read when a question is about what Claude Code does before the router sees a request: which models reach its picker, the context window it assumes, whether MCP tools are deferred.
 - `docs/console-design.md` — read before changing `server/console/assets/`: the token scales, the badge taxonomy, what colour is allowed to mean, and how a change is checked (`scripts/console-check`).
 - `docs/translation.md` — read before changing `ir/`, `openai/`, `translate/` or the Anthropic codecs: how an `openai` backend is served and what the IR is for.
