@@ -33,27 +33,28 @@ const REMINDER = /<system-reminder>([\s\S]*?)<\/system-reminder>/g;
 const QUEUED = "The user sent a new message while you were working:";
 /// Text blocks Claude Code adds to a user message when the user stops a turn.
 const INTERRUPTED = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"];
-/// How user text Claude Code writes itself begins, and what it is. Matched at
-/// the start only, so the user's own words that mention one stay text. Kept
-/// in step with `anthropic::summary` on the router.
+/// How user text Claude Code writes itself begins, what it is, and whether it
+/// wakes the model with nothing typed — which starts a turn of its own.
+/// Matched at the start only, so the user's own words that mention one stay
+/// text. Kept in step with `anthropic::summary` on the router.
 const NOTICES = [
-  ["<local-command-caveat>", "command output"],
-  ["<local-command-stdout>", "command output"],
-  ["<local-command-stderr>", "command output"],
-  ["<bash-stdout>", "shell output"],
-  ["<bash-stderr>", "shell output"],
-  ["<task-notification>", "task notification"],
-  ["<ide_opened_file>", "ide context"],
-  ["<ide_selection>", "ide context"],
-  ["Stop hook feedback:", "hook feedback"],
-  ["Goal check-in:", "goal check-in"],
-  ["A session-scoped Stop hook is now active", "goal set"],
-  ["This session is being continued from a previous conversation", "compaction summary"],
-  ["Base directory for this skill:", "skill"],
-  ["Another Claude session sent a message:", "agent message"],
-  ["Continue from where you left off.", "continue"],
-  ["[Your previous response had no visible output.", "continue"],
-  ["[Image: original ", "image note"],
+  ["<local-command-caveat>", "command output", false],
+  ["<local-command-stdout>", "command output", false],
+  ["<local-command-stderr>", "command output", false],
+  ["<bash-stdout>", "shell output", false],
+  ["<bash-stderr>", "shell output", false],
+  ["<task-notification>", "task notification", true],
+  ["<ide_opened_file>", "ide context", false],
+  ["<ide_selection>", "ide context", false],
+  ["Stop hook feedback:", "hook feedback", true],
+  ["Goal check-in:", "goal check-in", true],
+  ["A session-scoped Stop hook is now active", "goal set", true],
+  ["This session is being continued from a previous conversation", "compaction summary", false],
+  ["Base directory for this skill:", "skill", false],
+  ["Another Claude session sent a message:", "agent message", true],
+  ["Continue from where you left off.", "continue", true],
+  ["[Your previous response had no visible output.", "continue", true],
+  ["[Image: original ", "image note", false],
 ];
 const utf8 = new TextEncoder();
 
@@ -801,7 +802,7 @@ function lastPrompt(messages) {
     if (messages[position].role !== "user") continue;
     let text = "";
     let queued = false;
-    const pieces = typedPieces(messages[position].blocks);
+    const { pieces, wakes } = typedPieces(messages[position].blocks);
     for (const b of messages[position].blocks) {
       if (b.kind !== "text") continue;
       for (const match of [...b.text.matchAll(REMINDER), null]) {
@@ -820,6 +821,10 @@ function lastPrompt(messages) {
       }
     }
     if (text.trim()) return { position, text: text.trim(), queued };
+    // A notice that woke the model with nothing typed starts a turn of its
+    // own, unless it rides along with tool results the running turn asked
+    // for. The prompt above it belongs to the turn before this one.
+    if (wakes && !messages[position].blocks.some((b) => b.kind === "tool_result")) return null;
   }
   return null;
 }
@@ -831,7 +836,7 @@ function classifyText(text) {
   if (!text) return null;
   if (INTERRUPTED.includes(text)) return { notice: "interrupted" };
   const found = NOTICES.find(([start]) => text.startsWith(start));
-  if (found) return { notice: found[1] };
+  if (found) return { notice: found[1], wakes: found[2] };
   const name = text.startsWith("<command-name>") || text.startsWith("<command-message>") ? tagged(text, "command-name") : null;
   if (name !== null) return { prompt: `${name} ${tagged(text, "command-args") || ""}`.trim(), command: true };
   const shell = text.startsWith("<bash-input>") ? tagged(text, "bash-input") : null;
@@ -839,11 +844,13 @@ function classifyText(text) {
   return { prompt: text };
 }
 
-/// A user message's text blocks cut at their reminders, in order, each as
-/// what the user typed or null: notices, and the text a slash command expands
-/// to (right after the command, before any notice), are null.
+/// `{ pieces, wakes }`: a user message's text blocks cut at their reminders,
+/// in order, each as what the user typed or null — notices, and the text a
+/// slash command expands to (right after the command, before any notice), are
+/// null — and whether one of those notices wakes the model with nothing typed.
 function typedPieces(blocks) {
   const pieces = [];
+  let wakes = false;
   let command = false;
   for (const b of blocks) {
     if (b.kind !== "text") continue;
@@ -853,6 +860,7 @@ function typedPieces(blocks) {
       if (!piece) pieces.push(null);
       else if (piece.notice || (command && !piece.command)) {
         command = false;
+        wakes = wakes || Boolean(piece.wakes);
         pieces.push(null);
       } else {
         command = Boolean(piece.command);
@@ -862,7 +870,7 @@ function typedPieces(blocks) {
       at = match.index + match[0].length;
     }
   }
-  return pieces;
+  return { pieces, wakes };
 }
 
 /// The trimmed text between the first `<tag>` and its closing tag, or null.
