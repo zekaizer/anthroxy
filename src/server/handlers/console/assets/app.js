@@ -25,6 +25,8 @@ const state = {
   arg: null,
   timers: [],
   statsRange: "7d",
+  /// Models the statistics draw against one another, in the order picked.
+  statsCompared: [],
   envFormat: "sh",
   requestsFilter: "",
   errorsOnly: false,
@@ -1187,18 +1189,37 @@ function statsContent(data) {
         : null,
     }),
     card("Output speed", fmt.rate(total.output_tokens_per_second)));
-  const modelRows = report.models.map((row) => statsRow(row, h("td", null, h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))));
+  const compare = h("div", { class: "compare" });
+  const picks = [];
+  const drawCompare = () => {
+    markCompared(report, picks);
+    rerender(compare, comparePanel(report, drawCompare));
+  };
+  const modelRows = report.models.map((row) => {
+    const cells = [h("td", null, h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))];
+    if (row.key === UNROUTED) return statsRow(row, ...cells);
+    const tr = statsRow(row, ...cells, {
+      class: "clickable",
+      role: "button",
+      onclick: () => { toggleCompared(report, row.key); drawCompare(); },
+    });
+    picks.push({ key: row.key, tr });
+    return tr;
+  });
   const dayRows = report.days.map((row) => statsRow(row, h("td", { class: "nowrap mono" }, row.key)));
-  const headers = (first) => [first, ["Requests", "num"], ["Errors", "num"], ["Retried", "num"], ["Left", "num"],
+  const headers = (...first) => [...first, ["Requests", "num"], ["Errors", "num"], ["Retried", "num"], ["Left", "num"],
     ["First byte p50 / p95", "num"], ["Duration p50 / p95", "num"], ["Input", "num"], ["Output", "num"],
     ["Cache read", "num"], ["Cache write", "num"], ["Cache hit", "num"], ["Speed", "num"]];
+  drawCompare();
   return [
     cards,
     report.series.length
       ? [h("h3", null, `Over time, per ${BUCKET_WORDS[report.bucket] || report.bucket}`), statsCharts(report), seriesTable(report)]
       : null,
     h("h3", null, "By model"),
+    h("p", { class: "note" }, `Pick up to ${COMPARED_MAX} models to draw them against one another.`),
     table(headers("Model"), modelRows, { empty: "No request in this range." }),
+    compare,
     report.fallbacks.length
       ? [h("h3", null, "Names no route serves"),
         h("p", { class: "note" }, "Claude Code asked for these names. The default model served them, or nothing did and the request failed with 404. Give a model the name as an alias to serve it on purpose."),
@@ -1220,9 +1241,115 @@ function statsContent(data) {
   ];
 }
 
-function statsRow(row, first) {
+/// How many models the charts can hold apart at once: the series palette was
+/// validated as a set of three, and a fourth line would be a colour nobody
+/// checked against the rest.
+const COMPARED_MAX = 3;
+/// Requests no route served are a group, not a model: their latency is a
+/// 404's, so they are not offered for comparison.
+const UNROUTED = "(unrouted)";
+
+/// Models picked for the comparison, in the order picked, dropping any the
+/// range no longer holds.
+function compared(report) {
+  const has = new Set(report.models.map((row) => row.key));
+  state.statsCompared = state.statsCompared.filter((key) => has.has(key));
+  return state.statsCompared;
+}
+
+/// How a model's row says it is in the comparison, and which line in there
+/// is its own. A column of checkboxes would say the same and cost the width
+/// of one, which a table of thirteen columns does not have; the row itself is
+/// how this console has always let one be picked.
+function markCompared(report, rows) {
+  const picked = compared(report);
+  const full = picked.length >= COMPARED_MAX;
+  for (const { key, tr } of rows) {
+    const at = picked.indexOf(key);
+    tr.classList.toggle("selected", at >= 0);
+    for (let i = 1; i <= COMPARED_MAX; i++) tr.classList.toggle(`compared-${i}`, at === i - 1);
+    const barred = at < 0 && full;
+    tr.setAttribute("aria-pressed", at >= 0 ? "true" : "false");
+    tr.setAttribute("aria-disabled", barred ? "true" : "false");
+    tr.title = barred
+      ? `Comparing ${COMPARED_MAX} models at a time; drop one first`
+      : at >= 0
+        ? `Stop comparing ${key}`
+        : `Compare ${key}`;
+  }
+}
+
+/// Picks a model, or drops it. A pick past the third is refused rather than
+/// pushing one out: which one left would be the reader's guess.
+function toggleCompared(report, key) {
+  const picked = compared(report);
+  if (picked.includes(key)) {
+    state.statsCompared = picked.filter((one) => one !== key);
+  } else if (picked.length < COMPARED_MAX) {
+    state.statsCompared = [...picked, key];
+  }
+}
+
+/// Measures that are one number a bucket, which is what can be drawn for
+/// several models on one axis. A composition, such as the token split, is
+/// not among them: stacked bars for three models read as nine. Every measure
+/// here is a line, bars included: stacking three models would add them up,
+/// which answers a question nobody asked of a comparison.
+const COMPARE_CHARTS = [
+  { title: "Requests", kind: "lines", integer: true, axis: "count", format: "int", of: (row) => row.requests },
+  { title: "Error rate", kind: "lines", axis: "pct", format: "pct", of: (row) => (row.requests ? row.errors / row.requests : null) },
+  { title: "Time to first byte", subtitle: "p50", kind: "lines", axis: "ms", format: "ms", of: (row) => row.ttfb_p50_ms },
+  { title: "Output speed", subtitle: "tokens per second of streamed answers", kind: "lines", axis: "rate", format: "rate", of: (row) => row.output_tokens_per_second },
+];
+
+/// The models picked, drawn against one another. Colour means the model in
+/// here and nowhere else on the page, so the block says which models it
+/// holds and closes around them; the dashes carry the same apart for a
+/// reader the colours do not.
+function comparePanel(report, redraw) {
+  const picked = compared(report);
+  if (!picked.length) return null;
+  const keys = report.series.map((row) => row.key);
+  const series = picked.map((key, i) => ({
+    label: key,
+    cls: `s${i + 1}`,
+    dash: i,
+    values: (report.model_series[key] || []).map((row) => row),
+  }));
+  const clear = h("button", { type: "button", class: "small" ,
+    onclick: () => { state.statsCompared = []; redraw(); } }, "Clear");
+  return panel(picked.length > 1 ? "Models compared" : `Model ${picked[0]}`, clear,
+    h("div", { class: "charts" }, COMPARE_CHARTS.map((measure) => chart({
+      title: measure.title,
+      subtitle: measure.subtitle,
+      kind: measure.kind,
+      integer: measure.integer,
+      axis: axisFormat[measure.axis],
+      format: fmt[measure.format],
+      keys,
+      bucket: report.bucket,
+      series: series.map((one) => ({
+        label: one.label,
+        cls: one.cls,
+        dash: one.dash,
+        values: one.values.map(measure.of),
+      })),
+    }))));
+}
+
+/// `first` is the leading cell or cells; a trailing object is the row's own
+/// props, for a row that can be picked.
+function statsRow(row, ...first) {
+  const props = typeof first.at(-1) === "object" && !(first.at(-1) instanceof Node) ? first.pop() : null;
   const errorRate = row.requests ? row.errors / row.requests : null;
-  return h("tr", null,
+  const tr = props && props.onclick
+    ? openRow(props, props.onclick, ...cellsOf(row, first, errorRate))
+    : h("tr", props, ...cellsOf(row, first, errorRate));
+  return tr;
+}
+
+function cellsOf(row, first, errorRate) {
+  return [
     first,
     h("td", { class: "num" }, fmt.int(row.requests)),
     h("td", { class: "num" }, row.errors ? h("span", { class: "error-text" }, `${fmt.int(row.errors)} (${fmt.pct(errorRate)})`) : "0"),
@@ -1236,7 +1363,8 @@ function statsRow(row, first) {
     h("td", { class: "num" }, fmt.int(row.cache_creation_tokens)),
     h("td", { class: "num" }, fmt.pct(row.cache_hit_rate),
       row.cache_silent ? h("div", { class: "sub" }, `${fmt.int(row.cache_silent)} silent`) : null),
-    h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second)));
+    h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second)),
+  ];
 }
 
 // ---------------------------------------------------------------- charts
@@ -1269,6 +1397,7 @@ const axisFormat = {
   compact: (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(v >= 1e4 ? 0 : 1)}K` : String(Math.round(v))),
   ms: (v) => (v >= 1000 ? `${(v / 1000).toFixed(v % 1000 ? 1 : 0)} s` : `${Math.round(v)} ms`),
   rate: (v) => (v < 10 && v % 1 ? v.toFixed(1) : String(Math.round(v))),
+  pct: (v) => `${(v * 100).toFixed(v < 0.1 ? 1 : 0)}%`,
 };
 
 /// Four ticks or so on clean numbers from zero.
@@ -1466,7 +1595,7 @@ function drawChart(plot, tip, spec, width) {
           marks.append(svg("circle", { class: `dot fill-${series.cls}`, cx: cx(i), cy: y(v), r: 4 }));
         }
       });
-      if (d) marks.prepend(svg("path", { class: `line stroke-${series.cls}`, d }));
+      if (d) marks.prepend(svg("path", { class: `line stroke-${series.cls}${series.dash ? ` dash-${series.dash}` : ""}`, d }));
     }
   }
 

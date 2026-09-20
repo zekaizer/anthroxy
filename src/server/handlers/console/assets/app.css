@@ -169,6 +169,7 @@ input[type="checkbox"]::before {
   background: #fff;
   transform: scale(0);
 }
+input[type="checkbox"]:disabled { opacity: 0.55; cursor: default; }
 input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
 input[type="checkbox"]:checked::before { transform: scale(1); }
 
@@ -313,6 +314,17 @@ tr.clickable:hover td { background: var(--surface-hover); }
 tr.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 tr.selected td { background: var(--accent-soft); }
 tr.selected td:first-child { box-shadow: inset 2px 0 var(--accent); }
+/* The comparison stands off the table it was picked from by what every other
+   part of the page stands off the one before it. Empty while nothing is
+   picked, where a margin would be a gap with nothing in it. */
+.compare:not(:empty) { margin-top: var(--space-4); }
+/* A model picked for the comparison is marked in the colour of its own line
+   down there, so the row and the line are read as one thing. */
+tr.compared-1 td:first-child { box-shadow: inset 2px 0 var(--series-1); }
+tr.compared-2 td:first-child { box-shadow: inset 2px 0 var(--series-2); }
+tr.compared-3 td:first-child { box-shadow: inset 2px 0 var(--series-3); }
+tr[aria-disabled="true"] { cursor: default; }
+tr[aria-disabled="true"] td:first-child strong { opacity: 0.55; }
 /* A request sent again unchanged, folded under the one it repeats. */
 tr.attempt td { color: var(--muted); }
 tr.attempt td:first-child { box-shadow: inset 2px 0 var(--line); padding-left: var(--space-5); }
@@ -511,6 +523,10 @@ figure.chart figcaption { display: flex; flex-wrap: wrap; align-items: baseline;
 .chart .fill-s2 { fill: var(--series-2); }
 .chart .fill-s3 { fill: var(--series-3); }
 .chart .fill-crit { fill: var(--critical); }
+/* A second and third line are told apart by their dashes as well as their
+   colour, for the reader the colours do not reach. */
+.chart .line.dash-1 { stroke-dasharray: 7 4; }
+.chart .line.dash-2 { stroke-dasharray: 2 4; }
 .chart .stroke-s1 { stroke: var(--series-1); }
 .chart .stroke-s2 { stroke: var(--series-2); }
 .chart .stroke-s3 { stroke: var(--series-3); }
