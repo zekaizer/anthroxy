@@ -165,6 +165,12 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   still verified end to end; a TLS-intercepting proxy needs its CA (see the
   previous bullet). See ADR-0012.
 
+- `upstream.retries` sends a request again only when the backend never saw it:
+  a connection that was refused or reset, or a status listed in
+  `retry_on_status`. The wait before a retry is `retry_backoff`, doubled on each
+  further attempt and never longer than 30 seconds, so a generous retry count
+  cannot put a request to sleep for hours.
+
 ### Statistics on disk
 
 - `[stats]` writes `requests-YYYY-MM-DD.jsonl` (UTC dates) owner-only under

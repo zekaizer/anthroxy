@@ -7,11 +7,15 @@ use http::StatusCode;
 
 use crate::config::UpstreamConfig;
 
+/// Longest wait before a retry. The delay doubles per failure; without a
+/// ceiling a generous `upstream.retries` puts a request to sleep for days.
+pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetryPolicy {
     /// Attempts after the first one.
     pub max_retries: u32,
-    /// Delay before the first retry; doubles per retry.
+    /// Delay before the first retry; doubles per retry, up to [`MAX_BACKOFF`].
     pub backoff: Duration,
     pub retry_on_status: Vec<u16>,
 }
@@ -63,7 +67,7 @@ impl RetryPolicy {
             return Decision::GiveUp;
         }
         let factor = 2u32.saturating_pow(failure.saturating_sub(1));
-        Decision::Retry(self.backoff.saturating_mul(factor))
+        Decision::Retry(self.backoff.saturating_mul(factor).min(MAX_BACKOFF))
     }
 }
 

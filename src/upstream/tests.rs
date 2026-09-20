@@ -391,3 +391,26 @@ fn ca_certificate_must_be_a_readable_pem_file() {
 
     assert!(http_client(&UpstreamConfig::default(), &Default::default()).is_ok());
 }
+
+#[test]
+fn the_backoff_has_a_ceiling() {
+    let policy = RetryPolicy {
+        max_retries: 20,
+        backoff: Duration::from_secs(1),
+        retry_on_status: vec![503],
+    };
+    // Doubling unchecked, the tenth failure would wait over eight minutes and
+    // the twentieth six days: a request nobody is still waiting for.
+    for failure in 1..=policy.max_retries {
+        let Decision::Retry(delay) = policy.on_status(failure, StatusCode::SERVICE_UNAVAILABLE)
+        else {
+            panic!("failure {failure} gave up");
+        };
+        assert!(delay <= MAX_BACKOFF, "failure {failure} waits {delay:?}");
+    }
+    assert_eq!(
+        policy.on_status(4, StatusCode::SERVICE_UNAVAILABLE),
+        Decision::Retry(Duration::from_secs(8)),
+        "below the ceiling it still doubles"
+    );
+}
