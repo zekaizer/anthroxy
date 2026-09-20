@@ -386,16 +386,19 @@ td.model .sub { white-space: nowrap; }
 }
 /* The session as a rail down a row's first cell. A run of rows in one session
    shares a colour and so reads as one bar, notched where the run starts so two
-   runs the palette gave the same hue still part; a hover lifts one session's
-   rail wherever it appears. Colour here classifies rather than judges, which
-   is the badge taxonomy's one standing exception, held to the rail and the
-   chip; the number beside it is what carries the identity for a reader who
-   cannot see the colour or meets it a second time once the palette wraps.
-   Classes, not inline style: CSP. */
+   runs the palette gave the same hue still part; the rails stand back until a
+   hover brings one session's forward wherever it appears. Colour here
+   classifies rather than judges, which is the badge taxonomy's one standing
+   exception, held to the rail and the chip; the number beside it is what
+   carries the identity for a reader who cannot see the colour or meets it a
+   second time once the palette wraps. Classes, not inline style: CSP. */
 td.rail { position: relative; }
-td.rail::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--space-1); background: var(--line); }
+td.rail::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--space-1); background: var(--line); opacity: 0.55; }
 td.rail-start::before { top: var(--space-1); }
-td.rail.lit::before { width: var(--space-2); }
+/* Hovering a session brings its rail forward by colour, not by size: a rail
+   that grew moved the text beside it, and the run one is reading is the last
+   thing that should shift. */
+td.rail.lit::before { opacity: 1; }
 td.rail.hue-252::before { background: hsl(252, 48%, 62%); }
 td.rail.hue-70::before  { background: hsl(70, 48%, 46%); }
 td.rail.hue-288::before { background: hsl(288, 48%, 64%); }
