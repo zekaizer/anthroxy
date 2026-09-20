@@ -438,13 +438,18 @@ async function inspect(target, name, files, neighbors, listed) {
       const file = exchange.files[state.recordingPart];
       rerender(body, state.recordingView === "raw" ? rawView(exchange, file) : sectionsView(exchange, state.recordingPart));
     };
+    exchange.redraw = draw;
+    // Both step through the list as filtered, which is what a reader who
+    // left a filter on has to be told before a gap reads as a lost recording.
+    const filtered = state.recordingsFilter.trim();
     const step = (label, entry) => h("button", {
       type: "button",
       class: "small",
       disabled: !entry,
-      title: entry ? entry.prompt || entry.request_id : null,
+      title: [entry ? entry.step || entry.prompt || entry.request_id : null,
+        filtered ? `within the filter "${filtered}"` : null].filter(Boolean).join(" · ") || null,
       onclick: () => go("recordings", entry.name),
-    }, label);
+    }, filtered ? `${label} (filtered)` : label);
     const title = exchange.meta ? exchange.meta.request_id : name;
     rerender(target, panel(`Recording ${title}`, [step("Newer", neighbors.newer), step("Older", neighbors.older), close],
       facts,
@@ -540,15 +545,19 @@ function summaryFacts(exchange) {
   // it, and the tokens wait for that. Once folded it stays folded.
   const file = exchange.files.response;
   const foldable = file && file.name !== "response.bin";
-  const read = state.recordingPart === "response" && state.recordingView === "sections";
   const heavy = foldable
     && file.text.length > SUMMARY_FOLD_CHARS
-    && !read
     && !("response" in exchange.parsed);
   const response = foldable && !heavy ? parsedOnce(exchange, "response", () => foldResponse(file, exchange.dialect)) : null;
   const usage = response && !(response instanceof Error) && response.usage ? usageText(response.usage) : null;
   return h("dl", { class: "facts" },
     fact("Request", `${m.method} ${m.path}${m.stream ? " (stream)" : ""}, ${fmt.time(m.received_at)}`),
+    // The line the list draws this recording by, so what a reader clicked is
+    // the first thing the panel says.
+    m.step ? fact("Sends", h("span", { class: "mono" }, m.step)) : null,
+    fact("Prompt", m.prompt
+      ? h("div", { class: "clamp" }, m.prompt)
+      : h("span", { class: "muted" }, m.step ? "none: the model was woken with nothing typed" : "none")),
     m.session ? fact("Session", sessionFact(m.session)) : null,
     fact("Route", [h("span", { class: "mono" }, route.join(" ")), ` on ${m.backend}`]),
     fact("Result", [statusBadge(m.status), " ", recordedOutcome(m), m.outcome && m.outcome !== "complete" ? ` ${m.outcome}` : "",
@@ -558,7 +567,19 @@ function summaryFacts(exchange) {
     fact("Size", `request ${fmt.bytes(exchange.files.request ? exchange.files.request.bytes : null)}, response ${fmt.bytes(m.response_bytes)}`),
     usage ? fact("Tokens", usage) : null,
     usage ? cacheFact(response.usage) : null,
-    heavy ? fact("Tokens", h("span", { class: "muted" }, "counted when the response is read in Sections")) : null);
+    heavy ? fact("Tokens", countTokens(exchange)) : null);
+}
+
+/// Folding a recorded stream costs a JSON.parse per event. Past
+/// [`SUMMARY_FOLD_CHARS`] a reader asks for it rather than paying for it on
+/// the way to something else.
+function countTokens(exchange) {
+  const button = h("button", { type: "button", class: "small" }, "Count tokens");
+  button.addEventListener("click", () => {
+    parsedOnce(exchange, "response", () => foldResponse(exchange.files.response, exchange.dialect));
+    exchange.redraw();
+  });
+  return [button, h("span", { class: "muted" }, ` ${fmt.bytes(exchange.files.response.bytes)} of events to fold`)];
 }
 
 function rawView(exchange, file) {
@@ -602,10 +623,12 @@ function requestView(exchange) {
     // `filters: false`: Find reaches inside both of these, but their items
     // are counted under Messages, so they show their own count instead of a
     // second tally of the same hits.
-    { id: "prompt", label: "Last prompt", count: prompt ? `#${doc.messages[prompt.position].index}` : "none", items: prompt ? doc.messages.slice(prompt.position) : [], filters: false, render: (ctx) => promptSection(doc, prompt, ctx) },
+    // Counted in items like every other section: a message index here read
+    // as a count of prompts.
+    { id: "prompt", label: "Turn", count: prompt ? doc.messages.length - prompt.position : "none", items: prompt ? doc.messages.slice(prompt.position) : [], filters: false, render: (ctx) => promptSection(exchange, doc, prompt, ctx) },
     // Second, not last: where this request stops repeating the one before it
     // is what decides whether the backend read the prompt from its cache.
-    { id: "compare", label: "Cache prefix", count: exchange.earlier.length ? `${exchange.earlier.length} earlier` : "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
+    { id: "compare", label: "Cache prefix", count: exchange.earlier.length || "none", items: [], sized: false, filters: false, render: (ctx) => compareSection(exchange, doc, ctx) },
     { id: "messages", label: "Messages", count: doc.messages.length, items: doc.messages, render: (ctx) => messagesSection(doc, matching(doc.messages, ctx.needle), ctx) },
     { id: "system", label: "System", count: doc.system.length, items: doc.system, render: (ctx) => systemSection(doc, matching(doc.system, ctx.needle), ctx) },
     { id: "tools", label: "Tools", count: doc.tools.length, items: doc.tools, render: (ctx) => toolsSection(doc, matching(doc.tools, ctx.needle), ctx) },
@@ -913,8 +936,13 @@ function toolLinks(doc) {
   return { calls, results };
 }
 
-function promptSection(doc, prompt, ctx) {
-  if (!prompt) return h("p", { class: "note" }, "No user message carries a prompt.");
+function promptSection(exchange, doc, prompt, ctx) {
+  const woke = exchange.meta && exchange.meta.step;
+  if (!prompt) {
+    return h("p", { class: "note" }, woke
+      ? `This turn started with nothing typed: the request sends ${woke}. Messages holds what it carries.`
+      : "No user message carries a prompt.");
+  }
   const m = doc.messages[prompt.position];
   const after = doc.messages.slice(prompt.position + 1);
   const calls = after.reduce((n, next) => n + next.blocks.filter((b) => b.kind === "tool_use").length, 0);
@@ -1025,39 +1053,54 @@ function compareSection(exchange, doc, ctx) {
     replace(box, h("p", { class: "note" }, "No earlier recording of this Claude Code session to compare with. Where a request stops repeating the one before it is where the backend stops reading the prompt from its cache."));
     return box;
   }
-  replace(box, h("p", { class: "note" }, "Reading the session's earlier requests…"));
-  if (!exchange.parsed.earlier) exchange.parsed.earlier = earlierRequests(exchange, doc);
-  guarded(box, async () => {
-    const earlier = await exchange.parsed.earlier;
-    if (!earlier.length) {
-      replace(box, h("p", { class: "note" }, "The session's earlier recordings could not be read."));
-      return;
-    }
-    // The choice outlives the section, which Find redraws.
-    if (exchange.parsed.compareWith === undefined) {
-      exchange.parsed.compareWith = earlier.indexOf(earlier.reduce((a, b) => (b.diff.shared > a.diff.shared ? b : a)));
-    }
-    const picker = h("select", { "aria-label": "Earlier request" });
-    for (const [i, e] of earlier.entries()) {
-      const option = h("option", { value: String(i) },
-        `${fmt.clock(e.entry.at)}, ${e.entry.messages ?? "?"} message(s), shares ${fmt.pct(e.diff.shared / (e.diff.total || 1))}: ${e.entry.prompt || e.entry.request_id}`);
-      option.selected = i === exchange.parsed.compareWith;
-      picker.append(option);
-    }
-    const open = h("button", { type: "button", class: "small" }, "Open");
-    const view = h("div");
-    const draw = () => {
-      const chosen = earlier[Number(picker.value)];
-      open.onclick = () => go("recordings", chosen.entry.name);
-      replace(view, diffView(doc, chosen.doc, chosen.diff, ctx));
-    };
-    picker.addEventListener("change", () => {
-      exchange.parsed.compareWith = Number(picker.value);
+  const read = () => {
+    replace(box, h("p", { class: "note" }, "Reading the session's earlier requests…"));
+    guarded(box, async () => {
+      const earlier = await exchange.parsed.earlier;
+      if (!earlier.length) {
+        replace(box, h("p", { class: "note" }, "The session's earlier recordings could not be read."));
+        return;
+      }
+      // The choice outlives the section, which Find redraws.
+      if (exchange.parsed.compareWith === undefined) {
+        exchange.parsed.compareWith = earlier.indexOf(earlier.reduce((a, b) => (b.diff.shared > a.diff.shared ? b : a)));
+      }
+      const picker = h("select", { "aria-label": "Earlier request" });
+      for (const [i, e] of earlier.entries()) {
+        const option = h("option", { value: String(i) },
+          `${fmt.clock(e.entry.at)}, ${e.entry.messages ?? "?"} message(s), shares ${fmt.pct(e.diff.shared / (e.diff.total || 1))}: ${e.entry.step || e.entry.prompt || e.entry.request_id}`);
+        option.selected = i === exchange.parsed.compareWith;
+        picker.append(option);
+      }
+      const open = h("button", { type: "button", class: "small" }, "Open");
+      const view = h("div");
+      const draw = () => {
+        const chosen = earlier[Number(picker.value)];
+        open.onclick = () => go("recordings", chosen.entry.name);
+        replace(view, diffView(doc, chosen.doc, chosen.diff, ctx));
+      };
+      picker.addEventListener("change", () => {
+        exchange.parsed.compareWith = Number(picker.value);
+        draw();
+      });
+      replace(box, h("div", { class: "controls" }, h("label", null, "Against ", picker), open), view);
       draw();
     });
-    replace(box, h("div", { class: "controls" }, h("label", null, "Against ", picker), open), view);
-    draw();
+  };
+  // The only section that reads more files. It says what that costs and waits
+  // to be asked, so moving through the sections stays cheap.
+  if (exchange.parsed.earlier) {
+    read();
+    return box;
+  }
+  const start = h("button", { type: "button", class: "small" }, "Compare");
+  start.addEventListener("click", () => {
+    exchange.parsed.earlier = earlierRequests(exchange, doc);
+    read();
   });
+  replace(box, h("p", { class: "note" },
+    `Reads the ${exchange.earlier.length} earlier recording(s) of this session to find where this request stops repeating them. `,
+    start));
   return box;
 }
 
