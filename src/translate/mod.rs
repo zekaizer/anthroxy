@@ -11,7 +11,7 @@ mod stream;
 mod tests;
 
 pub use catalog::catalog;
-pub use error::upstream_error;
+pub use error::{failure, upstream_error};
 pub use request::request;
 pub use response::{document_events, response};
 pub use stream::Translator;

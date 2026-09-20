@@ -5,6 +5,7 @@ use bytes::Bytes;
 use futures_util::Stream;
 
 use crate::anthropic::StreamEncoder;
+use crate::ir::Failure;
 use crate::openai::ChunkDecoder;
 use crate::sse::{Frame, Parser, SseError};
 
@@ -41,8 +42,8 @@ impl<S> Translator<S> {
 
 impl<S> Translator<S> {
     fn fail(&mut self, detail: &str, out: &mut String) {
-        self.encoder
-            .error(&format!("[backend {}] {detail}", self.backend), out);
+        let failure = Failure::upstream(format!("[backend {}] {detail}", self.backend));
+        self.encoder.error(&failure, out);
     }
 
     /// Encodes the frames the parser produced; a bad frame ends the message.

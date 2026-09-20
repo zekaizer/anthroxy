@@ -128,9 +128,9 @@ fn stop_reason_defaults_to_tool_use_when_tools_were_called() {
 fn an_error_event_fails_the_fold() {
     let result = Message::from_events([
         Event::TextDelta("partial".into()),
-        Event::Error("overloaded".into()),
+        Event::Error(Failure::upstream("overloaded")),
     ]);
-    assert_eq!(result, Err("overloaded".to_owned()));
+    assert_eq!(result, Err(Failure::upstream("overloaded")));
 }
 
 #[test]

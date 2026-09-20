@@ -5,8 +5,9 @@ use std::fmt::Write;
 
 use serde_json::{Value, json};
 
+use super::error::ErrorType;
 use super::fragments::{identity, stop_reason_name, usage_json};
-use crate::ir::{Event, StopReason, Usage};
+use crate::ir::{Event, Failure, StopReason, Usage};
 
 /// Turns events into SSE frames as they arrive. Block indexes follow arrival
 /// order; a block closes when a different kind of content starts. `Done`
@@ -113,7 +114,7 @@ impl StreamEncoder {
                 self.stop = reason;
             }
             Event::Usage(usage) => self.usage = usage,
-            Event::Error(message) => self.error(&message, out),
+            Event::Error(failure) => self.error(&failure, out),
             Event::Done => self.finish(out),
         }
     }
@@ -123,7 +124,10 @@ impl StreamEncoder {
         match self.state {
             State::Closed => return,
             State::Idle => {
-                self.error("backend closed the stream without a response", out);
+                self.error(
+                    &Failure::upstream("backend closed the stream without a response"),
+                    out,
+                );
                 return;
             }
             State::Open => {}
@@ -144,13 +148,19 @@ impl StreamEncoder {
     }
 
     /// One `error` frame; `message` is shown to the user as is.
-    pub fn error(&mut self, message: &str, out: &mut String) {
+    pub fn error(&mut self, failure: &Failure, out: &mut String) {
         if self.state == State::Closed {
             return;
         }
         frame(
             "error",
-            json!({"type": "error", "error": {"type": "api_error", "message": message}}),
+            json!({
+                "type": "error",
+                "error": {
+                    "type": ErrorType::from_kind(failure.kind),
+                    "message": failure.message,
+                },
+            }),
             out,
         );
         self.state = State::Closed;
@@ -248,7 +258,7 @@ fn frame(event: &str, data: Value, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{StopReason, Usage};
+    use crate::ir::{FailureKind, StopReason, Usage};
 
     fn run(events: impl IntoIterator<Item = Event>) -> String {
         let mut e = StreamEncoder::new("fallback");
@@ -484,12 +494,19 @@ mod tests {
     }
 
     #[test]
+    fn an_error_event_carries_the_failure_kind() {
+        let mut out = String::new();
+        StreamEncoder::new("m").error(&Failure::new(FailureKind::RateLimit, "slow down"), &mut out);
+        assert!(out.contains(r#""type":"rate_limit_error""#), "{out}");
+    }
+
+    #[test]
     fn errors_close_the_stream_for_good() {
         let mut e = StreamEncoder::new("m");
         let mut out = String::new();
         e.encode(start(), &mut out);
         e.encode(Event::TextDelta("partial".into()), &mut out);
-        e.encode(Event::Error("overloaded".into()), &mut out);
+        e.encode(Event::Error(Failure::upstream("overloaded")), &mut out);
         assert!(
             out.ends_with(&frame(
                 "error",
@@ -505,11 +522,11 @@ mod tests {
         e.encode(Event::TextDelta("more".into()), &mut out);
         e.encode(Event::Done, &mut out);
         e.finish(&mut out);
-        e.error("again", &mut out);
+        e.error(&Failure::upstream("again"), &mut out);
         assert_eq!(out.len(), len, "nothing after the error");
 
         let mut before_start = String::new();
-        StreamEncoder::new("m").error("gone", &mut before_start);
+        StreamEncoder::new("m").error(&Failure::upstream("gone"), &mut before_start);
         assert_eq!(
             before_start,
             frame(
