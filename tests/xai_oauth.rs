@@ -305,15 +305,16 @@ async fn login_polls_until_token() {
 }
 
 #[test]
-fn example_and_readme_point_at_the_helper() {
+fn example_and_docs_point_at_the_helper() {
     let example = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/config/example.rs"),
     )
     .unwrap();
     assert!(example.contains("scripts/xai-oauth print"));
     assert!(example.contains("kind = \"openai\""));
-    let readme =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md"))
-            .unwrap();
-    assert!(readme.contains("scripts/xai-oauth print"));
+    let configuration = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/configuration.md"),
+    )
+    .unwrap();
+    assert!(configuration.contains("scripts/xai-oauth print"));
 }

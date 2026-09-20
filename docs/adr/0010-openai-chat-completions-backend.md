@@ -2,33 +2,135 @@
 
 ## Status
 
-accepted; the clause that a body without the text `"thinking"` is not parsed superseded by ADR-0013; "no `ping`" superseded by ADR-0014
+accepted; the clause that a body without the text `"thinking"` is not parsed
+superseded by ADR-0013; "no `ping`" superseded by ADR-0014
 
-Supersedes the body relay rules of ADR-0003 ("bodies are streamed chunk by chunk, no SSE parsing", "nothing else in the body is read") for backends with `kind = "openai"`. ADR-0003 and ADR-0009 stand unchanged for `kind = "anthropic"`.
+Supersedes the body relay rules of ADR-0003 ("bodies are streamed chunk by
+chunk, no SSE parsing", "nothing else in the body is read") for backends with
+`kind = "openai"`. ADR-0003 and ADR-0009 stand unchanged for
+`kind = "anthropic"`.
 
 ## Context
 
-The in-house model server speaks only the OpenAI Chat Completions API (`POST /v1/chat/completions`). Claude Code speaks only the Anthropic Messages API. ADR-0003 built the router on verbatim passthrough, which cannot apply here: the request body, the response body and the SSE stream all have a different shape on each side. The translation must happen in the router, per request, without buffering the stream.
+The in-house model server speaks only the OpenAI Chat Completions API
+(`POST /v1/chat/completions`). Claude Code speaks only the Anthropic Messages
+API. ADR-0003 built the router on verbatim passthrough, which cannot apply here:
+the request body, the response body and the SSE stream all have a different
+shape on each side. The translation must happen in the router, per request,
+without buffering the stream.
 
-The intent behind this feature fixes one design constraint: the translation goes through an intermediate representation (IR), so that neither wire format is expressed in terms of the other.
+The intent behind this feature fixes one design constraint: the translation goes
+through an intermediate representation (IR), so that neither wire format is
+expressed in terms of the other.
 
 ## Decision
 
-- **Backend kind.** `backends.<name>.kind` is `anthropic` (default) or `openai`. All other backend fields apply to both kinds. `anthropic_beta` on an `openai` backend is a configuration error; `drop_fields` applies to the Anthropic body before translation.
-- **Paths.** For an `openai` backend, `POST /v1/messages` goes to `<url>/v1/chat/completions`; the query string is dropped. `POST /v1/messages/count_tokens` is answered by the router with 404 `not_found_error`: the Chat Completions API has no token-counting endpoint. Claude Code calls it occasionally, logs the failure and falls back to its own estimate. `check` probes `GET /v1/models` as for any backend.
-- **Headers.** `anthropic-version` and `anthropic-beta` are not sent to an `openai` backend. Everything else follows ADR-0003.
-- **IR.** `src/ir/` holds a request model (system, messages of typed parts, tools, tool choice, sampling parameters) and a response model as a sequence of events (`Start`, `ThinkingDelta`, `TextDelta`, `ToolCallStart`, `ToolCallDelta`, `Finish`, `Usage`, `Error`, `Done`). `src/anthropic/` converts between the Messages API and the IR, `src/openai/` between the IR and Chat Completions. Only `src/translate/` composes the two; no codec names the other wire format.
-- **Request mapping.** `system` (string or blocks) becomes one system message. `text` blocks become text parts, `image` blocks become `image_url` parts with a `data:` URI, `tool_use` blocks become assistant `tool_calls`, `tool_result` blocks become `tool` messages with their text content; a tool message cannot carry images, so the images of a tool result are appended to the user message that follows it as `image_url` parts, each group labelled with its call id, and the tool message says how many follow (this is how Claude Code delivers an image it read from disk). Any other block type inside a tool result is an error as it is at message level. A block in a role that cannot carry it (`tool_use` in a user message, `tool_result` or `image` in an assistant message) is an error. `tools[].input_schema` becomes `function.parameters` (an object schema without `properties` gets an empty one, which some servers require); `tool_choice` `auto`/`any`/`tool`/`none` become `auto`/`required`/named function/`none`, and `disable_parallel_tool_use: true` becomes `parallel_tool_calls: false`. `metadata.user_id` becomes `user`; `output_config.effort` becomes `reasoning_effort` (`max` as `high`). `max_tokens`, `temperature`, `top_p`, `stop_sequences` (as `stop`) and `stream` pass through (a value of the wrong type is an error, not a default); a streaming request always carries `stream_options.include_usage = true`. Fields with no counterpart are not sent: `cache_control`, `context_management`, `top_k` and the `thinking` parameter. `thinking` and `redacted_thinking` blocks in the history are not sent either. A `document` block becomes its text when its source is plain text, and otherwise a note in its place saying what was omitted (title, media type, size): Chat Completions servers seldom accept files, and a note lets the model tell the user where a 400 would end the turn. Any other block type is a 400 `invalid_request_error` naming the type, not a silent drop.
-- **Response mapping.** The first chunk opens the message (`message_start` with zero usage). `reasoning_content` (or `reasoning`) opens a `thinking` block, `content` a `text` block, each `tool_calls` index a `tool_use` block whose `arguments` stream as `input_json_delta`. Blocks are numbered in arrival order; a block closes when a different kind of content arrives. No `ping` and no `signature_delta` are emitted. `finish_reason` `stop`/`length`/`tool_calls`/`content_filter` map to `end_turn`/`max_tokens`/`tool_use`/`refusal`; a `refusal` text streams as text; a `stop` (or missing) reason becomes `tool_use` when a `tool_use` block was emitted, `length` stays `max_tokens`. `usage` is reported once, in `message_delta`: `prompt_tokens` less `prompt_tokens_details.cached_tokens` as `input_tokens`, the cached part as `cache_read_input_tokens`, `completion_tokens` as `output_tokens`, `completion_tokens_details.reasoning_tokens` as `output_tokens_details.thinking_tokens`; the cache and thinking counters appear only when non-zero. `[DONE]` closes the message; an end of stream without it closes the message when one was opened and is an error otherwise. Non-streaming responses are folded through the same events into one message document; a document answered to a streaming request is replayed as the events it stands for, since the client reads nothing else.
-- **Errors.** A 4xx/5xx from the backend keeps its status; the body becomes an Anthropic error document whose `error.type` follows the status (400 `invalid_request_error`, 401 `authentication_error`, 403 `permission_error`, 404 `not_found_error`, 413 `request_too_large`, 429 `rate_limit_error`, anything else `api_error`) and whose message is `[backend <name>, HTTP <status>] ` followed by the backend's `error.message`, or the first 200 characters of the body. A failure inside the stream (connection lost, malformed event, an `error` frame) produces one `error` event of type `api_error` and nothing after it; the router keeps reading the upstream body for as long as the client stays connected, so the body log holds all of it unless the client hangs up first.
-- **Body log.** `request.json` is the Chat Completions body as sent, `response.*` the backend's bytes as received. The translated client-side output is not recorded.
-- **Router-made thinking blocks on the way back to Anthropic.** The `thinking` blocks this router emits carry no signature, and Claude Code stores them with an empty one. An Anthropic backend rejects such a block, and Claude Code then strips every thinking block and retries. To spare that round trip, a request to an `anthropic` backend has its unsigned (missing or empty `signature`) `thinking` blocks removed first; an assistant message left without content is removed with them. Signed and `redacted_thinking` blocks are never touched, since Anthropic needs its own back for tool use to continue. A body without the text `"thinking"` is not parsed at all, so ADR-0003's byte-for-byte relay holds for every request that does not carry one.
+- **Backend kind.** `backends.<name>.kind` is `anthropic` (default) or `openai`.
+  All other backend fields apply to both kinds. `anthropic_beta` on an `openai`
+  backend is a configuration error; `drop_fields` applies to the Anthropic body
+  before translation.
+- **Paths.** For an `openai` backend, `POST /v1/messages` goes to
+  `<url>/v1/chat/completions`; the query string is dropped.
+  `POST /v1/messages/count_tokens` is answered by the router with 404
+  `not_found_error`: the Chat Completions API has no token-counting endpoint.
+  Claude Code calls it occasionally, logs the failure and falls back to its own
+  estimate. `check` probes `GET /v1/models` as for any backend.
+- **Headers.** `anthropic-version` and `anthropic-beta` are not sent to an
+  `openai` backend. Everything else follows ADR-0003.
+- **IR.** `src/ir/` holds a request model (system, messages of typed parts,
+  tools, tool choice, sampling parameters) and a response model as a sequence of
+  events (`Start`, `ThinkingDelta`, `TextDelta`, `ToolCallStart`,
+  `ToolCallDelta`, `Finish`, `Usage`, `Error`, `Done`). `src/anthropic/`
+  converts between the Messages API and the IR, `src/openai/` between the IR and
+  Chat Completions. Only `src/translate/` composes the two; no codec names the
+  other wire format.
+- **Request mapping.** `system` (string or blocks) becomes one system message.
+  `text` blocks become text parts, `image` blocks become `image_url` parts with
+  a `data:` URI, `tool_use` blocks become assistant `tool_calls`, `tool_result`
+  blocks become `tool` messages with their text content; a tool message cannot
+  carry images, so the images of a tool result are appended to the user message
+  that follows it as `image_url` parts, each group labelled with its call id,
+  and the tool message says how many follow (this is how Claude Code delivers an
+  image it read from disk). Any other block type inside a tool result is an
+  error as it is at message level. A block in a role that cannot carry it
+  (`tool_use` in a user message, `tool_result` or `image` in an assistant
+  message) is an error. `tools[].input_schema` becomes `function.parameters` (an
+  object schema without `properties` gets an empty one, which some servers
+  require); `tool_choice` `auto`/`any`/`tool`/`none` become
+  `auto`/`required`/named function/`none`, and `disable_parallel_tool_use: true`
+  becomes `parallel_tool_calls: false`. `metadata.user_id` becomes `user`;
+  `output_config.effort` becomes `reasoning_effort` (`max` as `high`).
+  `max_tokens`, `temperature`, `top_p`, `stop_sequences` (as `stop`) and
+  `stream` pass through (a value of the wrong type is an error, not a default);
+  a streaming request always carries `stream_options.include_usage = true`.
+  Fields with no counterpart are not sent: `cache_control`,
+  `context_management`, `top_k` and the `thinking` parameter. `thinking` and
+  `redacted_thinking` blocks in the history are not sent either. A `document`
+  block becomes its text when its source is plain text, and otherwise a note in
+  its place saying what was omitted (title, media type, size): Chat Completions
+  servers seldom accept files, and a note lets the model tell the user where a
+  400 would end the turn. Any other block type is a 400 `invalid_request_error`
+  naming the type, not a silent drop.
+- **Response mapping.** The first chunk opens the message (`message_start` with
+  zero usage). `reasoning_content` (or `reasoning`) opens a `thinking` block,
+  `content` a `text` block, each `tool_calls` index a `tool_use` block whose
+  `arguments` stream as `input_json_delta`. Blocks are numbered in arrival
+  order; a block closes when a different kind of content arrives. No `ping` and
+  no `signature_delta` are emitted. `finish_reason`
+  `stop`/`length`/`tool_calls`/`content_filter` map to
+  `end_turn`/`max_tokens`/`tool_use`/`refusal`; a `refusal` text streams as
+  text; a `stop` (or missing) reason becomes `tool_use` when a `tool_use` block
+  was emitted, `length` stays `max_tokens`. `usage` is reported once, in
+  `message_delta`: `prompt_tokens` less `prompt_tokens_details.cached_tokens` as
+  `input_tokens`, the cached part as `cache_read_input_tokens`,
+  `completion_tokens` as `output_tokens`,
+  `completion_tokens_details.reasoning_tokens` as
+  `output_tokens_details.thinking_tokens`; the cache and thinking counters
+  appear only when non-zero. `[DONE]` closes the message; an end of stream
+  without it closes the message when one was opened and is an error otherwise.
+  Non-streaming responses are folded through the same events into one message
+  document; a document answered to a streaming request is replayed as the events
+  it stands for, since the client reads nothing else.
+- **Errors.** A 4xx/5xx from the backend keeps its status; the body becomes an
+  Anthropic error document whose `error.type` follows the status (400
+  `invalid_request_error`, 401 `authentication_error`, 403 `permission_error`,
+  404 `not_found_error`, 413 `request_too_large`, 429 `rate_limit_error`,
+  anything else `api_error`) and whose message is
+  `[backend <name>, HTTP <status>] ` followed by the backend's `error.message`,
+  or the first 200 characters of the body. A failure inside the stream
+  (connection lost, malformed event, an `error` frame) produces one `error`
+  event of type `api_error` and nothing after it; the router keeps reading the
+  upstream body for as long as the client stays connected, so the body log holds
+  all of it unless the client hangs up first.
+- **Body log.** `request.json` is the Chat Completions body as sent,
+  `response.*` the backend's bytes as received. The translated client-side
+  output is not recorded.
+- **Router-made thinking blocks on the way back to Anthropic.** The `thinking`
+  blocks this router emits carry no signature, and Claude Code stores them with
+  an empty one. An Anthropic backend rejects such a block, and Claude Code then
+  strips every thinking block and retries. To spare that round trip, a request
+  to an `anthropic` backend has its unsigned (missing or empty `signature`)
+  `thinking` blocks removed first; an assistant message left without content is
+  removed with them. Signed and `redacted_thinking` blocks are never touched,
+  since Anthropic needs its own back for tool use to continue. A body without
+  the text `"thinking"` is not parsed at all, so ADR-0003's byte-for-byte relay
+  holds for every request that does not carry one.
 
 ## Consequences
 
-- Every request to an `openai` backend is parsed and re-serialized; the bit-for-bit round trip of ADR-0003 is lost for this kind only.
-- The router lags the Anthropic API for this kind by design: a new block type or parameter fails with a 400 until a mapping is added, where an `anthropic` backend would relay it untouched.
-- `thinking` blocks produced by the router carry no signature; the router removes them again before an Anthropic backend sees them, so switching back costs no failed request. A signed block that another Anthropic model rejects still goes through Claude Code's own strip-and-retry.
-- Prompt caching, context management and the thinking budget are silently inactive on an `openai` backend.
-- Whether the backend accepts `stream_options`, `image_url` parts or reasoning fields is the backend's business; a backend that rejects one of them answers with its own error, which the client sees with the backend name.
-- Two wire formats are now tracked in the code base; each has one decoder and one encoder, tested against exact documents.
+- Every request to an `openai` backend is parsed and re-serialized; the
+  bit-for-bit round trip of ADR-0003 is lost for this kind only.
+- The router lags the Anthropic API for this kind by design: a new block type or
+  parameter fails with a 400 until a mapping is added, where an `anthropic`
+  backend would relay it untouched.
+- `thinking` blocks produced by the router carry no signature; the router
+  removes them again before an Anthropic backend sees them, so switching back
+  costs no failed request. A signed block that another Anthropic model rejects
+  still goes through Claude Code's own strip-and-retry.
+- Prompt caching, context management and the thinking budget are silently
+  inactive on an `openai` backend.
+- Whether the backend accepts `stream_options`, `image_url` parts or reasoning
+  fields is the backend's business; a backend that rejects one of them answers
+  with its own error, which the client sees with the backend name.
+- Two wire formats are now tracked in the code base; each has one decoder and
+  one encoder, tested against exact documents.
