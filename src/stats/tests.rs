@@ -486,3 +486,39 @@ fn a_hit_rate_counts_only_the_requests_that_reported_caching() {
     assert_eq!(report.models[0].cache_hit_rate, None);
     assert_eq!(report.models[0].cache_silent, 1);
 }
+
+/// Comparing models over time needs each model's own points on the buckets
+/// the whole report already uses, zeros included: two series read against one
+/// another only when they share an axis.
+#[test]
+fn every_model_gets_a_series_on_the_report_s_own_buckets() {
+    let now = ts("2026-09-20T12:00:00Z");
+    let records = vec![
+        record("2026-09-20T09:30:00Z", Some("fast")),
+        record("2026-09-20T09:40:00Z", Some("fast")),
+        record("2026-09-20T11:10:00Z", Some("smart")),
+    ];
+    let report = aggregate(&records, Range::Day, now);
+
+    let buckets: Vec<&str> = report.series.iter().map(|row| row.key.as_str()).collect();
+    for model in ["fast", "smart"] {
+        let series = report
+            .model_series
+            .get(model)
+            .unwrap_or_else(|| panic!("no series for {model}"));
+        let keys: Vec<&str> = series.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(keys, buckets, "{model} rides the report's own buckets");
+    }
+    let fast = &report.model_series["fast"];
+    let smart = &report.model_series["smart"];
+    assert_eq!(fast.iter().map(|r| r.requests).sum::<u64>(), 2);
+    assert_eq!(smart.iter().map(|r| r.requests).sum::<u64>(), 1);
+    // The hour that held both models' absence is a zero, not a gap.
+    let busy = fast.iter().position(|r| r.requests > 0).expect("fast ran");
+    assert_eq!(smart[busy].requests, 0, "a quiet bucket is present with zero");
+    // Every bucket of every series is accounted for in the total.
+    for (i, row) in report.series.iter().enumerate() {
+        let per_model: u64 = report.model_series.values().map(|s| s[i].requests).sum();
+        assert_eq!(per_model, row.requests, "bucket {i} adds up");
+    }
+}

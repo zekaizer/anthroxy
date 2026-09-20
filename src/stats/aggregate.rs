@@ -76,6 +76,9 @@ pub struct Report {
     /// bucket's start (RFC 3339); buckets without requests are present with
     /// zeros. Buckets are aligned to UTC midnight.
     pub series: Vec<Row>,
+    /// One series per model, on the same buckets as [`Report::series`] and in
+    /// the same order, so two models read against one another on one axis.
+    pub model_series: BTreeMap<String, Vec<Row>>,
 }
 
 /// Figures for one group. Latency percentiles come from complete, successful
@@ -181,7 +184,7 @@ pub fn aggregate(records: &[StatsRecord], range: Range, now: jiff::Timestamp) ->
             fallback.requests += 1;
             fallback.last_seen = fallback.last_seen.max(record.ts);
         }
-        let model = record.model.as_deref().unwrap_or("(unrouted)");
+        let model = model_of(record);
         models
             .entry(model.to_owned())
             .or_insert_with(|| Group::new(model, true))
@@ -195,6 +198,7 @@ pub fn aggregate(records: &[StatsRecord], range: Range, now: jiff::Timestamp) ->
             .or_insert_with(|| Group::new(&day, false))
             .add(record);
     }
+    let starts = buckets(records, range, since, now);
     let mut models: Vec<Row> = models.into_values().map(Group::finish).collect();
     models.sort_by(|a, b| b.requests.cmp(&a.requests).then_with(|| a.key.cmp(&b.key)));
     let mut fallbacks: Vec<Fallback> = fallbacks.into_values().collect();
@@ -211,12 +215,30 @@ pub fn aggregate(records: &[StatsRecord], range: Range, now: jiff::Timestamp) ->
             Range::Week => "6h",
             Range::Month | Range::All => "1d",
         },
-        series: series(records, range, since, now),
+        series: series(records.iter(), &starts, range),
+        model_series: models
+            .iter()
+            .map(|row| {
+                let key = row.key.clone();
+                let rows = series(
+                    records.iter().filter(|r| model_of(r) == key),
+                    &starts,
+                    range,
+                );
+                (key, rows)
+            })
+            .collect(),
         total: total.finish(),
         models,
         fallbacks,
         days: days.into_values().map(Group::finish).collect(),
     }
+}
+
+/// The model a record is counted under: the route it took, or `(unrouted)`
+/// for one no route served.
+fn model_of(record: &StatsRecord) -> &str {
+    record.model.as_deref().unwrap_or("(unrouted)")
 }
 
 /// The name a record asked for when no route has it as id or alias, with the
@@ -231,14 +253,15 @@ fn unserved_name(record: &StatsRecord) -> Option<(&str, Option<&str>)> {
     }
 }
 
-/// Rows per bucket from the start of the range, or the first record when the
-/// range keeps everything, through the bucket holding `now`.
-fn series(
+/// Bucket starts from the start of the range, or the first record when the
+/// range keeps everything, through the bucket holding `now`. Every series in
+/// the report rides these, so any two of them share an axis.
+fn buckets(
     records: &[StatsRecord],
     range: Range,
     since: Option<jiff::Timestamp>,
     now: jiff::Timestamp,
-) -> Vec<Row> {
+) -> Vec<i64> {
     let width = range.bucket().as_secs();
     let floor = |at: jiff::Timestamp| at.as_second().div_euclid(width) * width;
     let Some(start) = since
@@ -247,9 +270,22 @@ fn series(
     else {
         return Vec::new();
     };
-    let mut buckets: BTreeMap<i64, Group> = (start..=floor(now))
-        .step_by(width as usize)
-        .map(|second| {
+    (start..=floor(now)).step_by(width as usize).collect()
+}
+
+/// Rows for `records` on `starts`, which every caller passes unchanged: a
+/// bucket no record fell in is a zero, not a gap, or two series drawn
+/// together would not line up.
+fn series<'a>(
+    records: impl Iterator<Item = &'a StatsRecord>,
+    starts: &[i64],
+    range: Range,
+) -> Vec<Row> {
+    let width = range.bucket().as_secs();
+    let floor = |at: jiff::Timestamp| at.as_second().div_euclid(width) * width;
+    let mut groups: BTreeMap<i64, Group> = starts
+        .iter()
+        .map(|&second| {
             let key = jiff::Timestamp::from_second(second)
                 .map(|at| at.to_string())
                 .unwrap_or_default();
@@ -257,11 +293,11 @@ fn series(
         })
         .collect();
     for record in records {
-        if let Some(group) = buckets.get_mut(&floor(record.ts)) {
+        if let Some(group) = groups.get_mut(&floor(record.ts)) {
             group.add(record);
         }
     }
-    buckets.into_values().map(Group::finish).collect()
+    groups.into_values().map(Group::finish).collect()
 }
 
 /// A row being filled, with the samples its percentiles and rates need.
