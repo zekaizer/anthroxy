@@ -18,7 +18,7 @@ mod tests;
 pub use decode::{DecodeError, decode};
 pub use error::{ErrorResponse, ErrorType};
 pub use message::encode as encode_message;
-pub use models::{ModelList, ModelObject};
+pub use models::{ModelList, ModelObject, decode_models, encode_model, encode_models};
 pub use request::{PeekError, RequestPeek, peek, rewrite};
 pub use stream::StreamEncoder;
 pub use summary::{RequestSummary, summarize};

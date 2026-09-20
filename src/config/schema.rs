@@ -200,6 +200,11 @@ pub struct BackendConfig {
     /// `url`; for a gateway that serves the list off `/v1/models`.
     #[serde(default = "BackendConfig::default_models_path")]
     pub models_path: String,
+    /// Fetch `GET {url}{models_path}` and expose those ids as Anthropic model
+    /// identity. Anthropic and OpenAI list shapes both work. Implied for
+    /// `kind = "passthrough"`. Configured `[[models]]` still win on the same id.
+    #[serde(default)]
+    pub live_models: bool,
     #[serde(default)]
     pub credential: CredentialConfig,
     /// Headers set on every upstream request, overriding the client's value.

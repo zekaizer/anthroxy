@@ -1381,3 +1381,59 @@ proxy = "http://alice:p%40ss@{}"
     assert_eq!(direct.received().len(), 1);
     assert_eq!(direct.last().header("proxy-authorization"), None);
 }
+
+#[tokio::test]
+async fn passthrough_exposes_openai_shaped_model_identity() {
+    let upstream = MockUpstream::start(|req| {
+        if req.path_and_query.starts_with("/v1/models") {
+            json_response(
+                200,
+                json!({
+                    "object": "list",
+                    "data": [{
+                        "id": "grok-4",
+                        "object": "model",
+                        "created": 1700000000,
+                        "owned_by": "xai"
+                    }]
+                }),
+            )
+        } else {
+            echo(req)
+        }
+    })
+    .await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+v1_auth = "none"
+
+[backends.account]
+kind = "passthrough"
+url = "{url}"
+"#,
+        url = upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .http
+        .get(router.url("/v1/models"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(model_ids(&body), ["grok-4"]);
+    assert_eq!(body["data"][0]["type"], "model");
+    assert_eq!(body["data"][0]["display_name"], "grok-4");
+    assert!(
+        body["data"][0]["created_at"]
+            .as_str()
+            .unwrap()
+            .starts_with("2023"),
+        "{}",
+        body["data"][0]["created_at"]
+    );
+}

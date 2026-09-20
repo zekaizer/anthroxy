@@ -810,6 +810,60 @@ fn http_get(url: &str, token: Option<&str>) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn check_skips_passthrough_probe_instead_of_failing_401() {
+    use support::mock_upstream::json_response;
+    let upstream = support::MockUpstream::start(|_| {
+        json_response(
+            401,
+            serde_json::json!({
+                "type": "error",
+                "error": {"type": "authentication_error", "message": "x-api-key header is required"}
+            }),
+        )
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        with_stats_in(
+            dir.path(),
+            format!(
+                r#"
+[server]
+listen = "127.0.0.1:0"
+token = "t"
+v1_auth = "none"
+
+[backends.account]
+kind = "passthrough"
+url = "{url}"
+"#,
+                url = upstream.url()
+            ),
+        ),
+    )
+    .unwrap();
+    let path = path.to_str().unwrap().to_owned();
+    tokio::task::spawn_blocking(move || {
+        bin()
+            .args(["--config", &path, "check", "--timeout", "2s"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("(passthrough)"))
+            .stdout(predicate::str::contains("skipped"))
+            .stdout(predicate::str::contains("x-api-key").not())
+            .stdout(predicate::str::contains("backend problem").not());
+    })
+    .await
+    .unwrap();
+    assert!(
+        upstream.received().is_empty(),
+        "passthrough must not be GET /v1/models probed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn check_probes_an_openai_backend_without_anthropic_headers() {
     use support::mock_upstream::json_response;
     use support::openai::config_with_openai_backend;

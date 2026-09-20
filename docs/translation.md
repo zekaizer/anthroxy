@@ -18,6 +18,8 @@ JSON document     ◄── anthropic::encode_message ◄── ir::Message ◄�
 
 The middle column is the intermediate representation (IR, `src/ir/`). It names no wire format. The Anthropic codecs (`src/anthropic/`) know only the Messages API and the IR; the OpenAI codecs (`src/openai/`) know only Chat Completions and the IR. The one place that holds both ends is `src/translate/`, and the axum-facing glue is `src/server/handlers/openai.rs`. A backend without a kind never enters any of this: its bytes are relayed as before.
 
+`GET /v1/models` from a live origin is the same split: `openai::decode_models` or `anthropic::decode_models` → `ir::Model` → `anthropic::encode_models` (Claude Code catalog fields: `context_window`, `runtime`, `thinking`). `translate::catalog` is the only function that chooses a decoder by backend kind.
+
 ## Request
 
 1. `proxy.rs` peeks `model` and `stream`, routes, applies `drop_fields` to the Anthropic body, and hands the body to `handlers/openai.rs` when the backend is an `openai` one. `count_tokens` stops here with a 404: Chat Completions has no such call.

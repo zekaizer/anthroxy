@@ -28,6 +28,46 @@ fn error_response_serializes_to_anthropic_shape() {
 }
 
 #[test]
+fn decode_models_reads_anthropic_shape_only() {
+    let anthropic = br#"{"data":[{"id":"claude-opus-4-5","type":"model","display_name":"Opus","created_at":"2025-01-01T00:00:00Z"}]}"#;
+    let opus = decode_models(anthropic);
+    assert_eq!(opus.len(), 1);
+    assert_eq!(opus[0].id, "claude-opus-4-5");
+    assert_eq!(opus[0].display_name, "Opus");
+    assert!(opus[0].context_window.is_none());
+
+    let openai = br#"{"object":"list","data":[{"id":"grok-4","object":"model","created":1700000000,"owned_by":"xai"}]}"#;
+    assert!(
+        decode_models(openai).is_empty(),
+        "OpenAI lists belong to the OpenAI codec"
+    );
+    assert!(decode_models(b"not json").is_empty());
+}
+
+#[test]
+fn encode_model_writes_claude_code_catalog_fields() {
+    let model = crate::ir::Model {
+        id: "grok-4.6".into(),
+        display_name: "Grok 4.6".into(),
+        created_at: None,
+        context_window: Some(500_000),
+        max_output_tokens: None,
+        effort: Some(crate::ir::Effort {
+            levels: vec!["low".into(), "high".into()],
+            default: Some("high".into()),
+        }),
+    };
+    let row = encode_model(&model);
+    let json = serde_json::to_value(&row).unwrap();
+    assert_eq!(json["type"], "model");
+    assert_eq!(json["name"], "Grok 4.6");
+    assert_eq!(json["context_window"], 500000);
+    assert_eq!(json["runtime"]["max_input_tokens"], 500000);
+    assert_eq!(json["runtime"]["default_effort"], "high");
+    assert_eq!(json["thinking"]["effort_options"][0]["id"], "low");
+}
+
+#[test]
 fn model_list_fills_first_and_last() {
     let list = ModelList::all(vec![
         ModelObject::new("a", "A", "2026-01-01T00:00:00Z"),

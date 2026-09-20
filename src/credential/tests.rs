@@ -471,6 +471,14 @@ async fn json_expiry_out_of_range_is_an_error_not_a_panic() {
     }
 }
 
+#[test]
+fn json_output_accepts_xai_oauth_helper_shape() {
+    let stdout = r#"{"token":"access-from-helper","expires_at":"2099-01-01T00:00:00Z"}"#;
+    let parsed = output::parse(CommandOutput::Json, stdout).unwrap();
+    assert_eq!(parsed.secret, "access-from-helper");
+    assert!(parsed.expires_at.is_some());
+}
+
 /// The message reaches a log line, the console and the client's 502; the
 /// value the command printed may be the token itself.
 #[test]

@@ -524,6 +524,28 @@ fn models_path_defaults_to_the_anthropic_one_and_takes_an_override() {
 }
 
 #[test]
+fn live_models_defaults_off_and_allows_no_model_table() {
+    assert!(!parse(MINIMAL).unwrap().backends["local"].live_models);
+    let with_flag = MINIMAL.replace(
+        "url = \"http://127.0.0.1:1234\"",
+        "url = \"http://127.0.0.1:1234\"\nlive_models = true",
+    );
+    assert!(parse(&with_flag).unwrap().backends["local"].live_models);
+    parse(
+        r#"
+[server]
+token = "t"
+
+[backends.grok]
+kind = "openai"
+url = "https://api.x.ai"
+live_models = true
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
 fn validation_rejects_a_models_path_that_is_not_one() {
     let text = r#"
 [server]

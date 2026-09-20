@@ -23,7 +23,7 @@ pub struct Snapshot {
     /// The configuration this snapshot was built from.
     pub config: Config,
     pub registry: Registry,
-    pub live: Option<LiveCatalog>,
+    pub live: Vec<LiveCatalog>,
     pub upstream: UpstreamClient,
     pub client_token: ClientToken,
     pub max_body_bytes: usize,
@@ -56,7 +56,11 @@ impl Snapshot {
             false => None,
         };
         let registry = Registry::from_config(config)?;
-        let live = registry.passthrough().map(LiveCatalog::new);
+        let live = registry
+            .live_backends()
+            .into_iter()
+            .map(LiveCatalog::new)
+            .collect();
         Ok(Self {
             config: config.clone(),
             registry,
