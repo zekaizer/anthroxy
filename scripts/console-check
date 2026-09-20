@@ -4,7 +4,7 @@
 // a page down to the places worth opening, and the screenshot beside each
 // reading is what the judgement is made on.
 //
-//   scripts/console-check --url http://127.0.0.1:8788 --token <server.token>
+//   scripts/console-check --url http://127.0.0.1:8787 --token <server.token>
 //
 // Screenshots land in `--shots` (a temporary directory by default) and every
 // line of the report names the one it came from. `--out report.json` writes
@@ -32,7 +32,8 @@ function usage(message) {
   if (message) console.error(`console-check: ${message}`);
   console.error(`usage: console-check --url URL --token TOKEN [options]
 
-  --url URL          the router's console (default http://127.0.0.1:8788)
+  --url URL          the router's console, or CONSOLE_CHECK_URL
+                     (default http://127.0.0.1:8787, the example config's port)
   --token TOKEN      server.token, or CONSOLE_CHECK_TOKEN
   --tabs a,b         tabs to read (default ${TABS.join(",")})
   --widths 1440,430  viewport widths (default ${WIDTHS.join(",")})
@@ -46,7 +47,7 @@ function usage(message) {
 
 function options(args) {
   const opts = {
-    url: env.CONSOLE_CHECK_URL || "http://127.0.0.1:8788",
+    url: env.CONSOLE_CHECK_URL || "http://127.0.0.1:8787",
     token: env.CONSOLE_CHECK_TOKEN || null,
     tabs: TABS,
     widths: WIDTHS,

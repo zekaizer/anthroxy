@@ -96,6 +96,12 @@ the session rail and the model comparison were written:
 
     scripts/console-check --token <server.token> --shots shots/
 
+It reads the router named by `--url` or `CONSOLE_CHECK_URL`, defaulting to
+the example configuration's `127.0.0.1:8787`. Give the router it drives a
+port of its own: a check that restarts it, or fills it with requests to have
+something to look at, is not something to do to the router a session is
+using.
+
 It drives a running router across every tab, both themes and seven widths,
 and reports what it found with the screenshot each finding came from. What it
 reports is a hint, not a verdict: it can say that something is 30px tall in a
