@@ -1014,3 +1014,32 @@ fn a_backend_that_says_nothing_about_caching_is_not_one_that_cached_nothing() {
         "{events:?}"
     );
 }
+
+#[test]
+fn model_lists_give_up_their_context_window_whatever_the_server_calls_it() {
+    let rows = decode_models(
+        br#"{"data": [
+            {"id": "vllm", "max_model_len": 32768},
+            {"id": "lmstudio", "max_context_length": 131072, "loaded_context_length": 8192},
+            {"id": "openrouter", "context_length": 200000},
+            {"id": "bedrock", "max_input_tokens": 12000},
+            {"id": "plain"},
+            {"id": "odd", "max_model_len": "big"}
+        ]}"#,
+    );
+    let windows: Vec<(&str, Option<u64>)> = rows
+        .iter()
+        .map(|m| (m.id.as_str(), m.context_window))
+        .collect();
+    assert_eq!(
+        windows,
+        [
+            ("vllm", Some(32768)),
+            ("lmstudio", Some(8192)),
+            ("openrouter", Some(200000)),
+            ("bedrock", Some(12000)),
+            ("plain", None),
+            ("odd", None),
+        ]
+    );
+}

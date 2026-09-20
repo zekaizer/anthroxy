@@ -10,6 +10,8 @@ use http::{HeaderMap, HeaderValue, Method};
 use super::headers::{SecretView, SentHeader, header_text, sent_headers};
 use super::{Backend, UpstreamClient, UpstreamError, UpstreamRequest, upstream_headers};
 use crate::credential::CredentialError;
+use crate::ir::Model;
+use crate::translate;
 
 #[derive(Debug)]
 pub struct Probe {
@@ -30,21 +32,15 @@ pub enum ModelsProbe {
         latency: Duration,
         /// Response headers as received, in order.
         headers: Vec<(String, String)>,
-        models: Vec<ListedModel>,
+        models: Vec<Model>,
         detail: Option<String>,
     },
     Failed(UpstreamError),
     /// Not sent: a passthrough backend has no stored credential and the
     /// catalog is fetched with the client's Authorization at request time.
-    Skipped { reason: String },
-}
-
-/// One entry of a backend's model list.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListedModel {
-    pub id: String,
-    /// Tokens the server accepts for this model, when its list says.
-    pub context_length: Option<u64>,
+    Skipped {
+        reason: String,
+    },
 }
 
 /// Never fails: every outcome is data for the report. `client` decides the
@@ -93,16 +89,15 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
                 .map(|(name, value)| (name.to_string(), header_text(value).to_owned()))
                 .collect();
             let body = upstream.body_bytes().await.unwrap_or_default();
-            let json = serde_json::from_slice::<serde_json::Value>(&body).ok();
-            let mut models = json.as_ref().map(listed_models).unwrap_or_default();
+            let mut models = translate::models(backend.kind, &body);
             let detail = if (200..300).contains(&status) {
                 None
             } else {
-                Some(error_detail(json.as_ref(), &body))
+                Some(translate::failure(backend.kind, Some(status), &body).message)
             };
             if detail.is_none()
                 && !models.is_empty()
-                && models.iter().all(|m| m.context_length.is_none())
+                && models.iter().all(|m| m.context_window.is_none())
             {
                 fill_native_context(client, backend, &mut models).await;
             }
@@ -125,11 +120,7 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
 
 /// LM Studio gives context lengths only in its native `/api/v0/models`.
 /// Any failure there leaves them unknown.
-async fn fill_native_context(
-    client: &UpstreamClient,
-    backend: &Backend,
-    models: &mut [ListedModel],
-) {
+async fn fill_native_context(client: &UpstreamClient, backend: &Backend, models: &mut [Model]) {
     let Ok(upstream) = client.send(list_request(backend, "/api/v0/models")).await else {
         return;
     };
@@ -139,15 +130,12 @@ async fn fill_native_context(
     let Ok(body) = upstream.body_bytes().await else {
         return;
     };
-    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return;
-    };
-    let native: HashMap<String, u64> = listed_models(&json)
+    let native: HashMap<String, u64> = translate::models(backend.kind, &body)
         .into_iter()
-        .filter_map(|m| Some((m.id, m.context_length?)))
+        .filter_map(|m| Some((m.id, m.context_window?)))
         .collect();
     for model in models {
-        model.context_length = native.get(&model.id).copied();
+        model.context_window = native.get(&model.id).copied();
     }
 }
 
@@ -176,53 +164,6 @@ pub async fn probe_all<'a>(
     backends: impl IntoIterator<Item = &'a Backend>,
 ) -> Vec<Probe> {
     futures_util::future::join_all(backends.into_iter().map(|b| probe(client, b))).await
-}
-
-/// `error.message` of an Anthropic error, else the first line of the body.
-fn error_detail(json: Option<&serde_json::Value>, body: &[u8]) -> String {
-    json.and_then(|j| j.pointer("/error/message"))
-        .and_then(|m| m.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            let text = String::from_utf8_lossy(body);
-            text.lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(160)
-                .collect()
-        })
-}
-
-/// Fields model lists use for the context window, most specific first: LM
-/// Studio's loaded context before its maximum, vLLM's `max_model_len`.
-const CONTEXT_FIELDS: [&str; 6] = [
-    "loaded_context_length",
-    "max_model_len",
-    "context_length",
-    "max_context_length",
-    "context_window",
-    "max_input_tokens",
-];
-
-/// `data[]` of either an Anthropic or an OpenAI model list.
-fn listed_models(body: &serde_json::Value) -> Vec<ListedModel> {
-    body.get("data")
-        .and_then(|d| d.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|m| {
-                    Some(ListedModel {
-                        id: m.get("id")?.as_str()?.to_owned(),
-                        context_length: CONTEXT_FIELDS
-                            .iter()
-                            .find_map(|field| m.get(*field)?.as_u64()),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -456,43 +397,8 @@ mod tests {
         }
     }
 
-    fn ids(models: Vec<ListedModel>) -> Vec<String> {
+    fn ids(models: Vec<Model>) -> Vec<String> {
         models.into_iter().map(|m| m.id).collect()
-    }
-
-    #[test]
-    fn extracts_ids_from_both_list_shapes() {
-        let anthropic =
-            serde_json::json!({"data": [{"id": "a", "type": "model"}], "has_more": false});
-        let openai = serde_json::json!({"object": "list", "data": [{"id": "x", "object": "model"}, {"id": "y"}]});
-        assert_eq!(ids(listed_models(&anthropic)), vec!["a"]);
-        assert_eq!(ids(listed_models(&openai)), vec!["x", "y"]);
-        assert!(listed_models(&serde_json::json!({"error": "nope"})).is_empty());
-    }
-
-    #[test]
-    fn context_lengths_come_from_the_fields_servers_use() {
-        let list = serde_json::json!({"data": [
-            {"id": "vllm", "max_model_len": 32768},
-            {"id": "lmstudio", "max_context_length": 131072, "loaded_context_length": 8192},
-            {"id": "openrouter", "context_length": 200000},
-            {"id": "plain"},
-            {"id": "odd", "max_model_len": "big"}
-        ]});
-        let context: Vec<(String, Option<u64>)> = listed_models(&list)
-            .into_iter()
-            .map(|m| (m.id, m.context_length))
-            .collect();
-        assert_eq!(
-            context,
-            [
-                ("vllm".to_owned(), Some(32768)),
-                ("lmstudio".to_owned(), Some(8192)),
-                ("openrouter".to_owned(), Some(200000)),
-                ("plain".to_owned(), None),
-                ("odd".to_owned(), None)
-            ]
-        );
     }
 
     /// A backend listing `gemma` without a context length, with LM Studio's
@@ -546,17 +452,11 @@ mod tests {
                 detail: None,
                 ..
             }) => assert_eq!(
-                models,
-                [
-                    ListedModel {
-                        id: "gemma".into(),
-                        context_length: Some(32768)
-                    },
-                    ListedModel {
-                        id: "other".into(),
-                        context_length: None
-                    }
-                ]
+                models
+                    .iter()
+                    .map(|m| (m.id.as_str(), m.context_window))
+                    .collect::<Vec<_>>(),
+                [("gemma", Some(32768)), ("other", None)]
             ),
             other => panic!("{other:?}"),
         }
@@ -572,20 +472,10 @@ mod tests {
                 detail: None,
                 ..
             }) => assert!(
-                models.iter().all(|m| m.context_length.is_none()),
+                models.iter().all(|m| m.context_window.is_none()),
                 "{models:?}"
             ),
             other => panic!("{other:?}"),
         }
-    }
-
-    #[test]
-    fn error_detail_prefers_anthropic_message() {
-        let json = serde_json::json!({"type":"error","error":{"type":"invalid_request_error","message":"anthropic-version header is required"}});
-        assert_eq!(
-            error_detail(Some(&json), b"{}"),
-            "anthropic-version header is required"
-        );
-        assert_eq!(error_detail(None, b"<html>\nnope"), "<html>");
     }
 }

@@ -11,6 +11,7 @@ const CONTEXT_FIELDS: &[&str] = &[
     "context_length",
     "max_context_length",
     "context_window",
+    "max_input_tokens",
 ];
 
 #[derive(Deserialize)]

@@ -14,9 +14,10 @@ use serde_json::{Value, json};
 use super::{error, live};
 use crate::anthropic::ErrorType;
 use crate::config::snippet;
+use crate::ir::Model;
 use crate::routing::Registry;
 use crate::server::{AppState, RequestId, Snapshot};
-use crate::upstream::probe::{ListedModel, ModelsProbe, probe_all};
+use crate::upstream::probe::{ModelsProbe, probe_all};
 use crate::upstream::{RetryPolicy, UpstreamClient, http_client};
 
 /// Per backend, like `anthroxy check --timeout`.
@@ -75,7 +76,7 @@ pub async fn probe(
                             .collect();
                         json!({
                             "id": model.id,
-                            "context_length": model.context_length,
+                            "context_length": model.context_window,
                             "configured_as": configured,
                             "snippet": snippet::model_block(&backend.name, &model.id),
                         })
@@ -123,7 +124,7 @@ pub async fn probe(
 /// one: the value Claude Code needs so it compacts in time for every model a
 /// session may switch to.
 pub fn max_context_tokens(
-    listed: &HashMap<String, Vec<ListedModel>>,
+    listed: &HashMap<String, Vec<Model>>,
     registry: &Registry,
 ) -> Option<u64> {
     registry
@@ -134,7 +135,7 @@ pub fn max_context_tokens(
                 .get(&route.backend.name)?
                 .iter()
                 .find(|model| model.id == route.upstream_model)?
-                .context_length
+                .context_window
         })
         .min()
 }
