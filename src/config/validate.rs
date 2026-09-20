@@ -304,13 +304,14 @@ fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
 
 /// Headers the router itself never forwards, so naming one to drop says
 /// nothing.
-const ALREADY_DROPPED: [&str; 6] = [
+const ALREADY_DROPPED: [&str; 7] = [
     "host",
     "content-length",
     "authorization",
     "x-api-key",
     "accept-encoding",
     "connection",
+    "proxy-authorization",
 ];
 
 /// Headers the backend needs to read the request the router sends it.

@@ -58,6 +58,7 @@ fn client_headers() -> HeaderMap {
         ("content-length", "123"),
         ("connection", "keep-alive"),
         ("transfer-encoding", "chunked"),
+        ("proxy-authorization", "Basic cHJveHk6c2VjcmV0"),
         ("accept-encoding", "gzip"),
         ("x-api-key", "client-token"),
         ("authorization", "Bearer client-token"),
@@ -86,6 +87,7 @@ fn upstream_headers_drop_hop_by_hop_and_client_auth() {
         "content-length",
         "connection",
         "transfer-encoding",
+        "proxy-authorization",
         "accept-encoding",
         "x-api-key",
         "authorization",
@@ -197,6 +199,7 @@ fn every_header_the_backend_does_not_see_says_why() {
     assert_eq!(reason("host").1, DropReason::Framing);
     assert_eq!(reason("content-length").1, DropReason::Framing);
     assert_eq!(reason("connection").1, DropReason::Framing);
+    assert_eq!(reason("proxy-authorization").1, DropReason::Framing);
     assert_eq!(reason("accept-encoding").1, DropReason::Uncompressed);
     assert_eq!(reason("anthropic-version").1, DropReason::BackendKind);
     assert_eq!(reason("anthropic-beta").1, DropReason::BackendKind);
@@ -290,6 +293,7 @@ fn response_headers_drop_framing_only() {
     up.insert("content-length", HeaderValue::from_static("10"));
     up.insert("transfer-encoding", HeaderValue::from_static("chunked"));
     up.insert("connection", HeaderValue::from_static("close"));
+    up.insert("proxy-authenticate", HeaderValue::from_static("Basic"));
     up.insert("request-id", HeaderValue::from_static("req_up"));
     up.insert(
         "anthropic-ratelimit-requests-remaining",

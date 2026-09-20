@@ -19,6 +19,8 @@ pub static X_ROUTER_UPSTREAM_MODEL: HeaderName =
     HeaderName::from_static("x-anthroxy-upstream-model");
 static KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 static PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
+static PROXY_AUTHENTICATE: HeaderName = HeaderName::from_static("proxy-authenticate");
+static PROXY_AUTHORIZATION: HeaderName = HeaderName::from_static("proxy-authorization");
 
 /// A backend name or model id as a header value. Validation guarantees they
 /// are header-safe.
@@ -26,11 +28,15 @@ pub fn header_value(text: &str) -> HeaderValue {
     HeaderValue::from_str(text).expect("validated header-safe")
 }
 
-/// Hop-by-hop headers belong to one connection and are never relayed.
+/// Hop-by-hop headers belong to one connection and are never relayed. The
+/// proxy pair is the client's business with its own proxy, not a backend's,
+/// and the backend's is not the client's.
 fn is_hop_by_hop(name: &HeaderName) -> bool {
     *name == CONNECTION
         || *name == KEEP_ALIVE
         || *name == PROXY_CONNECTION
+        || *name == PROXY_AUTHENTICATE
+        || *name == PROXY_AUTHORIZATION
         || *name == TE
         || *name == TRAILER
         || *name == TRANSFER_ENCODING
