@@ -75,15 +75,7 @@ and filter and range state in the URL.
 ## Checking a change
 
 `cargo test` does not see any of this: the assets are served as files and the
-tests are black-box HTTP. A change to `app.css`, `app.js` or `recordings.js`
-is checked by driving the page.
-
-**Measure it; do not look at it.** Every fault this console has shipped was
-one a screenshot did not show and a number would have: a line 30px tall
-beside lines of 17.4, a detail panel 30px wider than its box, a colour that
-lost to a rule with one more class in it, a table column that pushed a table
-into a scroll, a section flush against the one above it. A screenshot is for
-the last question — does this read well — and answers none of the others.
+tests are black-box HTTP.
 
 **Read the diff against this page first.** It is the cheapest check and the
 one most often skipped, and both halves of it were broken repeatedly while
@@ -100,33 +92,36 @@ the session rail and the model comparison were written:
 - **Colour still means judgement.** A new badge that names a category is
   `kind`. The session is the one exception and stays one.
 
-Then drive the page with a headless browser and assert:
+**Then run `scripts/console-check`, and read the screenshots it took.**
 
-1. **Overflow, everywhere, at every width.** `scrollWidth - clientWidth` for
-   the document *and* for every `.table-wrap`, `.detail` and `pre`. A page
-   that does not scroll can still hold a table that does. Widths: 1920, 1440,
-   1280, 1100, 900, 700, 430.
-2. **A new element against the ones beside it.** Its computed `font`,
-   `line-height`, `height` and `color` next to its neighbours' in the same
-   line. This is what catches a control that brought a component's height
-   with it, and a colour lost to specificity.
-3. **Spacing against the page's own.** The gap between a new block and its
-   neighbours, against the gaps between the blocks already there. The number
-   to match is whatever the rest of the page uses, not a number that looks
-   about right.
-4. **Both themes**, every assertion.
-5. **Every state the change has**: at rest, hover, selected, disabled, focus.
-   Note that `tr.clickable:hover` outranks `tr.selected`, so a selected row
-   under the pointer takes the hover colour; that is the console's own
-   behaviour and not a fault.
-6. **No page exceptions and no console errors**, collected while driving.
-7. **Redraws, if anything redraws on a poll.** Frames over 50ms, whether the
-   panel node survives, whether any frame sees an empty body, whether what
-   the reader opened and scrolled to is still open and scrolled.
+    scripts/console-check --token <server.token> --shots shots/
 
-**A number that was already there is not a regression.** Before calling one,
-stash the change, rebuild, take the same measurement, and compare. The
-narrow-window scroll inside the thirteen-column tables reads as a fault and
-is not one: the untouched tables do it too.
+It reads the router named by `--url` or `CONSOLE_CHECK_URL`, defaulting to
+the example configuration's `127.0.0.1:8787`. Give the router it drives a
+port of its own: a check that restarts it, or fills it with requests to have
+something to look at, is not something to do to the router a session is
+using.
 
-**Then screenshot**, for what measurement cannot reach.
+It drives a running router across every tab, both themes and seven widths,
+and reports what it found with the screenshot each finding came from. What it
+reports is a hint, not a verdict: it can say that something is 30px tall in a
+17.4px line, that a panel overflows its box, that two blocks have nothing
+between them, that a page threw. It cannot say whether a page reads well, and
+several of the numbers it prints — a thirteen-column table scrolling inside
+its wrapper at 900px — are the console working as designed.
+
+**The screenshot decides.** Open the ones it names, and open the rest anyway:
+a clean run is not a passed review. Look at the page the change touched, in
+both themes, at a width someone actually uses.
+
+**A number that was already there is not a regression.** Take a reading
+before the change, and hold the one after it against it:
+
+    git stash && cargo build && scripts/console-check --token … --out before.json
+    git stash pop && cargo build && scripts/console-check --token … --baseline before.json
+
+**Some things it does not reach**, and that a change touching them has to be
+driven for by hand: hover, focus and selected states; a panel that redraws on
+a poll (frames over 50ms, whether what the reader opened is still open);
+anything behind an interaction, such as the model comparison, which is only
+drawn once rows are picked.

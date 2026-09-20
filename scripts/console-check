@@ -1,0 +1,319 @@
+#!/usr/bin/env node
+// Drives the web console and says where to look, for the checks
+// `docs/console-design.md` asks for. It settles nothing: the numbers narrow
+// a page down to the places worth opening, and the screenshot beside each
+// reading is what the judgement is made on.
+//
+//   scripts/console-check --url http://127.0.0.1:8787 --token <server.token>
+//
+// Screenshots land in `--shots` (a temporary directory by default) and every
+// line of the report names the one it came from. `--out report.json` writes
+// the reading, and `--baseline report.json` reads one back and says what
+// changed — a number that was already there is not a regression. Exit status
+// is 1 when something is worth opening.
+//
+// The browser is not this repository's to install. Point at one with
+// CONSOLE_CHECK_BROWSER and at playwright-core with CONSOLE_CHECK_PLAYWRIGHT,
+// or let the defaults find a Playwright cache.
+
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { argv, env, exit } from "node:process";
+
+const TABS = ["overview", "requests", "stats", "tools", "recordings"];
+const WIDTHS = [1920, 1440, 1280, 1100, 900, 700, 430];
+const SCHEMES = ["light", "dark"];
+/// Scrollers a page may hold: the document not scrolling says nothing about
+/// what a table inside it does.
+const SCROLLERS = ".table-wrap, .detail, pre, .charts";
+
+function usage(message) {
+  if (message) console.error(`console-check: ${message}`);
+  console.error(`usage: console-check --url URL --token TOKEN [options]
+
+  --url URL          the router's console, or CONSOLE_CHECK_URL
+                     (default http://127.0.0.1:8787, the example config's port)
+  --token TOKEN      server.token, or CONSOLE_CHECK_TOKEN
+  --tabs a,b         tabs to read (default ${TABS.join(",")})
+  --widths 1440,430  viewport widths (default ${WIDTHS.join(",")})
+  --schemes light    colour schemes (default ${SCHEMES.join(",")})
+  --out FILE         write the reading as JSON
+  --baseline FILE    compare against a reading and report what got worse
+  --shots DIR        where the screenshots go (default: a temporary directory)
+  --no-shots         skip them, when only the numbers are wanted`);
+  exit(message ? 2 : 0);
+}
+
+function options(args) {
+  const opts = {
+    url: env.CONSOLE_CHECK_URL || "http://127.0.0.1:8787",
+    token: env.CONSOLE_CHECK_TOKEN || null,
+    tabs: TABS,
+    widths: WIDTHS,
+    schemes: SCHEMES,
+    out: null,
+    baseline: null,
+    shots: join(tmpdir(), `console-check-${Date.now()}`),
+  };
+  const list = (text) => text.split(",").map((one) => one.trim()).filter(Boolean);
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    const value = args[i + 1];
+    if (flag === "-h" || flag === "--help") usage();
+    if (!flag.startsWith("--")) usage(`unexpected argument ${flag}`);
+    if (flag === "--no-shots") { opts.shots = null; continue; }
+    if (value === undefined) usage(`${flag} needs a value`);
+    i++;
+    switch (flag) {
+      case "--url": opts.url = value.replace(/\/+$/, ""); break;
+      case "--token": opts.token = value; break;
+      case "--tabs": opts.tabs = list(value); break;
+      case "--widths": opts.widths = list(value).map(Number); break;
+      case "--schemes": opts.schemes = list(value); break;
+      case "--out": opts.out = value; break;
+      case "--baseline": opts.baseline = value; break;
+      case "--shots": opts.shots = value; break;
+      default: usage(`unknown option ${flag}`);
+    }
+  }
+  if (!opts.token) usage("no token: pass --token or set CONSOLE_CHECK_TOKEN");
+  if (opts.widths.some((w) => !Number.isFinite(w) || w < 200)) usage("--widths takes viewport widths");
+  return opts;
+}
+
+/// The first path that exists, or null.
+function firstPath(candidates) {
+  return candidates.find((path) => path && existsSync(path)) || null;
+}
+
+async function browserType() {
+  const fromEnv = env.CONSOLE_CHECK_PLAYWRIGHT;
+  const guesses = [
+    fromEnv,
+    join(homedir(), ".npm-global/lib/node_modules/playwright-core/index.mjs"),
+    join(homedir(), ".npm-global/lib/node_modules/agent-browser/node_modules/playwright-core/index.mjs"),
+    "/usr/lib/node_modules/playwright-core/index.mjs",
+  ];
+  const found = firstPath(guesses);
+  if (!found) {
+    throw new Error("no playwright-core: set CONSOLE_CHECK_PLAYWRIGHT to its index.mjs");
+  }
+  const { chromium } = await import(found);
+  return chromium;
+}
+
+/// A Chromium to drive: the one named, else the newest in a Playwright
+/// cache. Undefined lets playwright-core look for its own, which is right
+/// when it installed one.
+function executablePath() {
+  if (env.CONSOLE_CHECK_BROWSER) return env.CONSOLE_CHECK_BROWSER;
+  const cache = join(homedir(), ".cache/ms-playwright");
+  if (!existsSync(cache)) return undefined;
+  const builds = readdirSync(cache)
+    .filter((name) => name.startsWith("chromium-"))
+    .sort((a, b) => Number(b.slice(9)) - Number(a.slice(9)));
+  for (const build of builds) {
+    const exe = firstPath([
+      join(cache, build, "chrome-linux64/chrome"),
+      join(cache, build, "chrome-linux/chrome"),
+      join(cache, build, "chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+    ]);
+    if (exe) return exe;
+  }
+  return undefined;
+}
+
+/// Everything read from one page, once it has settled. `scrollers` names the
+/// elements that may scroll on their own: the document not scrolling says
+/// nothing about what a table inside it does.
+async function readPage(page, scrollers) {
+  return page.evaluate((selector) => {
+    const name = (el) => el.tagName.toLowerCase() + (el.className ? `.${String(el.className).split(" ")[0]}` : "");
+    const doc = document.documentElement;
+    const over = [...document.querySelectorAll(selector)]
+      .map((el) => ({
+        what: name(el),
+        label: (el.querySelector("th, h2, figcaption")?.textContent || "").trim().slice(0, 24),
+        over: el.scrollWidth - el.clientWidth,
+      }))
+      .filter((one) => one.over > 0);
+
+    // Sibling blocks of every panel body, so a new one can be held against
+    // the spacing the page already uses.
+    const gaps = [];
+    for (const body of document.querySelectorAll("section.panel > div:last-child")) {
+      const kids = [...body.children].filter((el) => el.getBoundingClientRect().height > 0);
+      for (let i = 1; i < kids.length; i++) {
+        gaps.push({
+          between: `${name(kids[i - 1])} -> ${name(kids[i])}`,
+          gap: Math.round(kids[i].getBoundingClientRect().top - kids[i - 1].getBoundingClientRect().bottom),
+        });
+      }
+    }
+
+    // Something taller than the line it sits in brought a component's height
+    // in with it, which is what sets one column's small print off from the
+    // same line in every other column. Wrapping is not this: a wrapped line
+    // is taller by whole lines.
+    const lines = [];
+    for (const sub of document.querySelectorAll("td .sub, .entry-facts")) {
+      const line = parseFloat(getComputedStyle(sub).lineHeight);
+      if (!Number.isFinite(line)) continue;
+      for (const kid of sub.querySelectorAll("*")) {
+        const height = kid.getBoundingClientRect().height;
+        if (height > line + 1) {
+          lines.push({ what: name(kid), height: Math.round(height * 10) / 10, line: Math.round(line * 10) / 10 });
+        }
+      }
+    }
+
+    // Small print of two different faces or sizes in one row is the same
+    // fault seen from the other side.
+    const faces = [];
+    for (const tr of document.querySelectorAll("tbody tr")) {
+      const subs = [...tr.querySelectorAll(".sub")];
+      if (subs.length < 2) continue;
+      const seen = [...new Set(subs.map((el) => {
+        const style = getComputedStyle(el);
+        return `${style.fontSize}/${style.lineHeight}`;
+      }))];
+      if (seen.length > 1) faces.push({ seen });
+    }
+
+    return { page: doc.scrollWidth - doc.clientWidth, scrollers: over, gaps, lines, faces };
+  }, scrollers);
+}
+
+async function signIn(page, opts) {
+  await page.goto(`${opts.url}/#${opts.tabs[0]}`, { waitUntil: "networkidle" });
+  const field = await page.$("input[type=password], input[type=text]");
+  if (!field) return;
+  await field.fill(opts.token);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1500);
+}
+
+async function run(opts) {
+  const chromium = await browserType();
+  const launch = {};
+  const exe = executablePath();
+  if (exe) launch.executablePath = exe;
+  let browser;
+  try {
+    browser = await chromium.launch(launch);
+  } catch (error) {
+    throw new Error(`${error.message}\nSet CONSOLE_CHECK_BROWSER to a Chromium executable.`);
+  }
+  const reading = { url: opts.url, at: new Date().toISOString(), pages: [], faults: [] };
+  for (const scheme of opts.schemes) {
+    for (const width of opts.widths) {
+      const context = await browser.newContext({ viewport: { width, height: 1100 }, colorScheme: scheme });
+      const page = await context.newPage();
+      const noise = [];
+      page.on("pageerror", (error) => noise.push(`exception: ${error.message}`));
+      page.on("console", (message) => { if (message.type() === "error") noise.push(`console: ${message.text()}`); });
+      await signIn(page, opts);
+      for (const tab of opts.tabs) {
+        await page.goto(`${opts.url}/#${tab}`, { waitUntil: "networkidle" });
+        await page.waitForTimeout(2000);
+        const before = noise.length;
+        const read = await readPage(page, SCROLLERS);
+        let shot = null;
+        if (opts.shots) {
+          mkdirSync(opts.shots, { recursive: true });
+          shot = join(opts.shots, `${tab}-${scheme}-${width}.png`);
+          await page.screenshot({ path: shot, fullPage: true });
+        }
+        reading.pages.push({ scheme, width, tab, shot, ...read, noise: noise.slice(before) });
+      }
+      if (noise.length) reading.faults.push({ scheme, width, noise });
+      await context.close();
+    }
+  }
+  await browser.close();
+  return reading;
+}
+
+/// The same finding many times over is one finding with a count.
+function tally(items, describe) {
+  const counts = new Map();
+  for (const item of items) {
+    const text = describe(item);
+    counts.set(text, (counts.get(text) || 0) + 1);
+  }
+  return counts;
+}
+
+/// One line per page read, and the numbers that need a person.
+function report(reading, baseline) {
+  const key = (p) => `${p.scheme}/${p.width}/${p.tab}`;
+  let bad = 0;
+  for (const page of reading.pages) {
+    const parts = [];
+    if (page.page > 0) { parts.push(`page overflows by ${page.page}px`); bad++; }
+    for (const one of page.scrollers) parts.push(`${one.what}${one.label ? ` (${one.label})` : ""} overflows by ${one.over}px`);
+    for (const [what, count] of tally(page.lines, (one) => `${one.what} is ${one.height}px in a ${one.line}px line`)) {
+      parts.push(count > 1 ? `${what} (\u00d7${count})` : what);
+      bad++;
+    }
+    for (const [what, count] of tally(page.faces, (one) => `small print of ${one.seen.join(" and ")} in one row`)) {
+      parts.push(count > 1 ? `${what} (\u00d7${count})` : what);
+      bad++;
+    }
+    for (const note of page.noise) { parts.push(note); bad++; }
+    console.log(`${key(page).padEnd(28)} ${parts.length ? parts.join("; ") : "nothing flagged"}`);
+    if (parts.length && page.shot) console.log(`${" ".repeat(28)} ${page.shot}`);
+  }
+
+  const gapsOf = (pages) => {
+    const seen = new Map();
+    for (const page of pages) for (const one of page.gaps) seen.set(`${page.tab}|${one.between}`, one.gap);
+    return seen;
+  };
+  const now = gapsOf(reading.pages);
+  const odd = [...now].filter(([, gap]) => gap === 0);
+  if (odd.length) {
+    console.log("\nblocks with nothing between them (check against the page's own spacing):");
+    for (const [where] of odd) console.log(`  ${where}`);
+  }
+
+  if (!baseline) return bad;
+  console.log("\nagainst the baseline:");
+  const was = new Map(baseline.pages.map((p) => [key(p), p]));
+  let worse = 0;
+  for (const page of reading.pages) {
+    const then = was.get(key(page));
+    if (!then) continue;
+    const over = (p) => p.page + p.scrollers.reduce((sum, one) => sum + one.over, 0);
+    if (over(page) > over(then)) {
+      console.log(`  ${key(page)} overflows by ${over(page)}px, was ${over(then)}px`);
+      worse++;
+    }
+    if (page.noise.length > then.noise.length) {
+      console.log(`  ${key(page)} reports ${page.noise.length} fault(s), was ${then.noise.length}`);
+      worse++;
+    }
+  }
+  const before = gapsOf(baseline.pages);
+  for (const [where, gap] of now) {
+    const then = before.get(where);
+    if (then !== undefined && gap !== then) console.log(`  ${where} is ${gap}px, was ${then}px`);
+  }
+  if (!worse) console.log("  nothing got worse");
+  return bad + worse;
+}
+
+const opts = options(argv.slice(2));
+const baseline = opts.baseline ? JSON.parse(readFileSync(opts.baseline, "utf8")) : null;
+const reading = await run(opts);
+if (opts.out) {
+  writeFileSync(opts.out, JSON.stringify(reading, null, 1));
+  console.log(`wrote ${basename(opts.out)}\n`);
+}
+const bad = report(reading, baseline);
+if (opts.shots) console.log(`\nscreenshots: ${opts.shots}`);
+console.log(bad
+  ? `\n${bad} place(s) worth opening. The numbers say where; the screenshot says whether.`
+  : "\nNothing flagged. Open the screenshots anyway: no number says whether a page reads well.");
+exit(bad ? 1 : 0);
