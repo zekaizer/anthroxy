@@ -1,6 +1,7 @@
 # Architecture Decision Records
 
-One file per decision: `NNNN-short-title.md`, zero-padded and sequential. Nygard template: Title, Status, Context, Decision, Consequences.
+One file per decision: `NNNN-short-title.md`, zero-padded and sequential. Nygard
+template: Title, Status, Context, Decision, Consequences.
 
 Write an ADR only when the change is one of:
 
@@ -10,6 +11,8 @@ Write an ADR only when the change is one of:
 
 Rules:
 
-- Write it before implementation and land it in the same PR as the implementation.
-- An `accepted` ADR is immutable. To change it, set its status to `superseded by ADR-N` and write a new one.
+- Write it before implementation and land it in the same PR as the
+  implementation.
+- An `accepted` ADR is immutable. To change it, set its status to
+  `superseded by ADR-N` and write a new one.
 - Record the decision and its reasoning, not the work log.

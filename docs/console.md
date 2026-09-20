@@ -1,8 +1,14 @@
 # The web console
 
-A page served by the router itself, for watching it from any browser that reaches it — the Windows host included, when the router runs in WSL2. Nothing needs installing.
+A page served by the router itself, for watching it from any browser that
+reaches it — the Windows host included, when the router runs in WSL2. Nothing
+needs installing.
 
-`http://<router>/` redirects to `/ui/`, a page embedded in the binary. It signs in with `server.token` (kept in the tab, or in the browser when "Remember" is ticked) and sends it as a header on every call; there is no cookie. Anyone holding the token can use everything on the page, including reloading the router and deleting recordings.
+`http://<router>/` redirects to `/ui/`, a page embedded in the binary. It signs
+in with `server.token` (kept in the tab, or in the browser when "Remember" is
+ticked) and sends it as a header on every call; there is no cookie. Anyone
+holding the token can use everything on the page, including reloading the router
+and deleting recordings.
 
 | Tab | What it shows and does |
 | --- | --- |
@@ -12,8 +18,19 @@ A page served by the router itself, for watching it from any browser that reache
 | Tools | A test request (model, prompt, stream) through the full route, answered with status, timings, tokens and text; a probe of every backend from inside the running process (credential, route — direct or through its proxy — the request headers the router set with backend-forced values and the credential masked, the response headers, and model list, with context lengths from `max_model_len`, `loaded_context_length` and similar fields, or LM Studio's `/api/v0/models`) and a `[[models]]` fragment per listed model; Claude Code's variables for the address the browser used, with `CLAUDE_CODE_MAX_CONTEXT_TOKENS` once a probe found the smallest context window among configured models. |
 | Recordings | The body log newest first, a request Claude Code sent again unchanged folded under the one it repeats, with each request's prompt (for the later requests of a turn, what each sends instead, such as the tool results it returns with a hint from each call, under the turn's prompt), message count, whether it asked for a stream, and Claude Code session (a session filters the list to its requests), model, status, outcome and size, filterable; delete one or all. An entry opens with its route, result and token usage and steps to the newer or older entry of the list as filtered, and each of its files reads either as recorded (Raw) or in sections. A request's sections: the last prompt with what followed it, every message (system reminders and Claude Code's own notices folded, each tool call linked to its result), system blocks, tools grouped into built-in and one group per MCP server, the remaining parameters, each with its size, and a comparison with an earlier request of the same Claude Code session in the order a prompt cache reads them (tools, system, messages): how much of the prefix they share, where it first differs, and the messages after it; Find narrows every section to the items holding a text and marks it. A response is replayed into its final content, stop reason, usage and any error; the meta file lists its fields and headers. Both Messages and Chat Completions exchanges read this way. |
 
-The page is served with a Content-Security-Policy that allows only its own script, style and API calls. Requests the console sends are real: they reach the backend, cost tokens and appear in the activity and statistics marked as coming from the console. The in-memory lists (requests, reloads, credential runs, model names) start empty on each restart; statistics and recordings are on disk.
+The page is served with a Content-Security-Policy that allows only its own
+script, style and API calls. Requests the console sends are real: they reach the
+backend, cost tokens and appear in the activity and statistics marked as coming
+from the console. The in-memory lists (requests, reloads, credential runs, model
+names) start empty on each restart; statistics and recordings are on disk.
 
-API routes, all behind the token: `GET /api/status`, `GET /api/requests`, `GET /api/requests/{id}`, `GET /api/stats?range=1d|7d|30d|all`, `GET /api/env`, `POST /api/reload`, `POST /api/probe`, `POST /api/smoke` (`{"model", "stream", "prompt"}`), `GET /api/recordings`, `GET /api/recordings/{entry}/{file}`, `DELETE /api/recordings/{entry}`, `DELETE /api/recordings`.
+API routes, all behind the token: `GET /api/status`, `GET /api/requests`,
+`GET /api/requests/{id}`, `GET /api/stats?range=1d|7d|30d|all`, `GET /api/env`,
+`POST /api/reload`, `POST /api/probe`, `POST /api/smoke`
+(`{"model", "stream", "prompt"}`), `GET /api/recordings`,
+`GET /api/recordings/{entry}/{file}`, `DELETE /api/recordings/{entry}`,
+`DELETE /api/recordings`.
 
-The page's own design system is documented separately in [console-design.md](console-design.md); that page is for changing the console, not for using it.
+The page's own design system is documented separately in
+[console-design.md](console-design.md); that page is for changing the console,
+not for using it.
