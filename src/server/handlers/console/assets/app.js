@@ -1190,16 +1190,24 @@ function statsContent(data) {
     }),
     card("Output speed", fmt.rate(total.output_tokens_per_second)));
   const compare = h("div");
-  const boxes = [];
+  const picks = [];
   const drawCompare = () => {
-    syncCompareBoxes(report, boxes);
+    markCompared(report, picks);
     rerender(compare, comparePanel(report, drawCompare));
   };
-  const modelRows = report.models.map((row) =>
-    statsRow(row, h("td", null, compareBox(report, row, boxes, drawCompare),
-      h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))));
+  const modelRows = report.models.map((row) => {
+    const cells = [h("td", null, h("strong", { class: "mono" }, row.key), h("div", { class: "sub" }, row.backend || ""))];
+    if (row.key === UNROUTED) return statsRow(row, ...cells);
+    const tr = statsRow(row, ...cells, {
+      class: "clickable",
+      role: "button",
+      onclick: () => { toggleCompared(report, row.key); drawCompare(); },
+    });
+    picks.push({ key: row.key, tr });
+    return tr;
+  });
   const dayRows = report.days.map((row) => statsRow(row, h("td", { class: "nowrap mono" }, row.key)));
-  const headers = (first) => [first, ["Requests", "num"], ["Errors", "num"], ["Retried", "num"], ["Left", "num"],
+  const headers = (...first) => [...first, ["Requests", "num"], ["Errors", "num"], ["Retried", "num"], ["Left", "num"],
     ["First byte p50 / p95", "num"], ["Duration p50 / p95", "num"], ["Input", "num"], ["Output", "num"],
     ["Cache read", "num"], ["Cache write", "num"], ["Cache hit", "num"], ["Speed", "num"]];
   drawCompare();
@@ -1209,6 +1217,7 @@ function statsContent(data) {
       ? [h("h3", null, `Over time, per ${BUCKET_WORDS[report.bucket] || report.bucket}`), statsCharts(report), seriesTable(report)]
       : null,
     h("h3", null, "By model"),
+    h("p", { class: "note" }, `Pick up to ${COMPARED_MAX} models to draw them against one another.`),
     table(headers("Model"), modelRows, { empty: "No request in this range." }),
     compare,
     report.fallbacks.length
@@ -1248,37 +1257,36 @@ function compared(report) {
   return state.statsCompared;
 }
 
-/// The box that puts a model into the comparison. Absent for `(unrouted)`.
-/// Its state is set by [`syncCompareBoxes`], not here: picking one model
-/// changes what every other box may do, and the table around them is drawn
-/// once per reading.
-function compareBox(report, row, boxes, redraw) {
-  if (row.key === UNROUTED) return null;
-  const box = h("input", {
-    type: "checkbox",
-    class: "compare-box",
-    "aria-label": `Compare ${row.key}`,
-    onchange: () => {
-      const picked = compared(report);
-      state.statsCompared = box.checked
-        ? [...picked.filter((key) => key !== row.key), row.key]
-        : picked.filter((key) => key !== row.key);
-      redraw();
-    },
-  });
-  boxes.push({ key: row.key, box });
-  return box;
+/// How a model's row says it is in the comparison, and which line in there
+/// is its own. A column of checkboxes would say the same and cost the width
+/// of one, which a table of thirteen columns does not have; the row itself is
+/// how this console has always let one be picked.
+function markCompared(report, rows) {
+  const picked = compared(report);
+  const full = picked.length >= COMPARED_MAX;
+  for (const { key, tr } of rows) {
+    const at = picked.indexOf(key);
+    tr.classList.toggle("selected", at >= 0);
+    for (let i = 1; i <= COMPARED_MAX; i++) tr.classList.toggle(`compared-${i}`, at === i - 1);
+    const barred = at < 0 && full;
+    tr.setAttribute("aria-pressed", at >= 0 ? "true" : "false");
+    tr.setAttribute("aria-disabled", barred ? "true" : "false");
+    tr.title = barred
+      ? `Comparing ${COMPARED_MAX} models at a time; drop one first`
+      : at >= 0
+        ? `Stop comparing ${key}`
+        : `Compare ${key}`;
+  }
 }
 
-/// What each box may do, given what is already picked.
-function syncCompareBoxes(report, boxes) {
+/// Picks a model, or drops it. A pick past the third is refused rather than
+/// pushing one out: which one left would be the reader's guess.
+function toggleCompared(report, key) {
   const picked = compared(report);
-  for (const { key, box } of boxes) {
-    box.checked = picked.includes(key);
-    box.disabled = !box.checked && picked.length >= COMPARED_MAX;
-    box.title = box.disabled
-      ? `Comparing ${COMPARED_MAX} models at a time; clear one first`
-      : `Compare ${key}`;
+  if (picked.includes(key)) {
+    state.statsCompared = picked.filter((one) => one !== key);
+  } else if (picked.length < COMPARED_MAX) {
+    state.statsCompared = [...picked, key];
   }
 }
 
@@ -1329,9 +1337,19 @@ function comparePanel(report, redraw) {
     }))));
 }
 
-function statsRow(row, first) {
+/// `first` is the leading cell or cells; a trailing object is the row's own
+/// props, for a row that can be picked.
+function statsRow(row, ...first) {
+  const props = typeof first.at(-1) === "object" && !(first.at(-1) instanceof Node) ? first.pop() : null;
   const errorRate = row.requests ? row.errors / row.requests : null;
-  return h("tr", null,
+  const tr = props && props.onclick
+    ? openRow(props, props.onclick, ...cellsOf(row, first, errorRate))
+    : h("tr", props, ...cellsOf(row, first, errorRate));
+  return tr;
+}
+
+function cellsOf(row, first, errorRate) {
+  return [
     first,
     h("td", { class: "num" }, fmt.int(row.requests)),
     h("td", { class: "num" }, row.errors ? h("span", { class: "error-text" }, `${fmt.int(row.errors)} (${fmt.pct(errorRate)})`) : "0"),
@@ -1345,7 +1363,8 @@ function statsRow(row, first) {
     h("td", { class: "num" }, fmt.int(row.cache_creation_tokens)),
     h("td", { class: "num" }, fmt.pct(row.cache_hit_rate),
       row.cache_silent ? h("div", { class: "sub" }, `${fmt.int(row.cache_silent)} silent`) : null),
-    h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second)));
+    h("td", { class: "num" }, fmt.rate(row.output_tokens_per_second)),
+  ];
 }
 
 // ---------------------------------------------------------------- charts
