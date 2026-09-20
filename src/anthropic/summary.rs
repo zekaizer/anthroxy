@@ -22,6 +22,11 @@ pub struct RequestSummary {
     /// results it returns and the notices it holds.
     /// `None` when the last message carries the prompt.
     pub step: Option<String>,
+    /// The last message returns tool results, so it carries on the turn the
+    /// request before it began. What the console groups a turn by; reading it
+    /// out of [`Self::step`] would tie that grouping to how the line is
+    /// worded.
+    pub answers: bool,
 }
 
 /// Characters of a prompt kept before the ellipsis.
@@ -38,41 +43,42 @@ const INTERRUPTED: [&str; 2] = [
     "[Request interrupted by user for tool use]",
 ];
 
-/// How user text Claude Code writes itself begins, what it is, and whether it
-/// wakes the model with nothing typed — which starts a turn of its own, so the
-/// prompt above it belongs to the turn before. Matched at the start of the text
-/// only, so the user's own words that mention one stay text. Kept in step with
-/// the console's `NOTICES`.
-const NOTICES: [(&str, &str, bool); 17] = [
-    ("<local-command-caveat>", "command output", false),
-    ("<local-command-stdout>", "command output", false),
-    ("<local-command-stderr>", "command output", false),
-    ("<bash-stdout>", "shell output", false),
-    ("<bash-stderr>", "shell output", false),
-    ("<task-notification>", "task notification", true),
-    ("<ide_opened_file>", "ide context", false),
-    ("<ide_selection>", "ide context", false),
-    ("Stop hook feedback:", "hook feedback", true),
-    ("Goal check-in:", "goal check-in", true),
-    ("A session-scoped Stop hook is now active", "goal set", true),
+/// How user text Claude Code writes itself begins, and what it is. Matched at
+/// the start of the text only, so the user's own words that mention one stay
+/// text. The console has the same table; `notice_tables_match` holds the two
+/// together.
+pub(crate) const NOTICES: [(&str, &str); 17] = [
+    ("<local-command-caveat>", "command output"),
+    ("<local-command-stdout>", "command output"),
+    ("<local-command-stderr>", "command output"),
+    ("<bash-stdout>", "shell output"),
+    ("<bash-stderr>", "shell output"),
+    ("<task-notification>", "task notification"),
+    ("<ide_opened_file>", "ide context"),
+    ("<ide_selection>", "ide context"),
+    ("Stop hook feedback:", "hook feedback"),
+    ("Goal check-in:", "goal check-in"),
+    ("A session-scoped Stop hook is now active", "goal set"),
     (
         "This session is being continued from a previous conversation",
         "compaction summary",
-        false,
     ),
-    ("Base directory for this skill:", "skill", false),
-    (
-        "Another Claude session sent a message:",
-        "agent message",
-        true,
-    ),
-    ("Continue from where you left off.", "continue", true),
-    (
-        "[Your previous response had no visible output.",
-        "continue",
-        true,
-    ),
-    ("[Image: original ", "image note", false),
+    ("Base directory for this skill:", "skill"),
+    ("Another Claude session sent a message:", "agent message"),
+    ("Continue from where you left off.", "continue"),
+    ("[Your previous response had no visible output.", "continue"),
+    ("[Image: original ", "image note"),
+];
+
+/// The notices that wake the model with nothing typed, which starts a turn of
+/// its own: the prompt above one belongs to the turn before it.
+pub(crate) const WAKING: [&str; 6] = [
+    "task notification",
+    "hook feedback",
+    "goal check-in",
+    "goal set",
+    "agent message",
+    "continue",
 ];
 
 const TOOL_USES: [&str; 3] = ["tool_use", "server_tool_use", "mcp_tool_use"];
@@ -90,12 +96,31 @@ pub fn summarize(body: &[u8]) -> RequestSummary {
     let Ok(body) = serde_json::from_slice::<Body>(body) else {
         return RequestSummary::default();
     };
-    let prompt = turn_prompt(&body.messages).map(|text| one_line(&text));
     RequestSummary {
         messages: body.messages.len(),
-        prompt,
+        prompt: turn_prompt(&body.messages).map(|text| one_line(&text)),
+        answers: answers(&body.messages),
         step: step(&body.messages).map(|text| one_line(&text)),
     }
+}
+
+/// The last message returns tool results. Read from the block types alone:
+/// the console groups a turn by this, and it must not depend on how [`step`]
+/// words the same thing.
+fn answers(messages: &[Value]) -> bool {
+    let last = messages
+        .iter()
+        .rev()
+        .find(|m| matches!(role(m), Some("user" | "assistant")));
+    let Some(Value::Array(blocks)) = last.and_then(|m| m.get("content")) else {
+        return false;
+    };
+    blocks.iter().any(|block| {
+        block
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| TOOL_RESULTS.contains(&kind))
+    })
 }
 
 /// The prompt of the turn the last message belongs to: the typed text of the
@@ -109,7 +134,7 @@ fn turn_prompt(messages: &[Value]) -> Option<String> {
         if read.prompt.is_some() {
             return read.prompt;
         }
-        if read.wakes && read.results.is_empty() {
+        if read.wakes() && read.results.is_empty() {
             return None;
         }
     }
@@ -126,11 +151,17 @@ struct Read<'a> {
     prompt: Option<String>,
     /// Claude Code's notices, in order, each once.
     notices: Vec<&'static str>,
-    /// One of those notices wakes the model with nothing typed.
-    wakes: bool,
     /// `tool_use_id` of each tool result, in order; `None` for one without.
     results: Vec<Option<&'a str>>,
     reminders: bool,
+}
+
+impl Read<'_> {
+    /// One of the notices this message carries wakes the model with nothing
+    /// typed.
+    fn wakes(&self) -> bool {
+        self.notices.iter().any(|label| WAKING.contains(label))
+    }
 }
 
 /// A user message's prompt: its typed text beside reminders and notices, or
@@ -182,9 +213,8 @@ fn read(content: Option<&Value>) -> Read<'_> {
             match classify(own.trim()) {
                 Piece::Empty => {}
                 Piece::Prompt(_) if command => command = false,
-                Piece::Notice(label, wakes) => {
+                Piece::Notice(label) => {
                     command = false;
-                    read.wakes |= wakes;
                     if !read.notices.contains(&label) {
                         read.notices.push(label);
                     }
@@ -230,8 +260,7 @@ enum Piece {
     Prompt(String),
     /// A slash or shell command, as the user typed it.
     Command(String),
-    /// A notice, and whether it wakes the model with nothing typed.
-    Notice(&'static str, bool),
+    Notice(&'static str),
 }
 
 /// What a trimmed stretch of user text outside reminders is.
@@ -240,10 +269,10 @@ fn classify(text: &str) -> Piece {
         return Piece::Empty;
     }
     if INTERRUPTED.contains(&text) {
-        return Piece::Notice("interrupted", false);
+        return Piece::Notice("interrupted");
     }
-    if let Some((_, label, wakes)) = NOTICES.iter().find(|(start, ..)| text.starts_with(start)) {
-        return Piece::Notice(label, *wakes);
+    if let Some((_, label)) = NOTICES.iter().find(|(start, _)| text.starts_with(start)) {
+        return Piece::Notice(label);
     }
     if (text.starts_with("<command-name>") || text.starts_with("<command-message>"))
         && let Some(name) = tagged(text, "command-name")
@@ -397,9 +426,22 @@ fn hint(input: Option<&Value>) -> Option<String> {
 }
 
 fn one_line(text: &str) -> String {
-    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    match line.char_indices().nth(PROMPT_CHARS) {
-        Some((cut, _)) => format!("{}…", &line[..cut]),
-        None => line,
+    let mut line = String::new();
+    // A pasted prompt can be megabytes; only the words before the cut are
+    // ever built.
+    for word in text.split_whitespace() {
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+        if line.chars().count() > PROMPT_CHARS {
+            let cut = line.char_indices().nth(PROMPT_CHARS).map(|(at, _)| at);
+            if let Some(cut) = cut {
+                line.truncate(cut);
+                line.push('…');
+                return line;
+            }
+        }
     }
+    line
 }

@@ -33,28 +33,37 @@ const REMINDER = /<system-reminder>([\s\S]*?)<\/system-reminder>/g;
 const QUEUED = "The user sent a new message while you were working:";
 /// Text blocks Claude Code adds to a user message when the user stops a turn.
 const INTERRUPTED = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"];
-/// How user text Claude Code writes itself begins, what it is, and whether it
-/// wakes the model with nothing typed — which starts a turn of its own.
-/// Matched at the start only, so the user's own words that mention one stay
-/// text. Kept in step with `anthropic::summary` on the router.
+/// How user text Claude Code writes itself begins, and what it is. Matched at
+/// the start only, so the user's own words that mention one stay text. The
+/// router has the same table and a test of its own holds the two together.
 const NOTICES = [
-  ["<local-command-caveat>", "command output", false],
-  ["<local-command-stdout>", "command output", false],
-  ["<local-command-stderr>", "command output", false],
-  ["<bash-stdout>", "shell output", false],
-  ["<bash-stderr>", "shell output", false],
-  ["<task-notification>", "task notification", true],
-  ["<ide_opened_file>", "ide context", false],
-  ["<ide_selection>", "ide context", false],
-  ["Stop hook feedback:", "hook feedback", true],
-  ["Goal check-in:", "goal check-in", true],
-  ["A session-scoped Stop hook is now active", "goal set", true],
-  ["This session is being continued from a previous conversation", "compaction summary", false],
-  ["Base directory for this skill:", "skill", false],
-  ["Another Claude session sent a message:", "agent message", true],
-  ["Continue from where you left off.", "continue", true],
-  ["[Your previous response had no visible output.", "continue", true],
-  ["[Image: original ", "image note", false],
+  ["<local-command-caveat>", "command output"],
+  ["<local-command-stdout>", "command output"],
+  ["<local-command-stderr>", "command output"],
+  ["<bash-stdout>", "shell output"],
+  ["<bash-stderr>", "shell output"],
+  ["<task-notification>", "task notification"],
+  ["<ide_opened_file>", "ide context"],
+  ["<ide_selection>", "ide context"],
+  ["Stop hook feedback:", "hook feedback"],
+  ["Goal check-in:", "goal check-in"],
+  ["A session-scoped Stop hook is now active", "goal set"],
+  ["This session is being continued from a previous conversation", "compaction summary"],
+  ["Base directory for this skill:", "skill"],
+  ["Another Claude session sent a message:", "agent message"],
+  ["Continue from where you left off.", "continue"],
+  ["[Your previous response had no visible output.", "continue"],
+  ["[Image: original ", "image note"],
+];
+/// The notices that wake the model with nothing typed, which starts a turn of
+/// its own: the prompt above one belongs to the turn before it.
+const WAKING = [
+  "task notification",
+  "hook feedback",
+  "goal check-in",
+  "goal set",
+  "agent message",
+  "continue",
 ];
 const utf8 = new TextEncoder();
 
@@ -70,8 +79,6 @@ function recordings(view, opened) {
   const removeAll = h("button", { type: "button", class: "danger" }, "Delete all");
   let data = null;
   let limit = LIST_PAGE;
-  /// Which turn each drawn entry belongs to, by entry name.
-  let turns = new Map();
   const rows = new Map();
   /// Reveals the entry of a name that a group holds folded.
   const reveals = new Map();
@@ -84,12 +91,12 @@ function recordings(view, opened) {
   /// One row per attempt. A request Claude Code sent again unchanged — after
   /// a stream it could not read, as a rule — follows the one it repeats, so
   /// the newest stands for the group and the rest fold under it.
-  const groupRows = (group, previous) => {
+  const groupRows = (group, previous, view) => {
     const [newest, ...repeats] = group;
-    const lead = row(newest, previous);
+    const lead = row(newest, previous, view);
     if (!repeats.length) return [lead];
     const folded = repeats.map((e) => {
-      const tr = row(e, newest.session);
+      const tr = row(e, newest.session, view);
       tr.classList.add("attempt");
       tr.hidden = true;
       return tr;
@@ -143,16 +150,16 @@ function recordings(view, opened) {
   /// Groups drawn in order, each told the session of the row above it, so a
   /// run of rows in one session draws as one rail. Every group holds one
   /// session, so the run carries over from the group before.
-  const rowsFor = (list, previous) => list.flatMap((group) => {
-    const drawn = groupRows(group, previous);
+  const rowsFor = (list, previous, view) => list.flatMap((group) => {
+    const drawn = groupRows(group, previous, view);
     previous = group[0].session;
     return drawn;
   });
 
   const narrowTo = (session) => { filter.value = session; state.recordingsFilter = session; refilter(); };
 
-  const row = (e, previous) => {
-    const turn = turns.get(e.name) || { starts: true, offset: 0 };
+  const row = (e, previous, view) => {
+    const turn = view.get(e.name);
     const remove = h("button", { type: "button", class: "small danger" }, "Delete");
     remove.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -186,9 +193,7 @@ function recordings(view, opened) {
       // judges. The row that opens a turn carries none, so a run of railed
       // rows and the bare one they meet is one turn.
       h("td", { class: `prompt-cell${turn.starts ? "" : " rail turn-rail"}` },
-        // A filter matches on the prompt too, so while one is on every row
-        // shows what it matched.
-        entryPrompt(e, turn.starts || Boolean(filter.value.trim())),
+        entryPrompt(e, turn.repeatsPrompt),
         h("div", { class: "sub entry-facts" }, entryFacts(e))),
       h("td", { class: "mono nowrap" }, e.model || "–", h("div", { class: "sub" }, e.backend || "")),
       h("td", null, statusBadge(e.status)),
@@ -209,7 +214,15 @@ function recordings(view, opened) {
     }
     const needle = filter.value.trim();
     const entries = shown();
-    turns = turnsOf(entries);
+    const turns = turnsOf(data.entries);
+    // Turn membership is a property of the recording, not of what the filter
+    // left; a row whose turn opens in a row the filter dropped says which
+    // prompt it means instead of pointing at a rail that leads nowhere.
+    const shownNames = new Set(entries.map((e) => e.name));
+    const view = new Map(entries.map((e) => {
+      const turn = turns.get(e.name);
+      return [e.name, { ...turn, repeatsPrompt: turn.starts || !shownNames.has(turn.head) }];
+    }));
     const more = h("button", { type: "button", class: "small" });
     const moreLine = h("p", { class: "note" }, more);
     // A group is one row with its attempts; both counts are in groups, so
@@ -219,11 +232,11 @@ function recordings(view, opened) {
       replace(more, `Show ${fmt.int(Math.min(LIST_PAGE, grouped.length - limit))} more of ${fmt.int(grouped.length - limit)} not shown`);
     };
     const grouped = groups(entries);
-    const drawn = table(["Time", "Sends", "Model", "Status", "Outcome", ["On disk", "num"], ""], rowsFor(grouped.slice(0, limit), null),
+    const drawn = table(["Time", "Sends", "Model", "Status", "Outcome", ["On disk", "num"], ""], rowsFor(grouped.slice(0, limit), null, view),
       { empty: needle ? "No recording matches." : "No recording yet." });
     more.addEventListener("click", () => {
       const last = grouped[limit - 1];
-      append(drawn.querySelector("tbody"), rowsFor(grouped.slice(limit, limit + LIST_PAGE), last && last[0].session));
+      append(drawn.querySelector("tbody"), rowsFor(grouped.slice(limit, limit + LIST_PAGE), last && last[0].session, view));
       limit += LIST_PAGE;
       label();
     });
@@ -370,39 +383,46 @@ function entryOutcome(e) {
 }
 
 /// What the entry sends: the prompt for the request that opens a turn, what
-/// it answers instead for every request after it. `starts` is set on the row
-/// that begins a turn in the list as drawn, which is the only one to repeat
-/// the turn's prompt: the turn's rail says which rows it is meant for.
-function entryPrompt(e, starts) {
+/// it answers instead for every request after it. `repeatsPrompt` is set on
+/// the rows that have to name the turn's prompt again — the row that opens
+/// the turn, and any row whose opening row the list is not drawing.
+function entryPrompt(e, repeatsPrompt) {
   if (e.step) {
     return [h("div", { class: "mono" }, e.step),
-      starts && e.prompt ? h("div", { class: "sub one-line", title: e.prompt }, e.prompt) : null];
+      repeatsPrompt && e.prompt ? h("div", { class: "sub one-line", title: e.prompt }, e.prompt) : null];
   }
   if (e.prompt) return h("div", { class: "clamp" }, e.prompt);
   return h("span", { class: "muted" }, e.messages === null ? "–" : "no prompt of its own");
 }
 
-/// Which turn each entry of the drawn list belongs to: `{ starts, offset }`
-/// by entry name, where `starts` marks the request that opens the turn among
-/// the rows drawn and `offset` is the time since it.
+/// What to call a recording in one line away from the list: what it sends,
+/// else the prompt of its turn, else its id.
+function entryName(e) {
+  return e.step || e.prompt || e.request_id;
+}
+
+/// Which turn each entry belongs to: `{ starts, head, offset }` by entry
+/// name, where `starts` marks the request that opens the turn, `head` names
+/// that request and `offset` is the time since it.
 ///
-/// A turn opens with a request that carries its own prompt. Claude Code also
-/// wakes the model with nothing typed — a task notification, a stop hook —
-/// and those requests carry no prompt; the first of them names the notice
-/// rather than returning tool results, which is what parts one woken turn
-/// from the next.
+/// A turn opens with a request that carries its own prompt, or with one
+/// Claude Code sent after waking the model with nothing typed. Every request
+/// that answers tool calls while the prompt stays the same carries the turn
+/// on. `answers` is the router's, not read back out of what the row says.
 function turnsOf(entries) {
   const turns = new Map();
   const open = new Map();
   // The list is newest first; a turn is read the way it happened.
-  for (const e of [...entries].reverse()) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
     const session = e.session || `entry:${e.name}`;
     const prompt = e.prompt || null;
+    const at = new Date(e.at).getTime();
     const held = open.get(session);
-    const answers = Boolean(e.step) && e.step.startsWith("returns ");
-    const starts = !held || !e.step || prompt !== held.prompt || (prompt === null && !answers);
-    if (starts) open.set(session, { at: new Date(e.at).getTime(), prompt });
-    turns.set(e.name, { starts, offset: new Date(e.at).getTime() - open.get(session).at });
+    const carries = Boolean(held) && e.answers && prompt === held.prompt;
+    const turn = carries ? held : { at, head: e.name, prompt };
+    if (!carries) open.set(session, turn);
+    turns.set(e.name, { starts: !carries, head: turn.head, offset: at - turn.at });
   }
   return turns;
 }
@@ -474,7 +494,7 @@ async function inspect(target, name, files, neighbors, listed) {
     const draw = () => {
       // The summary too: a big response is folded for the view that shows
       // it, and the tokens it then knows belong up here.
-      replace(facts, summaryFacts(exchange));
+      replace(facts, summaryFacts(exchange, draw));
       replace(partSwitch, PARTS.map(([id, label]) =>
         h("button", { type: "button", "aria-pressed": state.recordingPart === id ? "true" : "false", onclick: () => { state.recordingPart = id; draw(); } }, label)));
       replace(viewSwitch, VIEWS.map(([id, label]) =>
@@ -482,7 +502,6 @@ async function inspect(target, name, files, neighbors, listed) {
       const file = exchange.files[state.recordingPart];
       rerender(body, state.recordingView === "raw" ? rawView(exchange, file) : sectionsView(exchange, state.recordingPart));
     };
-    exchange.redraw = draw;
     // Both step through the list as filtered, which is what a reader who
     // left a filter on has to be told before a gap reads as a lost recording.
     const filtered = state.recordingsFilter.trim();
@@ -490,7 +509,7 @@ async function inspect(target, name, files, neighbors, listed) {
       type: "button",
       class: "small",
       disabled: !entry,
-      title: [entry ? entry.step || entry.prompt || entry.request_id : null,
+      title: [entry ? entryName(entry) : null,
         filtered ? `within the filter "${filtered}"` : null].filter(Boolean).join(" · ") || null,
       onclick: () => go("recordings", entry.name),
     }, filtered ? `${label} (filtered)` : label);
@@ -578,7 +597,7 @@ function parsedOnce(exchange, key, parse) {
   return exchange.parsed[key];
 }
 
-function summaryFacts(exchange) {
+function summaryFacts(exchange, redraw) {
   const m = exchange.meta;
   if (!m) return banner(`Recording ${exchange.name} has no readable meta.json.`, "info");
   const route = [m.requested_model];
@@ -611,19 +630,24 @@ function summaryFacts(exchange) {
     fact("Size", `request ${fmt.bytes(exchange.files.request ? exchange.files.request.bytes : null)}, response ${fmt.bytes(m.response_bytes)}`),
     usage ? fact("Tokens", usage) : null,
     usage ? cacheFact(response.usage) : null,
-    heavy ? fact("Tokens", countTokens(exchange)) : null);
+    heavy ? fact("Tokens", countTokens(exchange, redraw)) : null);
 }
 
 /// Folding a recorded stream costs a JSON.parse per event. Past
 /// [`SUMMARY_FOLD_CHARS`] a reader asks for it rather than paying for it on
 /// the way to something else.
-function countTokens(exchange) {
-  const button = h("button", { type: "button", class: "small" }, "Count tokens");
-  button.addEventListener("click", () => {
+function countTokens(exchange, redraw) {
+  return askFirst(`${fmt.bytes(exchange.files.response.bytes)} of events to fold.`, "Count tokens", () => {
     parsedOnce(exchange, "response", () => foldResponse(exchange.files.response, exchange.dialect));
-    exchange.redraw();
+    redraw();
   });
-  return [button, h("span", { class: "muted" }, ` ${fmt.bytes(exchange.files.response.bytes)} of events to fold`)];
+}
+
+/// What something costs, and the button that pays it: a reader asks for the
+/// work rather than meeting it on the way past.
+function askFirst(cost, label, run) {
+  const button = h("button", { type: "button", class: "small", onclick: run }, label);
+  return [h("span", { class: "muted" }, `${cost} `), button];
 }
 
 function rawView(exchange, file) {
@@ -660,7 +684,7 @@ function requestView(exchange) {
   const doc = parsedOnce(exchange, "request", () => readRequest(JSON.parse(exchange.files.request.text), exchange.dialect));
   if (doc instanceof Error) return banner(`request.json does not read as a request (${doc.message}); Raw shows it as recorded.`, "info");
 
-  const prompt = lastPrompt(doc.messages);
+  const prompt = parsedOnce(exchange, "prompt", () => lastPrompt(doc.messages));
   const sum = (items) => items.reduce((total, item) => total + item.bytes, 0);
   const matching = (items, needle) => (needle ? items.filter((item) => item.find.includes(needle)) : items);
   const sections = [
@@ -872,22 +896,16 @@ function lastPrompt(messages) {
     if (messages[position].role !== "user") continue;
     let text = "";
     let queued = false;
-    const { pieces, wakes } = typedPieces(messages[position].blocks);
-    for (const b of messages[position].blocks) {
-      if (b.kind !== "text") continue;
-      for (const match of [...b.text.matchAll(REMINDER), null]) {
-        const typed = pieces.shift();
-        if (typed) {
-          if (queued) text = "";
-          queued = false;
-          text += `${typed}\n\n`;
-        }
-        if (!match) break;
-        const inner = match[1].trim();
-        if (inner.startsWith(QUEUED) && inner.slice(QUEUED.length).trim()) {
-          text = inner.slice(QUEUED.length).trim();
-          queued = true;
-        }
+    const { segments, wakes } = userSegments(messages[position].blocks);
+    for (const segment of segments) {
+      if (segment.reminder === undefined) {
+        if (!segment.typed) continue;
+        if (queued) text = "";
+        queued = false;
+        text += `${segment.typed}\n\n`;
+      } else if (segment.reminder.startsWith(QUEUED) && segment.reminder.slice(QUEUED.length).trim()) {
+        text = segment.reminder.slice(QUEUED.length).trim();
+        queued = true;
       }
     }
     if (text.trim()) return { position, text: text.trim(), queued };
@@ -906,7 +924,7 @@ function classifyText(text) {
   if (!text) return null;
   if (INTERRUPTED.includes(text)) return { notice: "interrupted" };
   const found = NOTICES.find(([start]) => text.startsWith(start));
-  if (found) return { notice: found[1], wakes: found[2] };
+  if (found) return { notice: found[1], wakes: WAKING.includes(found[1]) };
   const name = text.startsWith("<command-name>") || text.startsWith("<command-message>") ? tagged(text, "command-name") : null;
   if (name !== null) return { prompt: `${name} ${tagged(text, "command-args") || ""}`.trim(), command: true };
   const shell = text.startsWith("<bash-input>") ? tagged(text, "bash-input") : null;
@@ -914,12 +932,13 @@ function classifyText(text) {
   return { prompt: text };
 }
 
-/// `{ pieces, wakes }`: a user message's text blocks cut at their reminders,
-/// in order, each as what the user typed or null — notices, and the text a
-/// slash command expands to (right after the command, before any notice), are
-/// null — and whether one of those notices wakes the model with nothing typed.
-function typedPieces(blocks) {
-  const pieces = [];
+/// `{ segments, wakes }`: a user message's text blocks read once, in order —
+/// what the user typed (`typed`, null for a notice and for the text a slash
+/// command expands to) and the reminders between those stretches (`reminder`,
+/// trimmed) — and whether one of the notices wakes the model with nothing
+/// typed. One pass: the reminder scan runs over text that reaches megabytes.
+function userSegments(blocks) {
+  const segments = [];
   let wakes = false;
   let command = false;
   for (const b of blocks) {
@@ -927,20 +946,22 @@ function typedPieces(blocks) {
     let at = 0;
     for (const match of [...b.text.matchAll(REMINDER), null]) {
       const piece = classifyText(b.text.slice(at, match ? match.index : undefined).trim());
-      if (!piece) pieces.push(null);
+      // An empty stretch says nothing, and must not end a command either.
+      if (!piece) segments.push({ typed: null });
       else if (piece.notice || (command && !piece.command)) {
         command = false;
         wakes = wakes || Boolean(piece.wakes);
-        pieces.push(null);
+        segments.push({ typed: null });
       } else {
         command = Boolean(piece.command);
-        pieces.push(piece.prompt);
+        segments.push({ typed: piece.prompt });
       }
       if (!match) break;
       at = match.index + match[0].length;
+      segments.push({ reminder: match[1].trim() });
     }
   }
-  return { pieces, wakes };
+  return { segments, wakes };
 }
 
 /// The trimmed text between the first `<tag>` and its closing tag, or null.
@@ -1115,7 +1136,7 @@ function compareSection(exchange, doc, ctx) {
       const picker = h("select", { "aria-label": "Earlier request" });
       for (const [i, e] of earlier.entries()) {
         const option = h("option", { value: String(i) },
-          `${fmt.clock(e.entry.at)}, ${e.entry.messages ?? "?"} message(s), shares ${fmt.pct(e.diff.shared / (e.diff.total || 1))}: ${e.entry.step || e.entry.prompt || e.entry.request_id}`);
+          `${fmt.clock(e.entry.at)}, ${e.entry.messages ?? "?"} message(s), shares ${fmt.pct(e.diff.shared / (e.diff.total || 1))}: ${entryName(e.entry)}`);
         option.selected = i === exchange.parsed.compareWith;
         picker.append(option);
       }
@@ -1140,14 +1161,13 @@ function compareSection(exchange, doc, ctx) {
     read();
     return box;
   }
-  const start = h("button", { type: "button", class: "small" }, "Compare");
-  start.addEventListener("click", () => {
-    exchange.parsed.earlier = earlierRequests(exchange, doc);
-    read();
-  });
   replace(box, h("p", { class: "note" },
-    `Reads the ${exchange.earlier.length} earlier recording(s) of this session to find where this request stops repeating them. `,
-    start));
+    askFirst(`Reads the ${exchange.earlier.length} earlier recording(s) of this session to find where this request stops repeating them.`,
+      "Compare",
+      () => {
+        exchange.parsed.earlier = earlierRequests(exchange, doc);
+        read();
+      })));
   return box;
 }
 
