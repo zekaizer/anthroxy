@@ -441,6 +441,25 @@ button.badge:hover:not(:disabled) { border-color: currentColor; }
 .controls { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; margin-bottom: var(--space-3); }
 .controls label { display: inline-flex; gap: var(--space-1); align-items: center; font-size: var(--text-sm); }
 .controls label:has(select) { flex: 1 1 20rem; min-width: 0; }
+/* A filter and the way to empty it. The button sits inside the field, so the
+   row is the same size whether the filter holds anything or not, and CSS
+   decides whether it shows: the page sets this value as well as the reader,
+   and `:placeholder-shown` sees both. */
+.field { position: relative; display: flex; flex: 1 1 18rem; max-width: 34rem; min-width: 0; }
+.controls .field input[type="text"] { flex: 1; max-width: none; padding-right: var(--space-5); }
+.field .clear {
+  position: absolute;
+  top: 50%;
+  right: var(--space-1);
+  transform: translateY(-50%);
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  justify-content: center;
+  font-size: var(--text-md);
+}
+.field input[type="text"]:placeholder-shown + .clear { visibility: hidden; }
+
 .controls select { flex: 1; min-width: 0; max-width: 100%; }
 .controls input[type="text"] { flex: 1 1 18rem; max-width: 34rem; }
 .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; height: var(--control-h); }

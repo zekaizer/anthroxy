@@ -304,7 +304,7 @@ function recordings(view, opened) {
     }
   });
 
-  const listPanel = panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, filter), list);
+  const listPanel = panel("Recordings", [refresh, removeAll], h("div", { class: "controls" }, clearable(filter)), list);
   view.append(inspector, listPanel);
   /// Whether the open recording is one the router is still writing, which is
   /// what makes it worth re-reading.
