@@ -45,7 +45,7 @@ impl Network {
                 .iter()
                 .map(|(name, backend)| Route {
                     backend: name.clone(),
-                    url: backend.url.clone(),
+                    url: redacted_url(&backend.url),
                     proxy: backend.proxy.as_deref().map(redacted_url),
                 })
                 .collect(),

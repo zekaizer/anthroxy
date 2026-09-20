@@ -134,7 +134,7 @@ fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, s
         println!(
             "  backend  {}  {}  {}",
             style.bold(&backend.name),
-            backend.url,
+            backend.shown_url(),
             style.dim(&format!("credential: {}", backend.credential.describe()))
         );
     }

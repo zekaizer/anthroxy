@@ -8,7 +8,9 @@ use crate::credential::{self, CredentialError, CredentialSource};
 pub struct Backend {
     pub name: String,
     pub kind: BackendKind,
-    /// Origin without trailing slash.
+    /// Origin without trailing slash. Connections are opened to it, so it
+    /// carries whatever the file said, userinfo included; anything shown to
+    /// someone reads [`Self::shown_url`] instead.
     pub url: String,
     /// Path the probe fetches the model list from.
     pub models_path: String,
@@ -36,6 +38,11 @@ pub struct BackendBuildError {
 }
 
 impl Backend {
+    /// The URL with its userinfo, which may be a password, redacted.
+    pub fn shown_url(&self) -> String {
+        crate::config::view::redacted_url(&self.url)
+    }
+
     /// Assumes `config` passed validation (header names and values are valid).
     pub fn from_config(name: &str, config: &BackendConfig) -> Result<Self, BackendBuildError> {
         let credential =
