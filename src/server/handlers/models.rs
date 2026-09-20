@@ -26,10 +26,7 @@ pub async fn list(
     let mut data = Vec::new();
     let occupied = |id: &str| snapshot.registry.lookup(id).is_some();
     for live in &snapshot.live {
-        data.extend(
-            live.models(&snapshot.upstream, &headers, occupied)
-                .await,
-        );
+        data.extend(live.models(&snapshot.upstream, &headers, occupied).await);
     }
     data.extend(snapshot.registry.routes().iter().map(|r| object(&state, r)));
     Json(ModelList::all(data))
@@ -52,11 +49,11 @@ pub async fn get_one(
     }
     let occupied = |name: &str| snapshot.registry.lookup(name).is_some();
     for live in &snapshot.live {
-        if let Some(route) = live
-            .lookup(&id, &snapshot.upstream, &headers, occupied)
+        if let Some(model) = live
+            .identity(&id, &snapshot.upstream, &headers, occupied)
             .await
         {
-            return Json(object(&state, &route)).into_response();
+            return Json(model).into_response();
         }
     }
     RouterError::unknown_model(id, &snapshot.registry).into_response(&request_id)

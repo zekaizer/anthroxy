@@ -1012,7 +1012,12 @@ async fn live_models_publishes_openai_identity_and_routes() {
                         "id": "grok-4",
                         "object": "model",
                         "created": 1700000000,
-                        "owned_by": "xai"
+                        "owned_by": "xai",
+                        "context_length": 500000,
+                        "capabilities": {
+                            "reasoning_effort": ["low", "high"],
+                            "default_reasoning_effort": "high"
+                        }
                     }]
                 }),
             )
@@ -1043,6 +1048,13 @@ credential = {{ kind = "static", value = "xai-oauth-token" }}
     assert_eq!(list["data"][0]["id"], "grok-4");
     assert_eq!(list["data"][0]["type"], "model");
     assert_eq!(list["data"][0]["display_name"], "grok-4");
+    assert_eq!(list["data"][0]["context_window"], 500000);
+    assert_eq!(list["data"][0]["runtime"]["max_input_tokens"], 500000);
+    assert_eq!(list["data"][0]["runtime"]["default_effort"], "high");
+    let one = router.get("/v1/models/grok-4").send().await.unwrap();
+    assert_eq!(one.status(), 200);
+    let one: Value = one.json().await.unwrap();
+    assert_eq!(one["context_window"], 500000);
 
     let res = router
         .post("/v1/messages", &json!({"model": "grok-4", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}))

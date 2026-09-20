@@ -52,6 +52,22 @@ impl LiveCatalog {
             .collect()
     }
 
+    pub async fn identity(
+        &self,
+        name: &str,
+        upstream: &UpstreamClient,
+        client_headers: &HeaderMap,
+        occupied: impl Fn(&str) -> bool,
+    ) -> Option<ModelObject> {
+        if occupied(name) {
+            return None;
+        }
+        self.fetch(upstream, client_headers)
+            .await
+            .into_iter()
+            .find(|m| m.id == name)
+    }
+
     pub async fn lookup(
         &self,
         name: &str,
@@ -154,6 +170,6 @@ impl LiveCatalog {
                 });
             }
         };
-        Ok(crate::anthropic::identity_list(&raw))
+        Ok(crate::translate::catalog(self.backend.kind, &raw))
     }
 }
