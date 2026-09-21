@@ -1187,6 +1187,43 @@ fn a_stream_cannot_open_unboundedly_many_tool_calls() {
 }
 
 #[test]
+fn an_unnumbered_call_after_the_last_index_ends_the_stream_instead_of_wrapping() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    d.decode(&chunk(
+        json!({"tool_calls": [{"index": u32::MAX, "id": "a", "function": {"name": "f", "arguments": "{}"}}]}),
+        None,
+    ))
+    .unwrap();
+    let events = d
+        .decode(&chunk(
+            json!({"tool_calls": [{"id": "b", "function": {"name": "g", "arguments": "{}"}}]}),
+            None,
+        ))
+        .unwrap();
+    assert!(
+        matches!(events.first(), Some(Event::Error(_))),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn usage_counts_at_the_edge_do_not_overflow() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let usage = json!({"id": "c", "object": "chat.completion.chunk", "model": "m", "choices": [],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1,
+                  "cache_read_input_tokens": u64::MAX, "prompt_tokens_details": {"cache_write_tokens": 1}}});
+    let events = d.decode(&usage.to_string()).unwrap();
+    assert!(
+        matches!(events.first(), Some(Event::Usage(u)) if u.input_tokens == 0),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn an_index_too_large_for_the_ir_starts_its_own_call() {
     let mut d = ChunkDecoder::new();
     d.decode(&chunk(json!({"role": "assistant"}), None))

@@ -162,7 +162,9 @@ pub(super) fn usage_event(root: &Map<String, Value>) -> Option<Event> {
     let largest = |paths: &[&str]| paths.iter().filter_map(|path| at(path)).max();
     let cache_read_tokens = largest(&CACHE_READ);
     let cache_creation_tokens = largest(&CACHE_WRITE);
-    let cached = cache_read_tokens.unwrap_or(0) + cache_creation_tokens.unwrap_or(0);
+    let cached = cache_read_tokens
+        .unwrap_or(0)
+        .saturating_add(cache_creation_tokens.unwrap_or(0));
     Some(Event::Usage(Usage {
         input_tokens: count("prompt_tokens").saturating_sub(cached),
         output_tokens: count("completion_tokens"),
