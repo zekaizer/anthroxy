@@ -187,6 +187,7 @@ impl BodyLog {
                 ("meta.json", to_pretty_json(&meta)),
             ],
             None,
+            Create::First,
         );
         Recorder {
             dir,
@@ -398,14 +399,14 @@ fn write_files(
     dir: PathBuf,
     files: Vec<(&'static str, Bytes)>,
     after: Option<tokio::task::JoinHandle<()>>,
+    create: Create,
 ) -> tokio::task::JoinHandle<()> {
     let span = tracing::Span::current();
     let pending = PendingWrite::begin();
     let write = move || {
         let _pending = pending;
         let _guard = span.enter();
-        if let Err(error) = create_dir_private(&dir) {
-            tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
+        if !entry_ready(&dir, create) {
             return;
         }
         for (name, bytes) in files {
@@ -424,6 +425,35 @@ fn write_files(
         }
         let _ = tokio::task::spawn_blocking(write).await;
     })
+}
+
+/// Whether a write may create the entry's directory. Only the first write
+/// does: an entry pruned or deleted while its stream runs stays gone rather
+/// than coming back with a torso of the response.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Create {
+    First,
+    Never,
+}
+
+/// Whether the entry directory is there to write into.
+fn entry_ready(dir: &Path, create: Create) -> bool {
+    match create {
+        Create::First => match create_dir_private(dir) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
+                false
+            }
+        },
+        Create::Never => {
+            let present = dir.is_dir();
+            if !present {
+                tracing::debug!(dir = %dir.display(), "recording removed while it ran; the rest is dropped");
+            }
+            present
+        }
+    }
 }
 
 /// How much of a body waits before it is appended, and how long. Fixed: a
@@ -446,8 +476,7 @@ fn append_file(
     let append = move || {
         let _pending = pending;
         let _guard = span.enter();
-        if let Err(error) = create_dir_private(&dir) {
-            tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
+        if !entry_ready(&dir, Create::Never) {
             return;
         }
         let path = dir.join(name);
@@ -555,7 +584,10 @@ impl Recorder {
     fn record_now(&mut self, outcome: &RelayOutcome) {
         self.set_end(outcome);
         let tail = Bytes::from(std::mem::take(&mut self.response));
-        let result = create_dir_private(&self.dir).and_then(|()| {
+        if !entry_ready(&self.dir, Create::Never) {
+            return;
+        }
+        let result = Ok(()).and_then(|()| {
             if self.flushed {
                 append_private(&self.dir.join(self.response_file), &tail)
             } else {
@@ -600,12 +632,14 @@ impl Recorder {
                     Bytes::from(std::mem::take(&mut self.response)),
                 )],
                 self.pending.take(),
+                Create::Never,
             ));
         }
         write_files(
             self.dir.clone(),
             vec![("meta.json", to_pretty_json(&self.meta))],
             self.pending.take(),
+            Create::Never,
         );
         tracing::debug!(dir = %self.dir.display(), "exchange recorded");
     }

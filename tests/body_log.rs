@@ -311,6 +311,55 @@ async fn a_recorded_response_stops_growing_at_the_cap() {
     assert!(recorded as usize <= cap, "{recorded}");
 }
 
+/// A pruned or deleted entry stays gone: the rest of its stream is dropped
+/// rather than recreating the directory with a torso of the response.
+#[tokio::test]
+async fn an_entry_deleted_while_recording_is_not_recreated() {
+    let upstream = MockUpstream::start(|_| {
+        let events = futures_util::stream::iter(0..6).then(|i| async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            Ok::<_, std::io::Error>(format!("data: {{\"n\":{i}}}\n\n"))
+        });
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(events))
+            .unwrap()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!("[logging]\nbody_dir = \"{}\"\n", dir.path().display());
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+    let res = router
+        .post("/v1/messages", &body("smart", true))
+        .send()
+        .await
+        .unwrap();
+    let mut entries = Vec::new();
+    for _ in 0..50 {
+        entries = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        if !entries.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(entries.len(), 1);
+    std::fs::remove_dir_all(&entries[0]).unwrap();
+    let text = res.text().await.unwrap();
+    assert_eq!(text.matches("data:").count(), 6);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let left: Vec<PathBuf> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
 #[tokio::test]
 async fn records_sse_stream_after_completion() {
     let upstream = MockUpstream::start(|_| {
