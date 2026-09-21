@@ -240,6 +240,10 @@ pub fn sent_headers(
             .join(", ");
         let (value, source) = if backend.headers.contains_key(name) {
             (view.show(&value), HeaderSource::Backend)
+        } else if *name == AUTHORIZATION || *name == X_API_KEY {
+            // The client's own credential, forwarded by a passthrough
+            // backend: a secret like any other.
+            (view.show(&value), HeaderSource::Default)
         } else if *name == ANTHROPIC_BETA && !backend.anthropic_beta.is_empty() {
             (value, HeaderSource::Backend)
         } else {
