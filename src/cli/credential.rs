@@ -226,7 +226,7 @@ fn ran(label: &'static str, run: Result<Run, String>, reading: Reading) -> Attem
             // A command that warns on its way to a usable token is worth
             // seeing; the router only reports stderr when the run fails.
             if !run.stderr.trim().is_empty() {
-                details.push(("stderr", run.stderr.trim().to_owned()));
+                details.push(("stderr", capped(run.stderr.trim())));
             }
         }
         Err(error) => {
@@ -235,7 +235,7 @@ fn ran(label: &'static str, run: Result<Run, String>, reading: Reading) -> Attem
             if run.success {
                 details.push(("error", error.to_string()));
             } else if !run.stderr.trim().is_empty() {
-                details.push(("stderr", run.stderr.trim().to_owned()));
+                details.push(("stderr", capped(run.stderr.trim())));
             }
             if !run.stdout.trim().is_empty() {
                 details.push(("stdout", show(run.stdout.trim(), reading.reveal)));
@@ -248,6 +248,19 @@ fn ran(label: &'static str, run: Result<Run, String>, reading: Reading) -> Attem
         headline,
         details,
     }
+}
+
+/// The first 4 KiB of what a command printed, with a note of the rest.
+fn capped(text: &str) -> String {
+    const KEEP: usize = 4096;
+    if text.len() <= KEEP {
+        return text.to_owned();
+    }
+    let end = (0..=KEEP)
+        .rev()
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(0);
+    format!("{}… ({} more bytes)", &text[..end], text.len() - end)
 }
 
 /// An `env` credential: the variable as that environment has it.
