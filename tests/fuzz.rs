@@ -25,7 +25,7 @@ impl Rng {
     }
 }
 
-const ATOMS: [&str; 41] = [
+const ATOMS: [&str; 43] = [
     "null",
     "true",
     "false",
@@ -67,6 +67,8 @@ const ATOMS: [&str; 41] = [
     "\"tool_use_id\"",
     "\"defer_loading\"",
     "\"input_schema\"",
+    "\"user\"",
+    "\"assistant\"",
 ];
 
 const KEYS: [&str; 29] = [
@@ -118,6 +120,36 @@ fn value(rng: &mut Rng, depth: usize) -> String {
                 .collect();
             format!("{{{}}}", items.join(","))
         }
+    }
+}
+
+/// A Messages request whose tool definitions and tool-result content are
+/// random, so the paths behind a valid envelope are reached: tool_reference
+/// expansion, deferred-tool filtering, tool-result images and documents.
+#[test]
+fn the_request_decoder_survives_arbitrary_tools_and_tool_results() {
+    let mut rng = Rng(0x2026_0921);
+    for case in 0..5_000u32 {
+        let text = format!(
+            concat!(
+                "{{\"model\":\"m\",\"messages\":[",
+                "{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":{}}}]}},",
+                "{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"u\",\"content\":[{{\"type\":\"tool_reference\",\"tool_name\":{}}}]}}]}}",
+                "],\"tools\":[{{\"name\":{},\"description\":{},\"input_schema\":{},\"defer_loading\":{}}},{}]}}"
+            ),
+            value(&mut rng, 3),
+            rng.pick(&ATOMS),
+            rng.pick(&ATOMS),
+            value(&mut rng, 2),
+            value(&mut rng, 3),
+            rng.pick(&ATOMS),
+            value(&mut rng, 3),
+        );
+        let bytes = text.as_bytes();
+        let _ = anthropic::decode(bytes);
+        let _ = anthropic::summarize(bytes);
+        let _ = translate::request(bytes, "m", Default::default());
+        let _ = case;
     }
 }
 
