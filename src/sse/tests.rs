@@ -71,6 +71,18 @@ fn caps_the_pending_buffer() {
 }
 
 #[test]
+fn a_long_line_arriving_in_pieces_is_scanned_once() {
+    let mut p = Parser::new();
+    let piece = vec![b'x'; 4 * 1024];
+    let started = std::time::Instant::now();
+    for _ in 0..1024 {
+        assert_eq!(p.feed(&piece).unwrap(), vec![]);
+    }
+    assert!(started.elapsed().as_secs() < 2, "{:?}", started.elapsed());
+    assert_eq!(p.feed(b"\ndata: ok\n\n").unwrap(), vec![frame("ok")]);
+}
+
+#[test]
 fn an_error_discards_the_pending_bytes() {
     let mut p = Parser::new();
     assert_eq!(p.feed(b"data: \xff\n\n"), Err(SseError::Utf8));

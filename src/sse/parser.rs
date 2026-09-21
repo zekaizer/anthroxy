@@ -23,7 +23,9 @@ pub enum SseError {
 #[derive(Debug, Default)]
 pub struct Parser {
     buffer: Vec<u8>,
-    /// Bytes of `buffer` already known to hold no frame end.
+    /// Where the line being read starts.
+    line_start: usize,
+    /// Bytes of `buffer` already searched for a newline.
     scanned: usize,
 }
 
@@ -40,26 +42,30 @@ impl Parser {
         }
         let mut frames = Vec::new();
         let mut consumed = 0;
-        while let Some((end, next)) = frame_end(&self.buffer[consumed..], self.scanned) {
-            let raw = &self.buffer[consumed..consumed + end];
-            consumed += next;
-            self.scanned = 0;
-            match parse_frame(raw) {
-                Ok(Some(frame)) => frames.push(frame),
-                Ok(None) => {}
-                Err(error) => {
-                    self.reset();
-                    return Err(error);
+        loop {
+            match frame_end(&self.buffer[consumed..], self.line_start, self.scanned) {
+                Ok((end, next)) => {
+                    let raw = &self.buffer[consumed..consumed + end];
+                    consumed += next;
+                    self.line_start = 0;
+                    self.scanned = 0;
+                    match parse_frame(raw) {
+                        Ok(Some(frame)) => frames.push(frame),
+                        Ok(None) => {}
+                        Err(error) => {
+                            self.reset();
+                            return Err(error);
+                        }
+                    }
+                }
+                Err(line_start) => {
+                    self.line_start = line_start;
+                    self.scanned = self.buffer.len() - consumed;
+                    break;
                 }
             }
         }
         self.buffer.drain(..consumed);
-        // Everything up to the last newline is known not to end a frame.
-        self.scanned = self
-            .buffer
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map_or(0, |at| at + 1);
         Ok(frames)
     }
 
@@ -67,30 +73,37 @@ impl Parser {
     /// frame had data but no terminating blank line, none otherwise.
     pub fn finish(&mut self) -> Result<Vec<Frame>, SseError> {
         let raw = std::mem::take(&mut self.buffer);
+        self.line_start = 0;
         self.scanned = 0;
         Ok(parse_frame(&raw)?.into_iter().collect())
     }
 
     fn reset(&mut self) {
         self.buffer.clear();
+        self.line_start = 0;
         self.scanned = 0;
     }
 }
 
 /// Offset where the first frame ends (before its terminating blank line) and
-/// the offset just past that blank line, scanning from `from`, which must
-/// sit at a line start.
-fn frame_end(buf: &[u8], from: usize) -> Option<(usize, usize)> {
-    let mut start = from.min(buf.len());
-    while let Some(len) = buf[start..].iter().position(|&b| b == b'\n') {
-        let line = &buf[start..start + len];
+/// the offset just past that blank line. The current line starts at
+/// `line_start` and `buf[..scanned]` holds no newline past it; without a
+/// frame end, the start of the line left open is returned instead, so the
+/// next call searches only new bytes.
+fn frame_end(buf: &[u8], line_start: usize, scanned: usize) -> Result<(usize, usize), usize> {
+    let mut start = line_start.min(buf.len());
+    let mut from = scanned.clamp(start, buf.len());
+    while let Some(len) = buf[from..].iter().position(|&b| b == b'\n') {
+        let end = from + len;
+        let line = &buf[start..end];
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.is_empty() {
-            return Some((start, start + len + 1));
+            return Ok((start, end + 1));
         }
-        start += len + 1;
+        start = end + 1;
+        from = start;
     }
-    None
+    Err(start)
 }
 
 /// `None` for a frame without data (no `data:` line, or an empty one).
