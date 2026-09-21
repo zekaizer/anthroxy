@@ -17,7 +17,7 @@ use http::header::CONTENT_TYPE;
 use http_body_util::LengthLimitError;
 
 use crate::activity::hints::{self, UpstreamFailure};
-use crate::activity::{Exchange, Source};
+use crate::activity::{ERROR_BODY_BYTES, Exchange, Source};
 use crate::anthropic;
 use crate::config::BackendKind;
 use crate::config::view::REDACTED;
@@ -300,7 +300,9 @@ async fn handle(
             bytes = raw.len(),
             "upstream returned an error"
         );
-        let text = String::from_utf8_lossy(&raw);
+        // Hints are read from the prefix the exchange keeps, so no error body
+        // can grow a hint past that.
+        let text = String::from_utf8_lossy(&raw[..raw.len().min(ERROR_BODY_BYTES)]);
         note(exchange, |e| {
             e.upstream_error(
                 &raw,
