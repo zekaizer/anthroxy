@@ -1,6 +1,7 @@
 //! Serde types mirroring the configuration file. Field defaults live here;
 //! cross-field rules live in `validate`.
 
+use crate::openai::SystemPlacement;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -224,6 +225,13 @@ pub struct BackendConfig {
     /// parameters it does not know.
     #[serde(default)]
     pub drop_fields: Vec<String>,
+    /// `kind = "openai"` only: where a `system` message that is not the
+    /// first message goes, for a chat template that refuses one anywhere
+    /// else (Qwen 3.5+). `keep` (default) sends it where it is, `merge`
+    /// appends its text to the leading system message, `user` sends it as a
+    /// user message.
+    #[serde(default)]
+    pub mid_conversation_system: SystemPlacement,
     /// Proxy this backend is reached through (ADR-0012); unset connects
     /// directly.
     #[serde(default)]

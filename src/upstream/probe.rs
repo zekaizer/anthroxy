@@ -195,6 +195,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                mid_conversation_system: Default::default(),
                 proxy: None,
             },
         )
@@ -238,6 +239,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                mid_conversation_system: Default::default(),
                 proxy: None,
             },
         )
@@ -302,6 +304,7 @@ mod tests {
                 anthropic_beta: vec!["oauth-2025-04-20".into()],
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                mid_conversation_system: Default::default(),
                 proxy: None,
             },
         )
@@ -382,6 +385,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                mid_conversation_system: Default::default(),
                 proxy: None,
             },
         )
@@ -436,6 +440,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                mid_conversation_system: Default::default(),
                 proxy: None,
             },
         )

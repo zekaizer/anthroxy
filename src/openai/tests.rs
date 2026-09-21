@@ -38,7 +38,7 @@ fn assistant(parts: Vec<Part>) -> RequestMessage {
 }
 
 fn encoded(request: &Request) -> Value {
-    serde_json::from_slice(&encode_request(request)).unwrap()
+    serde_json::from_slice(&encode_request(request, SystemPlacement::Keep)).unwrap()
 }
 
 #[test]
@@ -726,6 +726,62 @@ fn mid_conversation_system_messages_stay_in_place() {
             {"role": "system", "content": "top"},
             {"role": "user", "content": "hi"},
             {"role": "system", "content": "env changed\n\nagain"},
+            {"role": "assistant", "content": "ok"}
+        ])
+    );
+}
+
+fn with_mid_conversation_system() -> Request {
+    let mut r = request(vec![
+        user(vec![Part::Text("hi".into())]),
+        RequestMessage {
+            role: Role::System,
+            parts: vec![Part::Text("env changed".into())],
+        },
+        assistant(vec![Part::Text("ok".into())]),
+    ]);
+    r.system = Some("top".into());
+    r
+}
+
+#[test]
+fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
+    let body = serde_json::from_slice::<Value>(&encode_request(
+        &with_mid_conversation_system(),
+        SystemPlacement::Merge,
+    ))
+    .unwrap();
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"role": "system", "content": "top\n\nenv changed"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "ok"}
+        ])
+    );
+    let mut r = with_mid_conversation_system();
+    r.system = None;
+    let body =
+        serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::Merge)).unwrap();
+    assert_eq!(
+        body["messages"][0],
+        json!({"role": "system", "content": "env changed"})
+    );
+}
+
+#[test]
+fn user_sends_a_mid_conversation_system_as_a_user_message() {
+    let body = serde_json::from_slice::<Value>(&encode_request(
+        &with_mid_conversation_system(),
+        SystemPlacement::User,
+    ))
+    .unwrap();
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"role": "system", "content": "top"},
+            {"role": "user", "content": "hi"},
+            {"role": "user", "content": "env changed"},
             {"role": "assistant", "content": "ok"}
         ])
     );

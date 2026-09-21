@@ -34,6 +34,7 @@ pub fn masked(config: &Config) -> Value {
                     "anthropic_beta": backend.anthropic_beta,
                     "drop_headers": backend.drop_headers,
                     "drop_fields": backend.drop_fields,
+                    "mid_conversation_system": backend.mid_conversation_system,
                     "proxy": backend.proxy.as_deref().map(redacted_url),
                 }),
             )

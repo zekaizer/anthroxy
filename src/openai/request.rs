@@ -9,13 +9,44 @@ use crate::ir::{Part, Request, RequestMessage, Role, ToolChoice};
 /// Text parts of one message are joined with a blank line.
 const TEXT_SEPARATOR: &str = "\n\n";
 
-pub fn encode(request: &Request) -> Vec<u8> {
+/// Where a `Role::System` message that is not the first message goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SystemPlacement {
+    /// A `system` message where it is.
+    #[default]
+    Keep,
+    /// Its text appended to the leading `system` message.
+    Merge,
+    /// A `user` message where it is.
+    User,
+}
+
+pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
     let mut messages = Vec::new();
-    if let Some(system) = &request.system {
+    let mut system = request.system.clone().unwrap_or_default();
+    if placement == SystemPlacement::Merge {
+        for message in &request.messages {
+            if message.role == Role::System {
+                for part in &message.parts {
+                    if let Part::Text(text) = part {
+                        if !system.is_empty() {
+                            system.push_str(TEXT_SEPARATOR);
+                        }
+                        system.push_str(text);
+                    }
+                }
+            }
+        }
+    }
+    if !system.is_empty() {
         messages.push(json!({"role": "system", "content": system}));
     }
     for message in &request.messages {
-        encode_message(message, &mut messages);
+        match (message.role, placement) {
+            (Role::System, SystemPlacement::Merge) => {}
+            _ => encode_message(message, placement, &mut messages),
+        }
     }
     let mut body = Map::new();
     body.insert("model".into(), json!(request.model));
@@ -76,7 +107,7 @@ pub fn encode(request: &Request) -> Vec<u8> {
 /// A user message yields one `tool` message per tool result, then one
 /// `user` message for the rest; an assistant message yields one message with
 /// its text and tool calls.
-fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
+fn encode_message(message: &RequestMessage, placement: SystemPlacement, out: &mut Vec<Value>) {
     let emitted_before = out.len();
     let mut pieces: Vec<Piece> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
@@ -144,6 +175,7 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
         json!(match message.role {
             Role::User => "user",
             Role::Assistant => "assistant",
+            Role::System if placement == SystemPlacement::User => "user",
             Role::System => "system",
         }),
     );

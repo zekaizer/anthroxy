@@ -8,6 +8,7 @@ use super::{
     BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, V1Auth,
     origin,
 };
+use crate::openai::SystemPlacement;
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut problems = Vec::new();
@@ -130,6 +131,13 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                     "backends.{name}.drop_fields: `{path}` has an empty segment"
                 ));
             }
+        }
+        if backend.kind != BackendKind::OpenAi
+            && backend.mid_conversation_system != SystemPlacement::Keep
+        {
+            problems.push(format!(
+                "backends.{name}.mid_conversation_system: applies only to kind = \"openai\""
+            ));
         }
         if backend.kind == BackendKind::OpenAi && !backend.anthropic_beta.is_empty() {
             problems.push(format!(

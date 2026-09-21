@@ -12,6 +12,7 @@ use tracing::Span;
 use crate::activity::Exchange;
 use crate::observability::Recorder;
 use crate::openai::ResponseError;
+use crate::openai::SystemPlacement;
 use crate::server::RouterError;
 use crate::server::buffered::read_all;
 use crate::server::ping::{PING_INTERVAL, Pings};
@@ -26,6 +27,7 @@ pub fn prepare(
     client_path: &str,
     backend: &str,
     upstream_model: &str,
+    placement: SystemPlacement,
 ) -> Result<(&'static str, Bytes), RouterError> {
     let path = client_path.split('?').next().unwrap_or(client_path);
     if path != "/v1/messages" {
@@ -34,11 +36,12 @@ pub fn prepare(
             path: path.to_owned(),
         });
     }
-    let translated =
-        translate::request(body, upstream_model).map_err(|source| RouterError::Translate {
+    let translated = translate::request(body, upstream_model, placement).map_err(|source| {
+        RouterError::Translate {
             backend: backend.to_owned(),
             source,
-        })?;
+        }
+    })?;
     Ok((translate::CHAT_COMPLETIONS_PATH, Bytes::from(translated)))
 }
 

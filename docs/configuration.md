@@ -119,7 +119,12 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   vLLM's `functions.<name>:<n>` for Kimi models, are rewritten on the way to an
   Anthropic backend), and cached and reasoning token counts reach Claude Code
   when the server reports them. `count_tokens` is answered 404 by the router.
-  `anthropic_beta` is not accepted on such a backend, and
+  `mid_conversation_system` says where a `system` message that is not the
+  first message goes, for a chat template that refuses one anywhere else
+  (Qwen 3.5 and later answer 400 `System message must be at the beginning`):
+  `"keep"` (default) sends it where it is, `"merge"` appends its text to the
+  leading system message, `"user"` sends it as a user message; the key is
+  refused on any other kind. `anthropic_beta` is not accepted on such a backend, and
   `anthropic-version`/`anthropic-beta` are not sent to it. `check` still probes
   `GET /v1/models`, so a server without that endpoint fails `check` while
   `serve` works. See [Translation](translation.md) for the exact mapping.

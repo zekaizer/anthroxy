@@ -112,6 +112,10 @@ credential = { kind = "none" }
 # # Where `anthroxy check` and the console read this backend's model list;
 # # defaults to /v1/models. The chat path is not configurable.
 # models_path = "/llm/api/models"
+# # A system message that is not the first message is sent where it is
+# # ("keep"), folded into the leading one ("merge") or sent as a user message
+# # ("user"), for a chat template that refuses it anywhere else (Qwen 3.5+).
+# mid_conversation_system = "merge"
 
 # Grok via xAI Chat Completions. Login once with `scripts/xai-oauth login`,
 # then the command credential re-runs `print` before expiry. `live_models`

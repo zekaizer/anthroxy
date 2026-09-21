@@ -122,7 +122,7 @@ fn decoders_survive_arbitrary_documents() {
         let _ = openai::decode_response(bytes);
         let _ = openai::decode_models(bytes);
         let _ = openai::decode_error(Some(500), bytes);
-        let _ = translate::request(bytes, "m");
+        let _ = translate::request(bytes, "m", Default::default());
         let _ = translate::response(bytes, "m");
         let _ = translate::document_events(bytes, "m");
         let _ = translate::models(anthroxy::config::BackendKind::OpenAi, bytes);

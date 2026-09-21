@@ -195,9 +195,13 @@ async fn handle(
         .unwrap_or("/");
     let (path_and_query, body) = match backend.kind {
         BackendKind::Anthropic | BackendKind::Passthrough => (client_path, body),
-        BackendKind::OpenAi => {
-            openai::prepare(&body, client_path, &backend.name, &route.upstream_model)?
-        }
+        BackendKind::OpenAi => openai::prepare(
+            &body,
+            client_path,
+            &backend.name,
+            &route.upstream_model,
+            backend.mid_conversation_system,
+        )?,
     };
     let headers = upstream_headers(&parts.headers, backend);
     let recorder = state.body_log.as_ref().map(|log| {

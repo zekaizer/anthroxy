@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use super::*;
+use crate::openai::SystemPlacement;
 
 const MINIMAL: &str = r#"
 [server]
@@ -883,6 +884,57 @@ fn backend_kind_rejects_unknown_values() {
     let error = parse(&text).unwrap_err();
     assert!(matches!(error, ConfigError::Parse(_)), "{error:?}");
     assert!(error.to_string().contains("responses"), "{error}");
+}
+
+#[test]
+fn mid_conversation_system_parses_and_defaults_to_keep() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+kind = "openai"
+url = "http://a"
+mid_conversation_system = "merge"
+
+[backends.b]
+kind = "openai"
+url = "http://b"
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let c: Config = toml::from_str(text).unwrap();
+    assert_eq!(
+        c.backends["a"].mid_conversation_system,
+        SystemPlacement::Merge
+    );
+    assert_eq!(
+        c.backends["b"].mid_conversation_system,
+        SystemPlacement::Keep
+    );
+}
+
+#[test]
+fn validation_rejects_mid_conversation_system_off_openai_backend() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+mid_conversation_system = "merge"
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let joined = problems(text).join("\n");
+    assert!(
+        joined.contains("backends.a.mid_conversation_system: applies only to kind = \"openai\""),
+        "{joined}"
+    );
 }
 
 #[test]

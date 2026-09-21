@@ -26,6 +26,7 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
             anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
             drop_headers: Vec::new(),
             drop_fields: Vec::new(),
+            mid_conversation_system: Default::default(),
             proxy: None,
         },
     )
@@ -45,6 +46,7 @@ fn backend_with_drops(drops: &[&str]) -> Backend {
             anthropic_beta: Vec::new(),
             drop_headers: drops.iter().map(|s| s.to_string()).collect(),
             drop_fields: Vec::new(),
+            mid_conversation_system: Default::default(),
             proxy: None,
         },
     )
@@ -183,6 +185,7 @@ fn every_header_the_backend_does_not_see_says_why() {
             anthropic_beta: Vec::new(),
             drop_headers: vec!["x-stainless-*".into()],
             drop_fields: Vec::new(),
+            mid_conversation_system: Default::default(),
             proxy: None,
         },
     )
@@ -433,6 +436,7 @@ fn the_logged_request_target_keeps_the_url_userinfo_out() {
             anthropic_beta: Vec::new(),
             drop_headers: Vec::new(),
             drop_fields: Vec::new(),
+            mid_conversation_system: Default::default(),
             proxy: None,
         },
     )

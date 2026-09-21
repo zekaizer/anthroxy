@@ -106,6 +106,36 @@ async fn translates_messages_request_to_chat_completions() {
 }
 
 #[tokio::test]
+async fn mid_conversation_system_merge_leaves_one_leading_system_message() {
+    let upstream =
+        MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))
+            .await;
+    let config = config_with_openai_backend(&upstream.url(), "").replace(
+        "kind = \"openai\"",
+        "kind = \"openai\"\nmid_conversation_system = \"merge\"",
+    );
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let messages = upstream.last().json()["messages"].clone();
+    let roles: Vec<&str> = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["system", "user", "assistant", "tool"]);
+    assert_eq!(
+        messages[0]["content"],
+        "You are Claude Code.\n\nBe brief.\n\n# Environment\ncwd changed"
+    );
+}
+
+#[tokio::test]
 async fn drop_fields_apply_before_translation() {
     let upstream =
         MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))
