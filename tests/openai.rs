@@ -1096,6 +1096,49 @@ display_name = "Grok"
     );
 }
 
+/// Concurrent misses on the live model list share one fetch instead of
+/// each asking the backend.
+#[tokio::test]
+async fn concurrent_live_model_misses_fetch_once() {
+    let upstream = MockUpstream::start(|req| {
+        if req.path_and_query.starts_with("/v1/models") {
+            std::thread::sleep(Duration::from_millis(200));
+            json_response(
+                200,
+                json!({"object": "list", "data": [{"id": "grok-4", "object": "model"}]}),
+            )
+        } else {
+            completion(json!({"role": "assistant", "content": "ok"}), "stop")
+        }
+    })
+    .await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.grok]
+kind = "openai"
+url = "{url}"
+live_models = true
+credential = {{ kind = "static", value = "k" }}
+"#,
+        url = upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+    let calls = (0..5).map(|_| router.get("/v1/models").send());
+    for res in futures_util::future::join_all(calls).await {
+        assert_eq!(res.unwrap().status(), 200);
+    }
+    let fetched = upstream
+        .received()
+        .iter()
+        .filter(|r| r.path_and_query.starts_with("/v1/models"))
+        .count();
+    assert_eq!(fetched, 1);
+}
+
 #[tokio::test]
 async fn live_models_publishes_openai_identity_and_routes() {
     let upstream = MockUpstream::start(|req| {

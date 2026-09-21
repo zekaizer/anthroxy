@@ -107,7 +107,10 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   as Anthropic model identity (`id`, `display_name`, `created_at`). Anthropic
   and OpenAI list JSON both work (ADR-0017). `kind = "passthrough"` always does
   this. Configured `[[models]]` still win on the same id. A backend with
-  `live_models` may omit `[[models]]`.
+  `live_models` may omit `[[models]]`. The list is cached for 30 seconds;
+  concurrent misses share one fetch, which has its own 10 second deadline, so
+  a backend that never answers cannot hold every request naming an unknown
+  model.
 - `kind = "openai"` marks a backend that speaks the OpenAI Chat Completions API.
   `POST /v1/messages` is translated and sent to `<url>/v1/chat/completions`:
   `system`, messages, tool definitions, tool calls and results, and base64
