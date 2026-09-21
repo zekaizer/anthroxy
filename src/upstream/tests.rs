@@ -375,6 +375,25 @@ async fn retry_policy_retries_connection_refused_but_not_timeouts() {
     assert!(!is_connection_failure(&timeout));
     assert_eq!(policy.on_transport_error(1, &timeout), Decision::GiveUp);
     drop(listener);
+
+    // A backend that reads the request and closes without answering may
+    // have acted on it: not retried.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+        drop(socket);
+    });
+    let closed = reqwest::Client::new()
+        .post(format!("http://{addr}/"))
+        .body("x")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(!is_connection_failure(&closed), "{closed:?}");
+    assert_eq!(policy.on_transport_error(1, &closed), Decision::GiveUp);
 }
 
 #[test]
