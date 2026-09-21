@@ -158,7 +158,10 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   upstream. When a refresh fails, a JSON token more than two minutes from its
   `expires_at` keeps being sent, with the command retried at most every 30
   seconds, so a brief token-helper outage does not fail requests; a text token
-  is not reused past `refresh` (ADR-0015). The command runs in its own process
+  is not reused past `refresh` (ADR-0015). A value the backend rejected is
+  re-acquired once; when the command hands the same value back, further
+  requests rejected with it wait 30 seconds before it is run again rather
+  than each running it. The command runs in its own process
   group, killed whole when `timeout` passes, and may print at most 64 KiB on
   each of stdout and stderr; more is a failed run.
 

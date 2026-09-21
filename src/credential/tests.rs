@@ -206,6 +206,25 @@ async fn invalidating_a_value_already_replaced_keeps_the_replacement() {
 }
 
 #[tokio::test]
+async fn a_rejected_value_the_command_reproduces_is_not_fetched_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let cmd = format!("echo run >> {} && echo same", counter.display());
+    let source = command(&cmd, Duration::from_secs(60), Duration::from_secs(5));
+    let first = source.credential().await.unwrap().unwrap();
+    source.invalidate(&first).await;
+    assert_eq!(source.credential().await.unwrap(), Some(first.clone()));
+    assert_eq!(runs(&counter), 2, "a rejection re-ran the command once");
+    // The next requests rejected with the same value find it reproduced
+    // already: no run per request.
+    for _ in 0..3 {
+        source.invalidate(&first).await;
+        assert_eq!(source.credential().await.unwrap(), Some(first.clone()));
+    }
+    assert_eq!(runs(&counter), 2);
+}
+
+#[tokio::test]
 async fn command_reruns_after_refresh_interval() {
     let dir = tempfile::tempdir().unwrap();
     let counter = dir.path().join("runs");
