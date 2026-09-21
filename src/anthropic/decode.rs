@@ -2,6 +2,10 @@
 //! IR are dropped; block types the IR cannot carry are an error, so content
 //! the model needs is never silently lost.
 
+use std::collections::HashSet;
+use std::fmt::Write;
+
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::ir::{Image, Part, Request, RequestMessage, Role, TEXT_SEPARATOR, Tool, ToolChoice};
@@ -36,13 +40,33 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
         .and_then(Value::as_str)
         .ok_or(DecodeError::Field("model"))?
         .to_owned();
-    let messages = root
+    let raw_messages = root
         .get("messages")
         .and_then(Value::as_array)
-        .ok_or(DecodeError::Field("messages"))?
+        .ok_or(DecodeError::Field("messages"))?;
+    // A tool marked `defer_loading` is invisible to the model until a
+    // `tool_reference` names it, so an unreferenced one is not sent.
+    let raw_tools = optional_array(root, "tools")?;
+    let referenced = if raw_tools.iter().any(deferred) {
+        referenced_tools(raw_messages)
+    } else {
+        HashSet::new()
+    };
+    let tools = raw_tools
+        .iter()
+        .filter(|tool| {
+            !deferred(tool)
+                || tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| referenced.contains(name))
+        })
+        .map(decode_tool)
+        .collect::<Result<Vec<_>, _>>()?;
+    let messages = raw_messages
         .iter()
         .enumerate()
-        .map(|(index, message)| decode_message(index, message))
+        .map(|(index, message)| decode_message(index, message, &tools))
         .collect::<Result<Vec<_>, _>>()?;
     let system = match root.get("system") {
         Some(Value::String(text)) => Some(text.clone()),
@@ -55,10 +79,6 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
         ),
     }
     .filter(|text| !text.is_empty());
-    let tools = optional_array(root, "tools")?
-        .iter()
-        .map(decode_tool)
-        .collect::<Result<Vec<_>, _>>()?;
     let choice = root.get("tool_choice").filter(|c| !c.is_null());
     let disable_parallel_tool_calls = choice
         .and_then(|c| c.get("disable_parallel_tool_use"))
@@ -135,7 +155,11 @@ fn optional<T>(
     }
 }
 
-fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, DecodeError> {
+fn decode_message(
+    index: usize,
+    message: &Value,
+    tools: &[Tool],
+) -> Result<RequestMessage, DecodeError> {
     let role_name = field_str(message, "role")?;
     let role = match role_name {
         "user" => Role::User,
@@ -152,7 +176,7 @@ fn decode_message(index: usize, message: &Value) -> Result<RequestMessage, Decod
         Some(Value::String(text)) => vec![Part::Text(text.clone())],
         Some(Value::Array(blocks)) => blocks
             .iter()
-            .filter_map(|block| decode_block(index, block).transpose())
+            .filter_map(|block| decode_block(index, block, tools).transpose())
             .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(DecodeError::Field("content")),
     };
@@ -179,7 +203,7 @@ fn allowed(role: Role, part: &Part) -> bool {
 }
 
 /// `None` for blocks that are dropped on purpose (thinking).
-fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError> {
+fn decode_block(index: usize, block: &Value, tools: &[Tool]) -> Result<Option<Part>, DecodeError> {
     let part = match field_str(block, "type")? {
         "text" => Part::Text(field_str(block, "text")?.to_owned()),
         "image" => {
@@ -204,7 +228,7 @@ fn decode_block(index: usize, block: &Value) -> Result<Option<Part>, DecodeError
                 .unwrap_or(Value::Object(Default::default())),
         },
         "tool_result" => {
-            let (content, images) = tool_result_content(index, block.get("content"))?;
+            let (content, images) = tool_result_content(index, block.get("content"), tools)?;
             Part::ToolResult {
                 tool_use_id: field_str(block, "tool_use_id")?.to_owned(),
                 content,
@@ -250,11 +274,13 @@ fn document_text(block: &Value) -> Result<String, DecodeError> {
 }
 
 /// A tool result as text plus its images: a string as is, blocks by their
-/// text, image blocks apart. Any other block type is an error, as at
-/// message level.
+/// text, image blocks apart, `tool_reference` blocks as one `<functions>`
+/// block of the definitions they name. Any other block type is an error, as
+/// at message level.
 fn tool_result_content(
     index: usize,
     content: Option<&Value>,
+    tools: &[Tool],
 ) -> Result<(String, Vec<Image>), DecodeError> {
     match content {
         None | Some(Value::Null) => Ok((String::new(), Vec::new())),
@@ -262,8 +288,13 @@ fn tool_result_content(
         Some(Value::Array(blocks)) => {
             let mut texts = Vec::new();
             let mut images = Vec::new();
+            let mut references = Vec::new();
             for block in blocks {
-                match decode_block(index, block)? {
+                if block.get("type").and_then(Value::as_str) == Some("tool_reference") {
+                    references.push(field_str(block, "tool_name")?);
+                    continue;
+                }
+                match decode_block(index, block, tools)? {
                     Some(Part::Text(text)) => texts.push(text),
                     Some(Part::Image { media_type, data }) => {
                         images.push(Image { media_type, data })
@@ -277,10 +308,62 @@ fn tool_result_content(
                     None => {}
                 }
             }
+            if !references.is_empty() {
+                texts.push(functions_block(&references, tools));
+            }
             Ok((texts.join(TEXT_SEPARATOR), images))
         }
         Some(_) => Err(DecodeError::Field("content")),
     }
+}
+
+/// The definitions `tool_reference` blocks name, in the form Claude Code's
+/// `ToolSearch` tool tells the model to expect: one `<function>` line of
+/// JSON per tool. The Anthropic API expands a reference into the tool's
+/// definition; a Chat Completions server sees only text, so the definition
+/// is spelled out here. A name not among the request's tools is written
+/// alone.
+fn functions_block(names: &[&str], tools: &[Tool]) -> String {
+    #[derive(Serialize)]
+    struct Function<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<&'a str>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parameters: Option<&'a Value>,
+    }
+    let mut out = String::from("<functions>\n");
+    for name in names {
+        let tool = tools.iter().find(|tool| tool.name == *name);
+        let function = Function {
+            description: tool.and_then(|tool| tool.description.as_deref()),
+            name,
+            parameters: tool.map(|tool| &tool.parameters),
+        };
+        let function = serde_json::to_string(&function).expect("a JSON tree serializes");
+        writeln!(out, "<function>{function}</function>").expect("String never fails to write");
+    }
+    out.push_str("</functions>");
+    out
+}
+
+fn deferred(tool: &Value) -> bool {
+    tool.get("defer_loading")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Every name a `tool_reference` block in the conversation carries.
+fn referenced_tools(messages: &[Value]) -> HashSet<&str> {
+    messages
+        .iter()
+        .filter_map(|message| message.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|block| block.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_reference"))
+        .filter_map(|block| block.get("tool_name").and_then(Value::as_str))
+        .collect()
 }
 
 fn decode_tool(tool: &Value) -> Result<Tool, DecodeError> {
@@ -710,5 +793,82 @@ mod tests {
         let mut v = base();
         v["messages"] = json!([{"role": "user", "content": [{"type": "text"}]}]);
         assert_eq!(decode_json(v), Err(DecodeError::Field("text")));
+    }
+
+    #[test]
+    fn a_tool_reference_becomes_the_definition_tool_search_promised() {
+        let mut v = base();
+        v["tools"] = json!([
+            {"name": "ToolSearch", "input_schema": {"type": "object"}},
+            {"name": "mcp__x__grep", "description": "Grep", "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}}, "defer_loading": true},
+            {"name": "mcp__x__ls", "input_schema": {"type": "object"}, "defer_loading": true}
+        ]);
+        v["messages"] = json!([{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": [
+                {"type": "tool_reference", "tool_name": "mcp__x__grep"},
+                {"type": "tool_reference", "tool_name": "mcp__x__ls"}
+            ]}
+        ]}]);
+        let request = decode_json(v).unwrap();
+        assert_eq!(
+            request.messages[0].parts,
+            vec![Part::ToolResult {
+                tool_use_id: "t".into(),
+                content: concat!(
+                    "<functions>\n",
+                    "<function>{\"description\":\"Grep\",\"name\":\"mcp__x__grep\",\"parameters\":{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}}}</function>\n",
+                    "<function>{\"name\":\"mcp__x__ls\",\"parameters\":{\"type\":\"object\"}}</function>\n",
+                    "</functions>"
+                )
+                .into(),
+                images: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_tool_reference_to_a_tool_not_sent_keeps_its_name() {
+        let mut v = base();
+        v["messages"] = json!([{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": [
+                {"type": "text", "text": "found:"},
+                {"type": "tool_reference", "tool_name": "gone"}
+            ]}
+        ]}]);
+        let request = decode_json(v).unwrap();
+        assert_eq!(
+            request.messages[0].parts,
+            vec![Part::ToolResult {
+                tool_use_id: "t".into(),
+                content:
+                    "found:\n\n<functions>\n<function>{\"name\":\"gone\"}</function>\n</functions>"
+                        .into(),
+                images: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn deferred_tools_are_sent_only_once_referenced() {
+        let mut v = base();
+        v["tools"] = json!([
+            {"name": "ToolSearch", "input_schema": {"type": "object"}},
+            {"name": "DeferredToolPlaceholder", "input_schema": {"type": "object"}, "defer_loading": true},
+            {"name": "mcp__x__grep", "input_schema": {"type": "object"}, "defer_loading": true}
+        ]);
+        v["messages"] = json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "ToolSearch", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": [
+                {"type": "tool_reference", "tool_name": "mcp__x__grep"}
+            ]}]}
+        ]);
+        let names: Vec<String> = decode_json(v)
+            .unwrap()
+            .tools
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(names, ["ToolSearch", "mcp__x__grep"]);
     }
 }

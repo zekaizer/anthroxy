@@ -912,6 +912,44 @@ async fn a_pdf_read_by_a_tool_becomes_a_note_instead_of_killing_the_turn() {
 }
 
 #[tokio::test]
+async fn deferred_tools_loaded_by_tool_search_reach_the_backend() {
+    let upstream =
+        MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))
+            .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("qwen");
+    body["tools"] = json!([
+        {"name": "ToolSearch", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}}},
+        {"name": "DeferredToolPlaceholder", "input_schema": {"type": "object", "properties": {}}, "defer_loading": true},
+        {"name": "mcp__dummy__kernel_repos", "description": "List kernel repositories", "input_schema": {"type": "object", "properties": {}}, "defer_loading": true}
+    ]);
+    body["messages"] = json!([
+        {"role": "user", "content": "list kernel repos"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "ToolSearch", "input": {"query": "kernel repos"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            {"type": "tool_reference", "tool_name": "mcp__dummy__kernel_repos"}
+        ]}]}
+    ]);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    let tool = &sent["messages"][2];
+    assert_eq!(tool["role"], "tool");
+    let content = tool["content"].as_str().unwrap();
+    assert!(
+        content.contains("<function>{\"description\":\"List kernel repositories\",\"name\":\"mcp__dummy__kernel_repos\""),
+        "{content}"
+    );
+    let names: Vec<&str> = sent["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["ToolSearch", "mcp__dummy__kernel_repos"]);
+}
+
+#[tokio::test]
 async fn anthropic_kind_never_translates() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
