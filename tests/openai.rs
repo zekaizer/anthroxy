@@ -153,7 +153,7 @@ async fn a_model_mid_conversation_system_overrides_the_backend() {
     assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
     assert_eq!(
         upstream.last().json()["messages"][4],
-        json!({"role": "user", "content": "# Environment\ncwd changed"})
+        json!({"role": "user", "content": "<system-reminder>\n# Environment\ncwd changed\n</system-reminder>"})
     );
 
     let mut body = claude_code_request(false);

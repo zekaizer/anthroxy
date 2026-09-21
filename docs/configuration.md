@@ -124,7 +124,8 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   first message goes, for a chat template that refuses one anywhere else
   (Qwen 3.5 and later answer 400 `System message must be at the beginning`):
   `"keep"` (default) sends it where it is, `"merge"` appends its text to the
-  leading system message, `"user"` sends it as a user message; the key is
+  leading system message, `"user"` sends it as a user message wrapped in `<system-reminder>`, the
+  tag Claude Code itself uses for system notes inside a user turn; the key is
   refused on any other kind. A `[[models]]` entry may carry the same key to
   override its backend's value, for a gateway that serves such a model beside
   others. `anthropic_beta` is not accepted on such a backend, and

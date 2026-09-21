@@ -18,7 +18,7 @@ pub enum SystemPlacement {
     Keep,
     /// Its text appended to the leading `system` message.
     Merge,
-    /// A `user` message where it is.
+    /// A `user` message where it is, wrapped in `<system-reminder>`.
     User,
 }
 
@@ -28,14 +28,10 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
     if placement == SystemPlacement::Merge {
         for message in &request.messages {
             if message.role == Role::System {
-                for part in &message.parts {
-                    if let Part::Text(text) = part {
-                        if !system.is_empty() {
-                            system.push_str(TEXT_SEPARATOR);
-                        }
-                        system.push_str(text);
-                    }
+                if !system.is_empty() {
+                    system.push_str(TEXT_SEPARATOR);
                 }
+                system.push_str(&text_of(message));
             }
         }
     }
@@ -45,7 +41,13 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
     for message in &request.messages {
         match (message.role, placement) {
             (Role::System, SystemPlacement::Merge) => {}
-            _ => encode_message(message, placement, &mut messages),
+            // Marked the way Claude Code marks its own system notes inside a
+            // user turn, so the model does not answer it as user input.
+            (Role::System, SystemPlacement::User) => messages.push(json!({
+                "role": "user",
+                "content": format!("<system-reminder>\n{}\n</system-reminder>", text_of(message)),
+            })),
+            _ => encode_message(message, &mut messages),
         }
     }
     let mut body = Map::new();
@@ -107,7 +109,20 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
 /// A user message yields one `tool` message per tool result, then one
 /// `user` message for the rest; an assistant message yields one message with
 /// its text and tool calls.
-fn encode_message(message: &RequestMessage, placement: SystemPlacement, out: &mut Vec<Value>) {
+/// The text parts of a message joined; a system message carries nothing else.
+fn text_of(message: &RequestMessage) -> String {
+    let texts: Vec<&str> = message
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    texts.join(TEXT_SEPARATOR)
+}
+
+fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
     let emitted_before = out.len();
     let mut pieces: Vec<Piece> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
@@ -175,7 +190,6 @@ fn encode_message(message: &RequestMessage, placement: SystemPlacement, out: &mu
         json!(match message.role {
             Role::User => "user",
             Role::Assistant => "assistant",
-            Role::System if placement == SystemPlacement::User => "user",
             Role::System => "system",
         }),
     );

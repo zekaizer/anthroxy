@@ -71,7 +71,7 @@ backend kind.
 3. `openai::encode_request` writes `ir::Request` as a Chat Completions body: the
    system text first (a mid-conversation `system` message stays in place,
    or, per the backend's `mid_conversation_system`, is folded into that
-   leading text or sent as a user message), `tool_result` parts as `tool` messages (their images ride
+   leading text or sent as a user message wrapped in `<system-reminder>`), `tool_result` parts as `tool` messages (their images ride
    in the user message that follows), `input_schema` as `function.parameters`
    (an object schema always gets `properties`), `metadata.user_id` as `user`,
    `output_config.effort` as `reasoning_effort`, and

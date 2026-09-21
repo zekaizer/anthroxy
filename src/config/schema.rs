@@ -229,7 +229,7 @@ pub struct BackendConfig {
     /// first message goes, for a chat template that refuses one anywhere
     /// else (Qwen 3.5+). `keep` (default) sends it where it is, `merge`
     /// appends its text to the leading system message, `user` sends it as a
-    /// user message.
+    /// user message wrapped in `<system-reminder>`.
     #[serde(default)]
     pub mid_conversation_system: SystemPlacement,
     /// Proxy this backend is reached through (ADR-0012); unset connects

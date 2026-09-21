@@ -781,7 +781,7 @@ fn user_sends_a_mid_conversation_system_as_a_user_message() {
         json!([
             {"role": "system", "content": "top"},
             {"role": "user", "content": "hi"},
-            {"role": "user", "content": "env changed"},
+            {"role": "user", "content": "<system-reminder>\nenv changed\n</system-reminder>"},
             {"role": "assistant", "content": "ok"}
         ])
     );
