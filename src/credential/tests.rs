@@ -287,6 +287,17 @@ async fn command_env_references_are_expanded_when_run() {
 }
 
 #[tokio::test]
+async fn command_output_past_the_cap_is_an_error() {
+    let source = command(
+        "head -c 300000 /dev/zero | tr '\\0' x",
+        Duration::ZERO,
+        Duration::from_secs(10),
+    );
+    let err = source.credential().await.err().unwrap();
+    assert!(matches!(err, CredentialError::OutputTooLarge(_)), "{err}");
+}
+
+#[tokio::test]
 async fn command_timeout_is_enforced() {
     let source = command(
         "sleep 5; echo late",

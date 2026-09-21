@@ -106,6 +106,8 @@ pub enum CredentialError {
     Failed { status: String, stderr: String },
     #[error("credential command printed nothing on stdout")]
     Empty,
+    #[error("credential command printed more than {0} bytes")]
+    OutputTooLarge(usize),
     #[error("credential command output is not `{{\"token\": ..., \"expires_at\": ...}}` JSON: {0}")]
     Json(String),
     #[error("credential command returned a credential that expired at {}", humantime::format_rfc3339_seconds(*.0))]

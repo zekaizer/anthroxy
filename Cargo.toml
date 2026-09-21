@@ -25,6 +25,7 @@ http = "1.5.0"
 http-body-util = "0.1.5"
 humantime = "2.4.0"
 humantime-serde = "1.1.1"
+libc = "0.2"
 hyper = { version = "1.8.1", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["tokio", "server", "service"] }
 jiff = { version = "0.2.35", features = ["serde"] }
