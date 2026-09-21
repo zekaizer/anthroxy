@@ -35,6 +35,10 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn from_config(config: &Config) -> Result<Self, ServerBuildError> {
+        // Routing and credentials first: a rejected configuration leaves no
+        // directory behind.
+        let registry = Registry::from_config(config)?;
+        let upstream = UpstreamClient::from_config(&config.upstream, &config.backends)?;
         let body_log = match &config.logging.body_dir {
             Some(dir) => Some(BodyLog::open(dir, config.logging.body_retention).map_err(
                 |source| ServerBuildError::BodyLog {
@@ -55,7 +59,6 @@ impl Snapshot {
             ),
             false => None,
         };
-        let registry = Registry::from_config(config)?;
         let live = registry
             .live_backends()
             .into_iter()
@@ -65,7 +68,7 @@ impl Snapshot {
             config: config.clone(),
             registry,
             live,
-            upstream: UpstreamClient::from_config(&config.upstream, &config.backends)?,
+            upstream,
             client_token: ClientToken::new(&config.server.token),
             max_body_bytes: config.server.max_body_bytes,
             body_log,
@@ -144,6 +147,9 @@ pub struct AppState {
     probed: Arc<Mutex<HashMap<String, Vec<Model>>>>,
     /// Set once by a stop whose grace period ran out.
     cut: tokio::sync::watch::Sender<bool>,
+    /// Held across a reload's load and apply, so two reloads (a SIGHUP and
+    /// the console) cannot interleave and leave the older file current.
+    reloading: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -166,6 +172,7 @@ impl AppState {
             activity: Activity::new(),
             probed: Arc::new(Mutex::new(HashMap::new())),
             cut: tokio::sync::watch::Sender::new(false),
+            reloading: Arc::new(Mutex::new(())),
         }
     }
 
@@ -211,6 +218,10 @@ impl AppState {
     /// history. Blocks on file and credential setup; a router without a
     /// loader rejects the reload.
     pub fn reload(&self, trigger: ReloadTrigger) -> ReloadEvent {
+        let _one_at_a_time = self
+            .reloading
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let source = self
             .source
             .read()

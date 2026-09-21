@@ -111,10 +111,16 @@ async fn failed_reload_keeps_the_previous_configuration() {
         r#"credential = { kind = "static", value = "backend-secret-key" }"#,
         r#"credential = { kind = "env", name = "ANTHROXY_TEST_DEFINITELY_UNSET" }"#,
     );
+    let never = tempfile::tempdir().unwrap().path().join("never");
+    let broken = format!("{broken}\n[logging]\nbody_dir = \"{}\"\n", never.display());
     let err = router.reload.apply(&parse(&broken)).unwrap_err();
     assert!(
         err.to_string().contains("ANTHROXY_TEST_DEFINITELY_UNSET"),
         "{err}"
+    );
+    assert!(
+        !never.exists(),
+        "a rejected configuration leaves no directory"
     );
     assert_eq!(
         list_models(&router, TOKEN).await,
