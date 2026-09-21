@@ -10,7 +10,7 @@ use crate::upstream::{BodyError, UpstreamError, UpstreamResponse};
 
 /// Largest body read whole; a backend that sends more is failed rather than
 /// buffered without bound.
-const MAX_BUFFERED_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_BUFFERED_BYTES: usize = 16 * 1024 * 1024;
 
 /// The whole body, recorded as received; a body that breaks off or outgrows
 /// [`MAX_BUFFERED_BYTES`] is recorded as the upstream failure it is. The

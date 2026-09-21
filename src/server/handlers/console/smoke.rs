@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use super::{error, live};
 use crate::activity::{Exchange, Source};
 use crate::anthropic::{ErrorType, UsageScanner};
+use crate::server::buffered::MAX_BUFFERED_BYTES;
 use crate::server::handlers::proxy;
 use crate::server::{AppState, RequestId, Snapshot};
 use crate::sse::Parser;
@@ -160,6 +161,10 @@ async fn answer(
                 Ok(frame) => {
                     if let Some(data) = frame.data_ref() {
                         ttfb_ms.get_or_insert(started.elapsed().as_millis() as u64);
+                        if received.len() + data.len() > MAX_BUFFERED_BYTES {
+                            failure = Some(format!("answer exceeds {MAX_BUFFERED_BYTES} bytes"));
+                            break;
+                        }
                         received.extend_from_slice(data);
                     }
                 }
