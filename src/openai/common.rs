@@ -165,8 +165,14 @@ pub(super) fn usage_event(root: &Map<String, Value>) -> Option<Event> {
     let cached = cache_read_tokens
         .unwrap_or(0)
         .saturating_add(cache_creation_tokens.unwrap_or(0));
+    // A server that reports only `total_tokens` still said how much was
+    // read: the total less what was generated.
+    let prompt = match usage.get("prompt_tokens").and_then(Value::as_u64) {
+        Some(prompt) => prompt,
+        None => count("total_tokens").saturating_sub(count("completion_tokens")),
+    };
     Some(Event::Usage(Usage {
-        input_tokens: count("prompt_tokens").saturating_sub(cached),
+        input_tokens: prompt.saturating_sub(cached),
         output_tokens: count("completion_tokens"),
         cache_read_tokens: cache_read_tokens.unwrap_or(0),
         cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
