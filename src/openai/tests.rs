@@ -788,6 +788,44 @@ fn user_sends_a_mid_conversation_system_as_a_user_message() {
 }
 
 #[test]
+fn a_leading_system_message_stays_system_under_user_placement() {
+    let mut r = request(vec![
+        RequestMessage {
+            role: Role::System,
+            parts: vec![Part::Text("top".into())],
+        },
+        user(vec![Part::Text("hi".into())]),
+    ]);
+    r.system = None;
+    let body = serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::User)).unwrap();
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"role": "system", "content": "top"},
+            {"role": "user", "content": "hi"}
+        ])
+    );
+}
+
+#[test]
+fn merge_skips_an_empty_system_message() {
+    let mut r = request(vec![
+        user(vec![Part::Text("hi".into())]),
+        RequestMessage {
+            role: Role::System,
+            parts: vec![],
+        },
+    ]);
+    r.system = Some("top".into());
+    let body =
+        serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::Merge)).unwrap();
+    assert_eq!(
+        body["messages"][0],
+        json!({"role": "system", "content": "top"})
+    );
+}
+
+#[test]
 fn images_in_a_tool_result_follow_it_in_a_user_message() {
     let image = Image {
         media_type: "image/png".into(),

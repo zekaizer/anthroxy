@@ -28,10 +28,14 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
     if placement == SystemPlacement::Merge {
         for message in &request.messages {
             if message.role == Role::System {
+                let text = text_of(message);
+                if text.is_empty() {
+                    continue;
+                }
                 if !system.is_empty() {
                     system.push_str(TEXT_SEPARATOR);
                 }
-                system.push_str(&text_of(message));
+                system.push_str(&text);
             }
         }
     }
@@ -39,8 +43,14 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
         messages.push(json!({"role": "system", "content": system}));
     }
     for message in &request.messages {
+        // A system message with nothing before it is the leading one and
+        // stays where a template expects it, whatever the placement.
+        let leading = messages.is_empty();
         match (message.role, placement) {
             (Role::System, SystemPlacement::Merge) => {}
+            (Role::System, SystemPlacement::User) if leading => {
+                encode_message(message, &mut messages)
+            }
             // Marked the way Claude Code marks its own system notes inside a
             // user turn, so the model does not answer it as user input.
             (Role::System, SystemPlacement::User) => messages.push(json!({
