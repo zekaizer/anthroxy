@@ -3,7 +3,9 @@
 //! the model needs is never silently lost.
 
 use std::collections::HashSet;
+use std::fmt::Write;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::ir::{Image, Part, Request, RequestMessage, Role, TEXT_SEPARATOR, Tool, ToolChoice};
@@ -44,15 +46,22 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
         .ok_or(DecodeError::Field("messages"))?;
     // A tool marked `defer_loading` is invisible to the model until a
     // `tool_reference` names it, so an unreferenced one is not sent.
-    let referenced = referenced_tools(raw_messages);
-    let tools = optional_array(root, "tools")?
+    let raw_tools = optional_array(root, "tools")?;
+    let referenced = if raw_tools.iter().any(deferred) {
+        referenced_tools(raw_messages)
+    } else {
+        HashSet::new()
+    };
+    let tools = raw_tools
         .iter()
-        .map(decode_tool)
-        .filter_map(|tool| match tool {
-            Ok((tool, deferred)) if deferred && !referenced.contains(tool.name.as_str()) => None,
-            Ok((tool, _)) => Some(Ok(tool)),
-            Err(error) => Some(Err(error)),
+        .filter(|tool| {
+            !deferred(tool)
+                || tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| referenced.contains(name))
         })
+        .map(decode_tool)
         .collect::<Result<Vec<_>, _>>()?;
     let messages = raw_messages
         .iter()
@@ -315,23 +324,33 @@ fn tool_result_content(
 /// is spelled out here. A name not among the request's tools is written
 /// alone.
 fn functions_block(names: &[&str], tools: &[Tool]) -> String {
+    #[derive(Serialize)]
+    struct Function<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<&'a str>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parameters: Option<&'a Value>,
+    }
     let mut out = String::from("<functions>\n");
     for name in names {
-        let mut function = serde_json::Map::new();
         let tool = tools.iter().find(|tool| tool.name == *name);
-        if let Some(description) = tool.and_then(|tool| tool.description.as_deref()) {
-            function.insert("description".into(), Value::String(description.to_owned()));
-        }
-        function.insert("name".into(), Value::String((*name).to_owned()));
-        if let Some(tool) = tool {
-            function.insert("parameters".into(), tool.parameters.clone());
-        }
-        let function =
-            serde_json::to_string(&Value::Object(function)).expect("a JSON tree serializes");
-        out.push_str(&format!("<function>{function}</function>\n"));
+        let function = Function {
+            description: tool.and_then(|tool| tool.description.as_deref()),
+            name,
+            parameters: tool.map(|tool| &tool.parameters),
+        };
+        let function = serde_json::to_string(&function).expect("a JSON tree serializes");
+        writeln!(out, "<function>{function}</function>").expect("String never fails to write");
     }
     out.push_str("</functions>");
     out
+}
+
+fn deferred(tool: &Value) -> bool {
+    tool.get("defer_loading")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Every name a `tool_reference` block in the conversation carries.
@@ -347,8 +366,7 @@ fn referenced_tools(messages: &[Value]) -> HashSet<&str> {
         .collect()
 }
 
-/// The tool and whether it is marked `defer_loading`.
-fn decode_tool(tool: &Value) -> Result<(Tool, bool), DecodeError> {
+fn decode_tool(tool: &Value) -> Result<Tool, DecodeError> {
     let name = field_str(tool, "name")?.to_owned();
     let parameters = tool
         .get("input_schema")
@@ -357,21 +375,14 @@ fn decode_tool(tool: &Value) -> Result<(Tool, bool), DecodeError> {
             name: name.clone(),
             field: "input_schema",
         })?;
-    let deferred = tool
-        .get("defer_loading")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Ok((
-        Tool {
-            name,
-            description: tool
-                .get("description")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            parameters,
-        },
-        deferred,
-    ))
+    Ok(Tool {
+        name,
+        description: tool
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        parameters,
+    })
 }
 
 fn field_str<'a>(value: &'a Value, field: &'static str) -> Result<&'a str, DecodeError> {

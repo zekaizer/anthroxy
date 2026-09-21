@@ -65,9 +65,9 @@ backend kind.
    the model, since the definition is already in the request's `tools` and a
    Chat Completions server would never expand the reference itself; a tool
    marked `defer_loading` that no `tool_reference` names is left out, as the
-   Anthropic API keeps it from the model too; a block a
-   role cannot carry, a field of the wrong type, or a block type the IR has no
-   place for is a 400 rather than a silent loss.
+   Anthropic API keeps it from the model too; a block a role cannot carry, a
+   field of the wrong type, or a block type the IR has no place for is a 400
+   rather than a silent loss.
 3. `openai::encode_request` writes `ir::Request` as a Chat Completions body: the
    system text first, `tool_result` parts as `tool` messages (their images ride
    in the user message that follows), `input_schema` as `function.parameters`
