@@ -266,6 +266,23 @@ fn aggregation_by_model_and_day() {
 }
 
 #[test]
+fn token_totals_saturate_instead_of_wrapping() {
+    let mut a = record("2026-09-21T10:00:00Z", Some("m"));
+    a.usage = Some(TokenUsage {
+        input: u64::MAX,
+        output: u64::MAX,
+        cache_read: u64::MAX,
+        cache_creation: u64::MAX,
+        cache_reported: true,
+    });
+    let b = a.clone();
+    let report = aggregate(&[a, b], Range::All, ts("2026-09-21T12:00:00Z"));
+    assert_eq!(report.total.input_tokens, u64::MAX);
+    assert_eq!(report.total.cache_read_tokens, u64::MAX);
+    assert_eq!(report.models[0].output_tokens, u64::MAX);
+}
+
+#[test]
 fn generation_needs_a_complete_stream_with_time_after_the_first_byte() {
     let sample = generation(true, true, Some(100), Some(2100), Some(50));
     assert_eq!(
