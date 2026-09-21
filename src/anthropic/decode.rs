@@ -253,6 +253,10 @@ fn decode_block(
                 tool_use_id: field_str(block, "tool_use_id")?.to_owned(),
                 content,
                 images,
+                is_error: block
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             }
         }
         "document" => Part::Text(document_text(block)?),
@@ -532,6 +536,7 @@ mod tests {
                             tool_use_id: "toolu_1".into(),
                             content: "fn main() {}".into(),
                             images: vec![],
+                            is_error: false,
                         },
                         Part::ToolResult {
                             tool_use_id: "toolu_2".into(),
@@ -540,11 +545,13 @@ mod tests {
                                 media_type: "image/png".into(),
                                 data: "BBBB".into()
                             }],
+                            is_error: true,
                         },
                         Part::ToolResult {
                             tool_use_id: "toolu_3".into(),
                             content: String::new(),
                             images: vec![],
+                            is_error: false,
                         },
                     ],
                 },
@@ -767,6 +774,7 @@ mod tests {
                 tool_use_id: "t".into(),
                 content: "[document (application/pdf, 9 bytes) omitted: this backend cannot receive documents]".into(),
                 images: vec![],
+                is_error: false,
             }
         );
     }
@@ -853,6 +861,7 @@ mod tests {
                 )
                 .into(),
                 images: vec![],
+                is_error: false,
             }]
         );
     }
@@ -875,6 +884,7 @@ mod tests {
                     "found:\n\n<functions>\n<function>{\"name\":\"gone\"}</function>\n</functions>"
                         .into(),
                 images: vec![],
+                is_error: false,
             }]
         );
     }

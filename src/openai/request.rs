@@ -154,10 +154,16 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
                 tool_use_id,
                 content,
                 images,
+                is_error,
             } => {
                 // A tool message carries text only; its images ride in the
                 // user message that follows, labelled with the call.
                 let mut content = Cow::Borrowed(content.as_str());
+                // Chat Completions has no error flag on a tool message; the
+                // model is told in the text instead.
+                if *is_error {
+                    content = Cow::Owned(format!("[tool error]\n{content}"));
+                }
                 if !images.is_empty() {
                     let (count, verb, noun) = match images.len() {
                         1 => ("1 image".to_owned(), "follows", "Image"),

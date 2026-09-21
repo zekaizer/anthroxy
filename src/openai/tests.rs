@@ -82,11 +82,13 @@ fn tool_loop_history() {
                 tool_use_id: "toolu_1".into(),
                 content: "fn main() {}".into(),
                 images: vec![],
+                is_error: false,
             },
             Part::ToolResult {
                 tool_use_id: "toolu_2".into(),
                 content: "a.rs".into(),
                 images: vec![],
+                is_error: false,
             },
             Part::Text("thanks".into()),
         ]),
@@ -696,6 +698,7 @@ fn a_turn_whose_parts_were_all_dropped_still_keeps_role_alternation() {
             tool_use_id: "t".into(),
             content: "r".into(),
             images: vec![],
+            is_error: false,
         }]),
     ]);
     assert_eq!(
@@ -826,6 +829,34 @@ fn merge_skips_an_empty_system_message() {
 }
 
 #[test]
+fn a_failed_tool_result_is_marked_for_the_model() {
+    let r = request(vec![user(vec![Part::ToolResult {
+        tool_use_id: "t".into(),
+        content: "permission denied".into(),
+        images: vec![],
+        is_error: true,
+    }])]);
+    assert_eq!(
+        encoded(&r)["messages"][0],
+        json!({"role": "tool", "tool_call_id": "t", "content": "[tool error]\npermission denied"})
+    );
+}
+
+#[test]
+fn usage_with_only_a_total_still_reports_input_tokens() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let usage = json!({"id": "c", "object": "chat.completion.chunk", "model": "m", "choices": [],
+        "usage": {"total_tokens": 46, "completion_tokens": 34}});
+    let events = d.decode(&usage.to_string()).unwrap();
+    assert!(
+        matches!(events.first(), Some(Event::Usage(u)) if u.input_tokens == 12 && u.output_tokens == 34),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn images_in_a_tool_result_follow_it_in_a_user_message() {
     let image = Image {
         media_type: "image/png".into(),
@@ -836,11 +867,13 @@ fn images_in_a_tool_result_follow_it_in_a_user_message() {
             tool_use_id: "toolu_1".into(),
             content: String::new(),
             images: vec![image.clone()],
+            is_error: false,
         },
         Part::ToolResult {
             tool_use_id: "toolu_2".into(),
             content: "text too".into(),
             images: vec![image.clone(), image],
+            is_error: false,
         },
         Part::Text("what do you see".into()),
     ])]);
