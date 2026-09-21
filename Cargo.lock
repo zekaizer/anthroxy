@@ -80,6 +80,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jiff",
+ "libc",
  "owo-colors",
  "predicates",
  "rand",

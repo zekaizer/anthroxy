@@ -17,7 +17,7 @@ use http::header::CONTENT_TYPE;
 use http_body_util::LengthLimitError;
 
 use crate::activity::hints::{self, UpstreamFailure};
-use crate::activity::{Exchange, Source};
+use crate::activity::{ERROR_BODY_BYTES, Exchange, Source};
 use crate::anthropic;
 use crate::config::BackendKind;
 use crate::config::view::REDACTED;
@@ -56,7 +56,7 @@ pub async fn proxy(
         request.uri().path(),
         app.cut_signal(),
     );
-    serve(&snapshot, &request_id, request, exchange).await
+    serve(&snapshot, &request_id, request, exchange, app.body_timeout).await
 }
 
 /// Routes, forwards and relays `request` on `snapshot`, reporting to
@@ -66,6 +66,7 @@ pub async fn serve(
     request_id: &RequestId,
     request: Request,
     mut exchange: Exchange,
+    body_timeout: std::time::Duration,
 ) -> Response {
     if request.uri().path() == "/v1/messages"
         && let Some(log) = snapshot.stats.clone()
@@ -78,7 +79,16 @@ pub async fn serve(
     }
     let cut = exchange.cut_signal();
     let mut exchange = Some(exchange);
-    match handle(snapshot, request_id, request, &mut exchange, cut).await {
+    match handle(
+        snapshot,
+        request_id,
+        request,
+        &mut exchange,
+        cut,
+        body_timeout,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(error = %error, status = error.status().as_u16(), "request failed in router");
@@ -98,10 +108,13 @@ async fn handle(
     request: Request,
     exchange: &mut Option<Exchange>,
     cut: tokio::sync::watch::Receiver<bool>,
+    body_timeout: std::time::Duration,
 ) -> Result<Response, RouterError> {
     let started = Instant::now();
     let (parts, body) = request.into_parts();
-    let body = read_body(body, state.max_body_bytes).await?;
+    let body = tokio::time::timeout(body_timeout, read_body(body, state.max_body_bytes))
+        .await
+        .map_err(|_| RouterError::BodyTimeout(body_timeout))??;
 
     let peek = anthropic::peek(&body)?;
     // Read from the client's body, before any rewrite or translation.
@@ -300,7 +313,9 @@ async fn handle(
             bytes = raw.len(),
             "upstream returned an error"
         );
-        let text = String::from_utf8_lossy(&raw);
+        // Hints are read from the prefix the exchange keeps, so no error body
+        // can grow a hint past that.
+        let text = String::from_utf8_lossy(&raw[..raw.len().min(ERROR_BODY_BYTES)]);
         note(exchange, |e| {
             e.upstream_error(
                 &raw,

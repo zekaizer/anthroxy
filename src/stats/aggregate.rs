@@ -349,12 +349,15 @@ impl Group {
         row.credential_refreshed += u64::from(record.credential_refreshed);
         row.defaulted += u64::from(record.matched.as_deref() == Some("default"));
         if let Some(usage) = record.usage {
-            row.input_tokens += usage.input;
-            row.output_tokens += usage.output;
-            row.cache_read_tokens += usage.cache_read;
-            row.cache_creation_tokens += usage.cache_creation;
+            // Counts come from upstream bodies: they saturate, never wrap.
+            row.input_tokens = row.input_tokens.saturating_add(usage.input);
+            row.output_tokens = row.output_tokens.saturating_add(usage.output);
+            row.cache_read_tokens = row.cache_read_tokens.saturating_add(usage.cache_read);
+            row.cache_creation_tokens = row
+                .cache_creation_tokens
+                .saturating_add(usage.cache_creation);
             if usage.cache_known() {
-                self.cache_prompt += usage.prompt();
+                self.cache_prompt = self.cache_prompt.saturating_add(usage.prompt());
             } else {
                 row.cache_silent += 1;
             }
@@ -371,8 +374,8 @@ impl Group {
             record.duration_ms,
             record.usage.map(|u| u.output),
         ) {
-            self.generating_ms += sample.millis;
-            self.generated += sample.tokens;
+            self.generating_ms = self.generating_ms.saturating_add(sample.millis);
+            self.generated = self.generated.saturating_add(sample.tokens);
         }
     }
 

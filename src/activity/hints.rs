@@ -62,9 +62,15 @@ pub fn hints(failure: &UpstreamFailure<'_>) -> Vec<Hint> {
     hints
 }
 
+/// Fields a hint names at most; an error body can list any number.
+pub const MAX_REJECTED_FIELDS: usize = 16;
+
 fn drop_fields_hint(failure: &UpstreamFailure<'_>) -> Option<Hint> {
     let mut fields: Vec<String> = Vec::new();
     for field in rejected_fields(failure.body) {
+        if fields.len() == MAX_REJECTED_FIELDS {
+            break;
+        }
         if field != "model" && !failure.drop_fields.contains(&field) && !fields.contains(&field) {
             fields.push(field);
         }
@@ -242,6 +248,17 @@ drop_fields = ["metadata.user_id", "context_management", "metadata.trace"]"#]
                 "{body}"
             );
         }
+    }
+
+    #[test]
+    fn a_drop_fields_hint_names_at_most_sixteen_fields() {
+        let body: String = (0..1000)
+            .map(|i| format!("unknown field `f{i}` "))
+            .collect();
+        let hints = hints(&failure(400, &body, &[]));
+        let snippet = hints[0].snippet.as_deref().unwrap();
+        assert_eq!(snippet.matches("\"f").count(), MAX_REJECTED_FIELDS);
+        assert!(hints[0].summary.len() < 400, "{}", hints[0].summary.len());
     }
 
     #[test]

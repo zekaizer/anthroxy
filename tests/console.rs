@@ -144,6 +144,14 @@ async fn the_api_needs_the_router_token() {
     let res = router.get("/api/status").send().await.unwrap();
     assert_eq!(res.status(), 200);
     assert_eq!(res.headers()["cache-control"], "no-store");
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    let res = router
+        .get("/api/requests/rtr_missing")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
 }
 
 #[tokio::test]
@@ -475,6 +483,26 @@ async fn probe_lists_each_backends_models_and_feeds_the_context_limit() {
             .contains("export CLAUDE_CODE_MAX_CONTEXT_TOKENS='32768'"),
         "{env}"
     );
+}
+
+#[tokio::test]
+async fn probe_gives_up_on_a_model_list_larger_than_it_buffers() {
+    let upstream = MockUpstream::start(|received| match received.path_and_query.as_str() {
+        "/v1/models" => Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(vec![b' '; 17 * 1024 * 1024]))
+            .unwrap(),
+        _ => json_response(200, json!({})),
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let (status, probe) = post_api(&router, "/api/probe", Value::Null).await;
+    assert_eq!(status, 200, "{probe}");
+    let models = &probe["backends"][0]["models"];
+    assert_eq!(models["listed"], json!([]));
+    let detail = models["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains("16777216"), "{models}");
 }
 
 #[tokio::test]

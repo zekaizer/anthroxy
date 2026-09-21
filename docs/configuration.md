@@ -83,7 +83,11 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
 ### Values and files
 
 - `${NAME}` in any string value is replaced with the environment variable `NAME`
-  at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands.
+  at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands. A
+  credential `command` is the exception: it keeps its `${NAME}` references and
+  resolves them each time it runs, so a secret it names never sits in the
+  loaded configuration, the console or `check` output (that every variable
+  exists is still checked at load).
 - Unknown keys are errors. `check` reports every problem at once with its TOML
   path.
 
@@ -103,7 +107,10 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   as Anthropic model identity (`id`, `display_name`, `created_at`). Anthropic
   and OpenAI list JSON both work (ADR-0017). `kind = "passthrough"` always does
   this. Configured `[[models]]` still win on the same id. A backend with
-  `live_models` may omit `[[models]]`.
+  `live_models` may omit `[[models]]`. The list is cached for 30 seconds;
+  concurrent misses share one fetch, which has its own 10 second deadline, so
+  a backend that never answers cannot hold every request naming an unknown
+  model.
 - `kind = "openai"` marks a backend that speaks the OpenAI Chat Completions API.
   `POST /v1/messages` is translated and sent to `<url>/v1/chat/completions`:
   `system`, messages, tool definitions, tool calls and results, and base64
@@ -124,8 +131,9 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   first message goes, for a chat template that refuses one anywhere else
   (Qwen 3.5 and later answer 400 `System message must be at the beginning`):
   `"keep"` (default) sends it where it is, `"merge"` appends its text to the
-  leading system message, `"user"` sends it as a user message wrapped in `<system-reminder>`, the
-  tag Claude Code itself uses for system notes inside a user turn; the key is
+  leading system message, `"user"` sends it as a user message wrapped in
+  `<system-reminder>`, the tag Claude Code itself uses for system notes inside
+  a user turn; the key is
   refused on any other kind. A `[[models]]` entry may carry the same key to
   override its backend's value, for a gateway that serves such a model beside
   others. `anthropic_beta` is not accepted on such a backend, and
@@ -150,7 +158,12 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   upstream. When a refresh fails, a JSON token more than two minutes from its
   `expires_at` keeps being sent, with the command retried at most every 30
   seconds, so a brief token-helper outage does not fail requests; a text token
-  is not reused past `refresh` (ADR-0015).
+  is not reused past `refresh` (ADR-0015). A value the backend rejected is
+  re-acquired once; when the command hands the same value back, further
+  requests rejected with it wait 30 seconds before it is run again rather
+  than each running it. The command runs in its own process
+  group, killed whole when `timeout` passes, and may print at most 64 KiB on
+  each of stdout and stderr; more is a failed run.
 
 ### Reaching a backend
 
@@ -179,8 +192,9 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   router shows a backend URL — the console, `check`, the startup lines, a
   rejected configuration — the userinfo is replaced by `<redacted>`.
 - `upstream.retries` sends a request again only when the backend never saw it:
-  a connection that was refused or reset, or a status listed in
-  `retry_on_status`. The wait before a retry is `retry_backoff`, doubled on each
+  a connection that was refused, or reset before the request was written (one
+  closed after it, before any status line, is not resent: the backend may have
+  acted on it), or a status listed in `retry_on_status`. The wait before a retry is `retry_backoff`, doubled on each
   further attempt and never longer than 30 seconds, so a generous retry count
   cannot put a request to sleep for hours.
 

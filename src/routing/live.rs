@@ -14,6 +14,10 @@ use crate::upstream::{Backend, UpstreamClient, UpstreamRequest, upstream_headers
 /// How long a fetched list is reused for the same client `Authorization`.
 pub const TTL: Duration = Duration::from_secs(30);
 
+/// A list pull has its own deadline, apart from `upstream.non_stream_timeout`:
+/// every request naming an unknown model waits on it.
+const PULL_TIMEOUT: Duration = Duration::from_secs(10);
+
 struct Entry {
     fetched_at: Instant,
     auth: String,
@@ -103,27 +107,35 @@ impl LiveCatalog {
         } else {
             self.backend.name.clone()
         };
-        {
-            let cache = self.cache.lock().await;
-            if let Some(entry) = cache.as_ref()
-                && entry.auth == auth
-                && Instant::now().saturating_duration_since(entry.fetched_at) < TTL
-            {
-                return entry.models.clone();
-            }
-        }
-        let models = match self.pull(upstream, client_headers).await {
-            Ok(models) => models,
-            Err(error) => {
-                tracing::warn!(
-                    backend = %self.backend.name,
-                    error = %error,
-                    "live model list failed; serving configured models only"
-                );
-                Vec::new()
-            }
-        };
+        // The lock is held across the pull, so concurrent misses share one
+        // fetch instead of each asking the backend.
         let mut cache = self.cache.lock().await;
+        if let Some(entry) = cache.as_ref()
+            && entry.auth == auth
+            && Instant::now().saturating_duration_since(entry.fetched_at) < TTL
+        {
+            return entry.models.clone();
+        }
+        let models =
+            match tokio::time::timeout(PULL_TIMEOUT, self.pull(upstream, client_headers)).await {
+                Ok(Ok(models)) => models,
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        backend = %self.backend.name,
+                        error = %error,
+                        "live model list failed; serving configured models only"
+                    );
+                    Vec::new()
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        backend = %self.backend.name,
+                        "live model list took longer than {}; serving configured models only",
+                        humantime::format_duration(PULL_TIMEOUT)
+                    );
+                    Vec::new()
+                }
+            };
         *cache = Some(Entry {
             fetched_at: Instant::now(),
             auth,
@@ -168,6 +180,12 @@ impl LiveCatalog {
                 return Err(crate::upstream::UpstreamError::Body {
                     backend: self.backend.name.clone(),
                     source,
+                });
+            }
+            Err(crate::upstream::BodyError::TooLarge { limit }) => {
+                return Err(crate::upstream::UpstreamError::BodyTooLarge {
+                    backend: self.backend.name.clone(),
+                    limit,
                 });
             }
         };

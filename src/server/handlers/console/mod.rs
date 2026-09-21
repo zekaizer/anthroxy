@@ -15,7 +15,7 @@ mod status;
 use axum::Json;
 use axum::response::{IntoResponse, Response};
 use http::StatusCode;
-use http::header::CACHE_CONTROL;
+use http::header::{CACHE_CONTROL, X_CONTENT_TYPE_OPTIONS};
 use serde::Serialize;
 
 use crate::anthropic::{ErrorResponse, ErrorType};
@@ -36,13 +36,28 @@ pub use status::status;
 
 /// Live state as JSON; never cached.
 fn live<T: Serialize>(value: &T) -> Response {
-    ([(CACHE_CONTROL, "no-store")], Json(value)).into_response()
+    (
+        [
+            (CACHE_CONTROL, "no-store"),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        Json(value),
+    )
+        .into_response()
 }
 
 /// An error in the router's usual shape (ADR-0005).
 fn error(status: StatusCode, kind: ErrorType, message: &str, request_id: &RequestId) -> Response {
     let body = ErrorResponse::new(kind, message.to_owned()).with_request_id(request_id.as_str());
-    (status, [(CACHE_CONTROL, "no-store")], Json(body)).into_response()
+    (
+        status,
+        [
+            (CACHE_CONTROL, "no-store"),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        Json(body),
+    )
+        .into_response()
 }
 
 fn not_found(what: &str, request_id: &RequestId) -> Response {

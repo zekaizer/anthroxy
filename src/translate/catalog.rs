@@ -13,6 +13,14 @@ pub fn catalog(kind: BackendKind, bytes: &[u8]) -> Vec<ModelObject> {
 /// An origin model list as IR rows, by the codec the backend's kind calls
 /// for. The only place a decoder is chosen.
 pub fn models(kind: BackendKind, bytes: &[u8]) -> Vec<Model> {
+    let mut models = decode(kind, bytes);
+    // A live id becomes a route id and a response header value; one a
+    // header cannot carry is not served.
+    models.retain(|model| http::HeaderValue::from_str(&model.id).is_ok());
+    models
+}
+
+fn decode(kind: BackendKind, bytes: &[u8]) -> Vec<Model> {
     match kind {
         BackendKind::OpenAi => openai::decode_models(bytes),
         BackendKind::Anthropic | BackendKind::Passthrough => {
@@ -67,6 +75,15 @@ mod tests {
         let raw = br#"{"data":[{"id":"local","max_model_len":32768}]}"#;
         let rows = catalog(BackendKind::OpenAi, raw);
         assert_eq!(rows[0].context_window, Some(32768));
+    }
+
+    #[test]
+    fn a_model_id_that_cannot_be_a_header_value_is_left_out() {
+        for kind in [BackendKind::OpenAi, BackendKind::Anthropic] {
+            let body = br#"{"data":[{"id":"ok-1","object":"model"},{"id":"bad\nid","object":"model"},{"id":"del\u007f","object":"model"}]}"#;
+            let ids: Vec<String> = models(kind, body).into_iter().map(|m| m.id).collect();
+            assert_eq!(ids, ["ok-1"], "{kind:?}");
+        }
     }
 
     #[test]

@@ -31,14 +31,22 @@ pub fn render_unit(exe: &Path, config: &Path) -> String {
     )
 }
 
-/// Quotes a path for a systemd `ExecStart` line when it contains spaces.
+/// Quotes a path for a systemd `ExecStart` line: always double-quoted, with
+/// the escapes systemd reads back (`\\`, `\"`, `\n`) and `%` doubled so
+/// no specifier is expanded.
 fn shell_quote(path: &Path) -> String {
-    let text = path.display().to_string();
-    if text.contains(' ') {
-        format!("\"{text}\"")
-    } else {
-        text
+    let mut out = String::from("\"");
+    for c in path.display().to_string().chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '%' => out.push_str("%%"),
+            c => out.push(c),
+        }
     }
+    out.push('"');
+    out
 }
 
 /// `~/.config/systemd/user/anthroxy.service`
@@ -179,9 +187,19 @@ fn split_quoted(line: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut current = String::new();
     let mut quoted = false;
-    for c in line.chars() {
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
             '"' => quoted = !quoted,
+            '\\' => match chars.next() {
+                Some('n') => current.push('\n'),
+                Some(next) => current.push(next),
+                None => current.push('\\'),
+            },
+            '%' if chars.peek() == Some(&'%') => {
+                chars.next();
+                current.push('%');
+            }
             ' ' if !quoted => {
                 if !current.is_empty() {
                     words.push(std::mem::take(&mut current));
@@ -219,7 +237,7 @@ mod tests {
             Path::new("/usr/local/bin/anthroxy"),
             Path::new("/home/u/.config/anthroxy/config.toml"),
         );
-        assert!(unit.contains("ExecStart=/usr/local/bin/anthroxy --config /home/u/.config/anthroxy/config.toml serve\n"));
+        assert!(unit.contains("ExecStart=\"/usr/local/bin/anthroxy\" --config \"/home/u/.config/anthroxy/config.toml\" serve\n"), "{unit}");
         assert!(unit.contains("Restart=on-failure"));
         assert!(
             unit.contains("ExecReload=/bin/kill -HUP $MAINPID\n"),
@@ -232,7 +250,20 @@ mod tests {
     #[test]
     fn paths_with_spaces_are_quoted() {
         let unit = render_unit(Path::new("/opt/my tools/anthroxy"), Path::new("/c.toml"));
-        assert!(unit.contains("ExecStart=\"/opt/my tools/anthroxy\" --config /c.toml serve"));
+        assert!(unit.contains("ExecStart=\"/opt/my tools/anthroxy\" --config \"/c.toml\" serve"));
+    }
+
+    #[test]
+    fn paths_with_quotes_percent_and_backslash_round_trip() {
+        let exe = Path::new("/opt/we\"ird\\%h/anthroxy");
+        let config = Path::new("/c 100%.toml");
+        let unit = render_unit(exe, config);
+        let line = unit.lines().find(|l| l.starts_with("ExecStart=")).unwrap();
+        assert!(line.contains("%%h"), "{line}");
+        assert!(line.contains("100%%.toml"), "{line}");
+        let parsed = parse_exec_start(&unit).unwrap();
+        assert_eq!(parsed.exe, exe);
+        assert_eq!(parsed.config, config);
     }
 
     #[test]

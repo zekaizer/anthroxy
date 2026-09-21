@@ -275,14 +275,16 @@ def main(argv: list[str] | None = None) -> None:
         default=default_store(),
         help="token file (default: $XDG_CONFIG_HOME/anthroxy/xai-oauth.json)",
     )
-    parser.add_argument("--token-url", default=TOKEN_URL, help="token endpoint")
+    parser.add_argument("--token-url", default=None, help="token endpoint")
     parser.add_argument("--device-url", default=DEVICE_URL, help="device-code endpoint")
     parser.add_argument("--client-id", default=CLIENT_ID, help="public Grok CLI client id")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("login", help="device-code login; write the store")
     sub.add_parser("print", help="refresh if needed; print JSON token on stdout")
     args = parser.parse_args(argv)
-    args.token_url_explicit = "--token-url" in (argv if argv is not None else sys.argv[1:])
+    args.token_url_explicit = args.token_url is not None
+    if args.token_url is None:
+        args.token_url = TOKEN_URL
     args.store = args.store.expanduser()
     if args.command == "login":
         cmd_login(args)

@@ -19,6 +19,8 @@ pub enum RouterError {
     BodyTooLarge { limit: usize },
     #[error("cannot read request body: {0}")]
     BodyRead(String),
+    #[error("request body did not arrive within {}", humantime::format_duration(*.0))]
+    BodyTimeout(std::time::Duration),
     #[error("model `{}` is not served by this router; configured models: {}", short(model), known.join(", "))]
     UnknownModel { model: String, known: Vec<String> },
     #[error("no route for {} {}", short(method), short(path))]
@@ -36,7 +38,10 @@ pub enum RouterError {
     #[error("{path} is not available on backend `{backend}` (kind = \"openai\")")]
     NotOnOpenAi { backend: String, path: String },
     /// A 2xx body the router cannot turn into a Messages response.
-    #[error("backend `{backend}` returned a response the router cannot translate: {detail}")]
+    #[error(
+        "backend `{backend}` returned a response the router cannot translate: {}",
+        cut(detail, 200)
+    )]
     BadUpstreamResponse { backend: String, detail: String },
     /// A stop ran out of grace with this request in flight.
     #[error("the router is stopping; send the request again")]
@@ -60,6 +65,7 @@ impl RouterError {
             RouterError::Unauthorized => ErrorType::AuthenticationError,
             RouterError::BadRequest(_)
             | RouterError::BodyRead(_)
+            | RouterError::BodyTimeout(_)
             | RouterError::Translate { .. } => ErrorType::InvalidRequestError,
             RouterError::BodyTooLarge { .. } => ErrorType::RequestTooLarge,
             RouterError::UnknownModel { .. }
@@ -79,6 +85,7 @@ impl RouterError {
                 StatusCode::BAD_GATEWAY
             }
             RouterError::Stopping => StatusCode::SERVICE_UNAVAILABLE,
+            RouterError::BodyTimeout(_) => StatusCode::REQUEST_TIMEOUT,
             other => other.error_type().status(),
         }
     }

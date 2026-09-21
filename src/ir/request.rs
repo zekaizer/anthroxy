@@ -56,6 +56,8 @@ pub enum Part {
         tool_use_id: String,
         content: String,
         images: Vec<Image>,
+        /// The tool failed; the model must not read the content as a result.
+        is_error: bool,
     },
 }
 

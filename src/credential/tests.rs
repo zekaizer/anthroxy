@@ -206,6 +206,25 @@ async fn invalidating_a_value_already_replaced_keeps_the_replacement() {
 }
 
 #[tokio::test]
+async fn a_rejected_value_the_command_reproduces_is_not_fetched_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter = dir.path().join("runs");
+    let cmd = format!("echo run >> {} && echo same", counter.display());
+    let source = command(&cmd, Duration::from_secs(60), Duration::from_secs(5));
+    let first = source.credential().await.unwrap().unwrap();
+    source.invalidate(&first).await;
+    assert_eq!(source.credential().await.unwrap(), Some(first.clone()));
+    assert_eq!(runs(&counter), 2, "a rejection re-ran the command once");
+    // The next requests rejected with the same value find it reproduced
+    // already: no run per request.
+    for _ in 0..3 {
+        source.invalidate(&first).await;
+        assert_eq!(source.credential().await.unwrap(), Some(first.clone()));
+    }
+    assert_eq!(runs(&counter), 2);
+}
+
+#[tokio::test]
 async fn command_reruns_after_refresh_interval() {
     let dir = tempfile::tempdir().unwrap();
     let counter = dir.path().join("runs");
@@ -256,6 +275,45 @@ async fn command_empty_output_is_an_error() {
         source.credential().await,
         Err(CredentialError::Empty)
     ));
+}
+
+#[tokio::test]
+async fn command_env_references_are_expanded_when_run() {
+    let name = "ANTHROXY_TEST_CMD_TOKEN";
+    // SAFETY: test-local variable, no other thread reads it concurrently.
+    unsafe { std::env::set_var(name, "from-run-time") };
+    let source = command(
+        "echo ${ANTHROXY_TEST_CMD_TOKEN}",
+        Duration::ZERO,
+        Duration::from_secs(5),
+    );
+    assert_eq!(
+        source.credential().await.unwrap(),
+        Some(bearer("from-run-time"))
+    );
+    assert!(
+        source.describe().contains("${ANTHROXY_TEST_CMD_TOKEN}"),
+        "{}",
+        source.describe()
+    );
+    let missing = command(
+        "echo ${ANTHROXY_TEST_CMD_MISSING}",
+        Duration::ZERO,
+        Duration::from_secs(5),
+    );
+    let err = missing.credential().await.err().unwrap();
+    assert!(matches!(err, CredentialError::MissingEnv(_)), "{err}");
+}
+
+#[tokio::test]
+async fn command_output_past_the_cap_is_an_error() {
+    let source = command(
+        "head -c 300000 /dev/zero | tr '\\0' x",
+        Duration::ZERO,
+        Duration::from_secs(10),
+    );
+    let err = source.credential().await.err().unwrap();
+    assert!(matches!(err, CredentialError::OutputTooLarge(_)), "{err}");
 }
 
 #[tokio::test]

@@ -20,7 +20,19 @@ pub fn run(cli: &Cli, args: &InitArgs, style: &Style) -> anyhow::Result<()> {
         return Ok(());
     }
     let path = cli.config_path();
-    if path.exists() && !args.force {
+    // A link is never followed, whatever it points at: the file holds the
+    // client token.
+    let existing = std::fs::symlink_metadata(&path).ok();
+    if existing
+        .as_ref()
+        .is_some_and(|m| m.file_type().is_symlink())
+    {
+        anyhow::bail!(
+            "{} is a symbolic link; remove it or point --config elsewhere",
+            display_path(&path)
+        );
+    }
+    if existing.is_some() && !args.force {
         anyhow::bail!(
             "{} already exists; pass --force to overwrite it or --stdout to print an example",
             display_path(&path)
@@ -57,6 +69,7 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
         .create(true)
         .truncate(true)
         .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(path)?;
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     file.write_all(text.as_bytes())

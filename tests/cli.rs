@@ -117,6 +117,33 @@ fn init_writes_a_loadable_config_and_refuses_to_overwrite() {
 }
 
 #[test]
+#[cfg(unix)]
+fn init_never_writes_through_a_symbolic_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target.toml");
+    std::fs::write(&target, "theirs").unwrap();
+    let link = dir.path().join("config.toml");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    bin()
+        .args(["--config", link.to_str().unwrap(), "init"])
+        .assert()
+        .failure();
+    bin()
+        .args(["--config", link.to_str().unwrap(), "init", "--force"])
+        .assert()
+        .failure();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "theirs");
+
+    let dangling = dir.path().join("dangling.toml");
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), &dangling).unwrap();
+    bin()
+        .args(["--config", dangling.to_str().unwrap(), "init"])
+        .assert()
+        .failure();
+    assert!(!dir.path().join("nowhere").exists());
+}
+
+#[test]
 fn init_stdout_prints_without_touching_disk() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

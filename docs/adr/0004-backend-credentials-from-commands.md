@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted; never using a cached value past its refresh window superseded by
+accepted; how the command is run and what it may print superseded by ADR-0018; never using a cached value past its refresh window superseded by
 ADR-0015 for values with a reported `expires_at`
 
 ## Context

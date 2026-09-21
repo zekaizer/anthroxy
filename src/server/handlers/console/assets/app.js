@@ -687,7 +687,14 @@ function route() {
   if (!state.token) return;
   const [hashTab, hashArg] = location.hash.slice(1).split("/");
   const tab = TABS.some(([id]) => id === hashTab) ? hashTab : "overview";
-  const arg = hashArg ? decodeURIComponent(hashArg) : null;
+  let arg = null;
+  if (hashArg) {
+    try {
+      arg = decodeURIComponent(hashArg);
+    } catch {
+      arg = null;
+    }
+  }
   const view = document.getElementById("view");
   // The same hash again rebuilds the tab, which is how a tab is reloaded.
   if (tab === state.tab && arg !== state.arg && retargets.has(view)) {

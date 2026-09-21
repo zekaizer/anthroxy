@@ -72,6 +72,14 @@ fn folds_events_into_blocks_in_arrival_order() {
 }
 
 #[test]
+fn a_failure_message_is_bounded_whatever_the_backend_sent() {
+    let failure = Failure::upstream("x".repeat(100_000));
+    assert_eq!(failure.message.chars().count(), MAX_MESSAGE_CHARS + 1);
+    assert!(failure.message.ends_with('…'));
+    assert_eq!(Failure::upstream("short").message, "short");
+}
+
+#[test]
 fn text_after_a_tool_call_opens_a_new_block() {
     let message = Message::from_events([
         Event::Start {

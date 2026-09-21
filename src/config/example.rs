@@ -7,7 +7,9 @@ pub const EXAMPLE: &str = r##"# anthroxy configuration
 # any model below with /model — switching takes effect on the next request.
 #
 # `${NAME}` is replaced with the environment variable NAME when the file is
-# loaded. Write `$${NAME}` to keep a literal `${NAME}` for a shell command.
+# loaded. Write `$${NAME}` to keep a literal `${NAME}` for a shell command. A
+# credential `command` is the exception: its `${NAME}` is resolved each time
+# it runs, so the secret never sits in the loaded configuration.
 
 [server]
 # Listen on every interface so Claude Code on the Windows host can reach a
@@ -18,8 +20,9 @@ listen = "0.0.0.0:8787"
 token = "__TOKEN__"
 # How /v1 authenticates. "token" (default) requires this value as x-api-key
 # or Authorization: Bearer. "none" is unauthenticated /v1 and requires a
-# loopback listen; the console still uses token. Use "none" with a
-# kind = "passthrough" backend so Claude Code can send only ANTHROPIC_BASE_URL.
+# loopback listen; the console still uses token. A kind = "passthrough"
+# backend requires "none": it forwards the client's own credential, which
+# under "token" would be this router token.
 # v1_auth = "token"
 # Largest accepted request body. Claude Code sends whole conversations.
 max_body_bytes = "64MiB"

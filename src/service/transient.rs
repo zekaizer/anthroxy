@@ -2,13 +2,11 @@
 //! user manager, which starts it with the environment `anthroxy.service` gets.
 
 use std::collections::BTreeMap;
-use std::process::Stdio;
 use std::time::{Duration, Instant};
-
-use tokio::process::Command;
 
 use super::systemd::{ServiceError, command_line};
 use crate::credential::exec::Run;
+use crate::process;
 
 const PROGRAM: &str = "systemd-run";
 
@@ -69,22 +67,8 @@ async fn run(command: &[&str], timeout: Duration) -> Result<Run, ServiceError> {
         detail,
     };
     let started = Instant::now();
-    let child = Command::new(PROGRAM)
-        .args(argv(command))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| failed(e.to_string()))?;
-    let output = tokio::time::timeout(timeout, child.wait_with_output())
+    let output = process::run(PROGRAM, &argv(command), timeout)
         .await
-        .map_err(|_| {
-            failed(format!(
-                "did not finish within {}",
-                humantime::format_duration(timeout)
-            ))
-        })?
         .map_err(|e| failed(e.to_string()))?;
     Ok(Run::new(&output, started.elapsed()))
 }

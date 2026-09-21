@@ -80,4 +80,18 @@ pub fn is_connection_failure(error: &reqwest::Error) -> bool {
         && !error.is_body()
         && !error.is_decode()
         && (error.is_connect() || error.is_request())
+        && !closed_after_reading(error)
+}
+
+/// The connection ended after the request was written and before a status
+/// line came back: the backend may have acted on it, so it is not resent.
+fn closed_after_reading(error: &reqwest::Error) -> bool {
+    let mut source = std::error::Error::source(error);
+    while let Some(inner) = source {
+        if let Some(hyper) = inner.downcast_ref::<hyper::Error>() {
+            return hyper.is_incomplete_message();
+        }
+        source = inner.source();
+    }
+    false
 }

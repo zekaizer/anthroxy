@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use super::{error, live};
 use crate::activity::{Exchange, Source};
 use crate::anthropic::{ErrorType, UsageScanner};
+use crate::server::buffered::MAX_BUFFERED_BYTES;
 use crate::server::handlers::proxy;
 use crate::server::{AppState, RequestId, Snapshot};
 use crate::sse::Parser;
@@ -74,7 +75,15 @@ pub async fn smoke(
         ttfb_ms,
         duration_ms,
         failure,
-    } = answer(&snapshot, &id, request(&payload), exchange, DEADLINE).await;
+    } = answer(
+        &snapshot,
+        &id,
+        request(&payload),
+        exchange,
+        DEADLINE,
+        app.body_timeout,
+    )
+    .await;
 
     let events = content_type
         .as_deref()
@@ -139,6 +148,7 @@ async fn answer(
     request: http::Request<Body>,
     exchange: Exchange,
     deadline: Duration,
+    body_timeout: Duration,
 ) -> Answer {
     let started = Instant::now();
     let mut status = None;
@@ -147,7 +157,7 @@ async fn answer(
     let mut ttfb_ms = None;
     let mut failure = None;
     let whole = async {
-        let response = proxy::serve(snapshot, id, request, exchange).await;
+        let response = proxy::serve(snapshot, id, request, exchange, body_timeout).await;
         status = Some(response.status().as_u16());
         content_type = response
             .headers()
@@ -160,6 +170,10 @@ async fn answer(
                 Ok(frame) => {
                     if let Some(data) = frame.data_ref() {
                         ttfb_ms.get_or_insert(started.elapsed().as_millis() as u64);
+                        if received.len() + data.len() > MAX_BUFFERED_BYTES {
+                            failure = Some(format!("answer exceeds {MAX_BUFFERED_BYTES} bytes"));
+                            break;
+                        }
                         received.extend_from_slice(data);
                     }
                 }
@@ -256,6 +270,7 @@ mod tests {
                 request(&payload),
                 exchange,
                 Duration::from_millis(300),
+                crate::server::BODY_TIMEOUT,
             ),
         )
         .await

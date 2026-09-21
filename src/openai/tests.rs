@@ -82,11 +82,13 @@ fn tool_loop_history() {
                 tool_use_id: "toolu_1".into(),
                 content: "fn main() {}".into(),
                 images: vec![],
+                is_error: false,
             },
             Part::ToolResult {
                 tool_use_id: "toolu_2".into(),
                 content: "a.rs".into(),
                 images: vec![],
+                is_error: false,
             },
             Part::Text("thanks".into()),
         ]),
@@ -696,6 +698,7 @@ fn a_turn_whose_parts_were_all_dropped_still_keeps_role_alternation() {
             tool_use_id: "t".into(),
             content: "r".into(),
             images: vec![],
+            is_error: false,
         }]),
     ]);
     assert_eq!(
@@ -788,6 +791,72 @@ fn user_sends_a_mid_conversation_system_as_a_user_message() {
 }
 
 #[test]
+fn a_leading_system_message_stays_system_under_user_placement() {
+    let mut r = request(vec![
+        RequestMessage {
+            role: Role::System,
+            parts: vec![Part::Text("top".into())],
+        },
+        user(vec![Part::Text("hi".into())]),
+    ]);
+    r.system = None;
+    let body = serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::User)).unwrap();
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"role": "system", "content": "top"},
+            {"role": "user", "content": "hi"}
+        ])
+    );
+}
+
+#[test]
+fn merge_skips_an_empty_system_message() {
+    let mut r = request(vec![
+        user(vec![Part::Text("hi".into())]),
+        RequestMessage {
+            role: Role::System,
+            parts: vec![],
+        },
+    ]);
+    r.system = Some("top".into());
+    let body =
+        serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::Merge)).unwrap();
+    assert_eq!(
+        body["messages"][0],
+        json!({"role": "system", "content": "top"})
+    );
+}
+
+#[test]
+fn a_failed_tool_result_is_marked_for_the_model() {
+    let r = request(vec![user(vec![Part::ToolResult {
+        tool_use_id: "t".into(),
+        content: "permission denied".into(),
+        images: vec![],
+        is_error: true,
+    }])]);
+    assert_eq!(
+        encoded(&r)["messages"][0],
+        json!({"role": "tool", "tool_call_id": "t", "content": "[tool error]\npermission denied"})
+    );
+}
+
+#[test]
+fn usage_with_only_a_total_still_reports_input_tokens() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let usage = json!({"id": "c", "object": "chat.completion.chunk", "model": "m", "choices": [],
+        "usage": {"total_tokens": 46, "completion_tokens": 34}});
+    let events = d.decode(&usage.to_string()).unwrap();
+    assert!(
+        matches!(events.first(), Some(Event::Usage(u)) if u.input_tokens == 12 && u.output_tokens == 34),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn images_in_a_tool_result_follow_it_in_a_user_message() {
     let image = Image {
         media_type: "image/png".into(),
@@ -798,11 +867,13 @@ fn images_in_a_tool_result_follow_it_in_a_user_message() {
             tool_use_id: "toolu_1".into(),
             content: String::new(),
             images: vec![image.clone()],
+            is_error: false,
         },
         Part::ToolResult {
             tool_use_id: "toolu_2".into(),
             content: "text too".into(),
             images: vec![image.clone(), image],
+            is_error: false,
         },
         Part::Text("what do you see".into()),
     ])]);
@@ -1146,6 +1217,43 @@ fn a_stream_cannot_open_unboundedly_many_tool_calls() {
     let (index, message) = reported.expect("a stream of tool calls is cut off");
     assert_eq!(index, MAX_CALLS, "{message}");
     assert!(message.contains("tool call"), "{message}");
+}
+
+#[test]
+fn an_unnumbered_call_after_the_last_index_ends_the_stream_instead_of_wrapping() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    d.decode(&chunk(
+        json!({"tool_calls": [{"index": u32::MAX, "id": "a", "function": {"name": "f", "arguments": "{}"}}]}),
+        None,
+    ))
+    .unwrap();
+    let events = d
+        .decode(&chunk(
+            json!({"tool_calls": [{"id": "b", "function": {"name": "g", "arguments": "{}"}}]}),
+            None,
+        ))
+        .unwrap();
+    assert!(
+        matches!(events.first(), Some(Event::Error(_))),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn usage_counts_at_the_edge_do_not_overflow() {
+    let mut d = ChunkDecoder::new();
+    d.decode(&chunk(json!({"role": "assistant"}), None))
+        .unwrap();
+    let usage = json!({"id": "c", "object": "chat.completion.chunk", "model": "m", "choices": [],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1,
+                  "cache_read_input_tokens": u64::MAX, "prompt_tokens_details": {"cache_write_tokens": 1}}});
+    let events = d.decode(&usage.to_string()).unwrap();
+    assert!(
+        matches!(events.first(), Some(Event::Usage(u)) if u.input_tokens == 0),
+        "{events:?}"
+    );
 }
 
 #[test]

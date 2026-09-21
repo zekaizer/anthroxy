@@ -3,6 +3,7 @@ use std::time::Duration;
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
+use crate::config::view::REDACTED;
 use crate::config::{BackendConfig, BackendKind, CredentialConfig, UpstreamConfig};
 use crate::upstream::{DropReason, dropped_headers};
 
@@ -120,6 +121,20 @@ fn passthrough_keeps_the_client_authorization() {
     assert_eq!(out["authorization"], "Bearer client-token");
     assert_eq!(out["x-api-key"], "client-token");
     assert_eq!(out["anthropic-version"], "2023-06-01");
+}
+
+#[test]
+fn a_forwarded_client_credential_is_recorded_as_a_secret() {
+    let backend = backend_of_kind(BackendKind::Passthrough, &[], &[]);
+    let headers = upstream_headers(&client_headers(), &backend);
+    let sent = sent_headers(&backend, &headers, None, 0, SecretView::Redacted);
+    for name in ["authorization", "x-api-key"] {
+        let header = sent.iter().find(|h| h.name == name).unwrap();
+        assert_eq!(header.value, REDACTED, "{name}");
+    }
+    let masked = sent_headers(&backend, &headers, None, 0, SecretView::Masked);
+    let auth = masked.iter().find(|h| h.name == "authorization").unwrap();
+    assert!(!auth.value.contains("client-token"), "{}", auth.value);
 }
 
 #[test]
@@ -375,6 +390,25 @@ async fn retry_policy_retries_connection_refused_but_not_timeouts() {
     assert!(!is_connection_failure(&timeout));
     assert_eq!(policy.on_transport_error(1, &timeout), Decision::GiveUp);
     drop(listener);
+
+    // A backend that reads the request and closes without answering may
+    // have acted on it: not retried.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+        drop(socket);
+    });
+    let closed = reqwest::Client::new()
+        .post(format!("http://{addr}/"))
+        .body("x")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(!is_connection_failure(&closed), "{closed:?}");
+    assert_eq!(policy.on_transport_error(1, &closed), Decision::GiveUp);
 }
 
 #[test]

@@ -83,7 +83,13 @@ struct EndMeta {
     outcome: String,
     response_bytes: usize,
     duration_ms: u64,
+    /// The response file holds only the first [`MAX_RECORDED_RESPONSE_BYTES`].
+    truncated: bool,
 }
+
+/// Bytes of a response kept on disk per entry; the rest is counted, not
+/// stored, so one long stream cannot fill the disk.
+pub const MAX_RECORDED_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Accumulates one exchange and writes it out when the response ends. A
 /// recorder dropped before [`Recorder::finish`] records a client that left, or
@@ -181,6 +187,7 @@ impl BodyLog {
                 ("meta.json", to_pretty_json(&meta)),
             ],
             None,
+            Create::First,
         );
         Recorder {
             dir,
@@ -392,14 +399,14 @@ fn write_files(
     dir: PathBuf,
     files: Vec<(&'static str, Bytes)>,
     after: Option<tokio::task::JoinHandle<()>>,
+    create: Create,
 ) -> tokio::task::JoinHandle<()> {
     let span = tracing::Span::current();
     let pending = PendingWrite::begin();
     let write = move || {
         let _pending = pending;
         let _guard = span.enter();
-        if let Err(error) = create_dir_private(&dir) {
-            tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
+        if !entry_ready(&dir, create) {
             return;
         }
         for (name, bytes) in files {
@@ -418,6 +425,35 @@ fn write_files(
         }
         let _ = tokio::task::spawn_blocking(write).await;
     })
+}
+
+/// Whether a write may create the entry's directory. Only the first write
+/// does: an entry pruned or deleted while its stream runs stays gone rather
+/// than coming back with a torso of the response.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Create {
+    First,
+    Never,
+}
+
+/// Whether the entry directory is there to write into.
+fn entry_ready(dir: &Path, create: Create) -> bool {
+    match create {
+        Create::First => match create_dir_private(dir) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
+                false
+            }
+        },
+        Create::Never => {
+            let present = dir.is_dir();
+            if !present {
+                tracing::debug!(dir = %dir.display(), "recording removed while it ran; the rest is dropped");
+            }
+            present
+        }
+    }
 }
 
 /// How much of a body waits before it is appended, and how long. Fixed: a
@@ -440,8 +476,7 @@ fn append_file(
     let append = move || {
         let _pending = pending;
         let _guard = span.enter();
-        if let Err(error) = create_dir_private(&dir) {
-            tracing::error!(dir = %dir.display(), %error, "cannot create body log directory");
+        if !entry_ready(&dir, Create::Never) {
             return;
         }
         let path = dir.join(name);
@@ -511,8 +546,12 @@ impl Recorder {
     /// not a write. A stream that falls quiet holds what it has until the
     /// next chunk, which is no loss — there is nothing new to see.
     pub fn chunk(&mut self, chunk: &Bytes) {
-        self.response.extend_from_slice(chunk);
-        self.response_bytes += chunk.len();
+        let room = MAX_RECORDED_RESPONSE_BYTES.saturating_sub(self.response_bytes);
+        if room > 0 {
+            self.response
+                .extend_from_slice(&chunk[..chunk.len().min(room)]);
+        }
+        self.response_bytes = self.response_bytes.saturating_add(chunk.len());
         if self.response.len() >= FLUSH_BYTES || self.last_flush.elapsed() >= FLUSH_INTERVAL {
             self.flush();
         }
@@ -540,7 +579,32 @@ impl Recorder {
         self.record(outcome);
     }
 
-    fn record(&mut self, outcome: &RelayOutcome) {
+    /// [`Recorder::record`] done on this thread, for a runtime that is
+    /// stopping.
+    fn record_now(&mut self, outcome: &RelayOutcome) {
+        self.set_end(outcome);
+        let tail = Bytes::from(std::mem::take(&mut self.response));
+        if !entry_ready(&self.dir, Create::Never) {
+            return;
+        }
+        let result = Ok(()).and_then(|()| {
+            if self.flushed {
+                append_private(&self.dir.join(self.response_file), &tail)
+            } else {
+                write_private(&self.dir.join(self.response_file), &tail)
+            }
+        });
+        let result = result.and_then(|()| {
+            let temp = self.dir.join("meta.json.tmp");
+            write_private(&temp, &to_pretty_json(&self.meta))
+                .and_then(|()| std::fs::rename(&temp, self.dir.join("meta.json")))
+        });
+        if let Err(error) = result {
+            tracing::error!(dir = %self.dir.display(), %error, "cannot finish the recording");
+        }
+    }
+
+    fn set_end(&mut self, outcome: &RelayOutcome) {
         self.meta.end = Some(EndMeta {
             outcome: match outcome {
                 RelayOutcome::Complete => "complete".to_owned(),
@@ -550,7 +614,12 @@ impl Recorder {
             },
             response_bytes: self.response_bytes,
             duration_ms: self.started.elapsed().as_millis() as u64,
+            truncated: self.response_bytes > MAX_RECORDED_RESPONSE_BYTES,
         });
+    }
+
+    fn record(&mut self, outcome: &RelayOutcome) {
+        self.set_end(outcome);
         // A body already part-written is finished by appending the rest: a
         // whole-file write would drop what a reader has been following.
         if self.flushed {
@@ -563,12 +632,14 @@ impl Recorder {
                     Bytes::from(std::mem::take(&mut self.response)),
                 )],
                 self.pending.take(),
+                Create::Never,
             ));
         }
         write_files(
             self.dir.clone(),
             vec![("meta.json", to_pretty_json(&self.meta))],
             self.pending.take(),
+            Create::Never,
         );
         tracing::debug!(dir = %self.dir.display(), "exchange recorded");
     }
@@ -578,7 +649,16 @@ impl Drop for Recorder {
     fn drop(&mut self) {
         if self.meta.end.is_none() {
             let outcome = RelayOutcome::dropped(&self.cut);
-            self.record(&outcome);
+            if *self.cut.borrow() && self.pending.is_none() {
+                // A cut means the runtime is about to go and a task spawned
+                // now may never run, so with nothing queued to order behind
+                // what is left is written here. With a write still queued
+                // the ordered path is kept: its PendingWrite is counted at
+                // spawn, so the stop's settled() waits for it.
+                self.record_now(&outcome);
+            } else {
+                self.record(&outcome);
+            }
         }
     }
 }

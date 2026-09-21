@@ -644,6 +644,81 @@ async fn a_connection_that_sends_no_complete_request_head_is_closed() {
     assert_eq!(res.status(), 200, "a prompt request is still served");
 }
 
+/// Connections are counted, so a crowd of idle sockets holds the router's
+/// descriptors only up to the limit; the next one waits for a slot.
+#[tokio::test]
+async fn connections_past_the_limit_wait_for_a_slot() {
+    let upstream = MockUpstream::start(echo).await;
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(&upstream.url(), "\n[stats]\nenabled = false\n"),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config)
+        .await
+        .unwrap()
+        .with_max_connections(2);
+    let addr = server.local_addr();
+    tokio::spawn(server.serve(std::future::pending(), Duration::ZERO));
+
+    let first = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let second = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(700))
+        .build()
+        .unwrap();
+    let held = client.get(format!("http://{addr}/healthz")).send().await;
+    assert!(
+        held.is_err(),
+        "a third connection was served past the limit"
+    );
+    drop(first);
+    let res = client
+        .get(format!("http://{addr}/healthz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "a freed slot is taken");
+    drop(second);
+}
+
+/// A body that arrives a byte at a time is not read for good: past the
+/// deadline the request is answered 408 and the connection freed.
+#[tokio::test]
+async fn a_body_that_never_finishes_is_answered_408() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let upstream = MockUpstream::start(echo).await;
+    let config = anthroxy::config::Config::parse(
+        &config_with_backend(&upstream.url(), "\n[stats]\nenabled = false\n"),
+        anthroxy::config::process_env,
+    )
+    .unwrap();
+    let server = anthroxy::server::Server::bind(&config)
+        .await
+        .unwrap()
+        .with_body_timeout(Duration::from_millis(300));
+    let addr = server.local_addr();
+    tokio::spawn(server.serve(std::future::pending(), Duration::ZERO));
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST /v1/messages HTTP/1.1\r\nhost: x\r\nx-api-key: {TOKEN}\r\ncontent-type: application/json\r\ncontent-length: 1000\r\n\r\n{{\"model\":"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
+    assert!(read.is_ok(), "the connection was left open");
+    let text = String::from_utf8_lossy(&buf);
+    assert!(text.starts_with("HTTP/1.1 408"), "{text}");
+}
+
 /// Every statistics line written under `dir`, parsed.
 fn stats_lines(dir: &std::path::Path) -> Vec<Value> {
     std::fs::read_dir(dir)

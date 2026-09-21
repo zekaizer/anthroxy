@@ -45,12 +45,18 @@ impl FailureKind {
     }
 }
 
+/// Longest message kept; a backend's error text is cut here, so no
+/// exchange record or error document carries more.
+pub const MAX_MESSAGE_CHARS: usize = 4096;
+
 impl Failure {
     pub fn new(kind: FailureKind, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: message.into(),
+        let mut message = message.into();
+        if let Some((at, _)) = message.char_indices().nth(MAX_MESSAGE_CHARS) {
+            message.truncate(at);
+            message.push('…');
         }
+        Self { kind, message }
     }
 
     /// A failure the router itself found in what a backend sent.

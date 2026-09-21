@@ -15,7 +15,7 @@ mod tests;
 
 pub use catalog::{Effort, Model};
 pub use event::{Event, StopReason, Usage};
-pub use failure::{Failure, FailureKind};
+pub use failure::{Failure, FailureKind, MAX_MESSAGE_CHARS};
 pub use message::{Block, Message};
 pub use request::{
     Image, Message as RequestMessage, Part, Request, Role, TEXT_SEPARATOR, Tool, ToolChoice,

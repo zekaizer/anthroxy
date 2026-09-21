@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 use clap::Args;
 
 use super::{Cli, Style};
+use crate::config::env;
 use crate::config::{BackendConfig, CommandOutput, Config, CredentialConfig};
 use crate::credential::exec::{self, Run};
 use crate::credential::{CommandCredential, CredentialSource, mask};
@@ -137,14 +138,23 @@ async fn attempts(
                 refresh: *refresh,
                 reveal,
             };
-            let here = exec::run(command, *timeout)
-                .await
-                .map_err(|e| e.to_string());
-            let mut attempts = vec![ran("shell", here, reading)];
-            if service.is_some() {
-                let there = transient::shell(command, *timeout)
+            // `${NAME}` is resolved the way the router resolves it before a
+            // run: from this process here, from the service's environment
+            // there.
+            let here = match env::expand(command, &|name| std::env::var(name).ok()) {
+                Ok(command) => exec::run(&command, *timeout)
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            let mut attempts = vec![ran("shell", here, reading)];
+            if let Some(service) = service {
+                let there = match env::expand(command, &|name| service.get(name).cloned()) {
+                    Ok(command) => transient::shell(&command, *timeout)
+                        .await
+                        .map_err(|e| e.to_string()),
+                    Err(error) => Err(error.to_string()),
+                };
                 attempts.push(ran("service", there, reading));
             }
             attempts
@@ -226,7 +236,7 @@ fn ran(label: &'static str, run: Result<Run, String>, reading: Reading) -> Attem
             // A command that warns on its way to a usable token is worth
             // seeing; the router only reports stderr when the run fails.
             if !run.stderr.trim().is_empty() {
-                details.push(("stderr", run.stderr.trim().to_owned()));
+                details.push(("stderr", capped(run.stderr.trim())));
             }
         }
         Err(error) => {
@@ -235,7 +245,7 @@ fn ran(label: &'static str, run: Result<Run, String>, reading: Reading) -> Attem
             if run.success {
                 details.push(("error", error.to_string()));
             } else if !run.stderr.trim().is_empty() {
-                details.push(("stderr", run.stderr.trim().to_owned()));
+                details.push(("stderr", capped(run.stderr.trim())));
             }
             if !run.stdout.trim().is_empty() {
                 details.push(("stdout", show(run.stdout.trim(), reading.reveal)));
@@ -248,6 +258,19 @@ fn ran(label: &'static str, run: Result<Run, String>, reading: Reading) -> Attem
         headline,
         details,
     }
+}
+
+/// The first 4 KiB of what a command printed, with a note of the rest.
+fn capped(text: &str) -> String {
+    const KEEP: usize = 4096;
+    if text.len() <= KEEP {
+        return text.to_owned();
+    }
+    let end = (0..=KEEP)
+        .rev()
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(0);
+    format!("{}… ({} more bytes)", &text[..end], text.len() - end)
 }
 
 /// An `env` credential: the variable as that environment has it.

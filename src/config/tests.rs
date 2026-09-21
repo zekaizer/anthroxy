@@ -812,6 +812,24 @@ backend = "local"
 }
 
 #[test]
+fn passthrough_requires_v1_auth_none() {
+    let text = r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+"#;
+    let joined = problems(text).join("\n");
+    assert!(
+        joined.contains("kind = \"passthrough\" requires server.v1_auth = \"none\""),
+        "{joined}"
+    );
+}
+
+#[test]
 fn passthrough_backend_allows_no_models_table() {
     let c = parse(
         r#"
@@ -884,6 +902,52 @@ fn backend_kind_rejects_unknown_values() {
     let error = parse(&text).unwrap_err();
     assert!(matches!(error, ConfigError::Parse(_)), "{error:?}");
     assert!(error.to_string().contains("responses"), "{error}");
+}
+
+#[test]
+fn a_credential_command_keeps_its_env_references_for_run_time() {
+    let text = r#"
+[server]
+token = "${TOKEN}"
+
+[backends.a]
+url = "http://a"
+credential = { kind = "command", command = "vault read -token=${SECRET} x" }
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let lookup = |name: &str| match name {
+        "TOKEN" => Some("t".to_owned()),
+        "SECRET" => Some("s".to_owned()),
+        _ => None,
+    };
+    let c = Config::parse(text, lookup).unwrap();
+    assert_eq!(c.server.token, "t");
+    match &c.backends["a"].credential {
+        CredentialConfig::Command { command, .. } => {
+            assert_eq!(command, "vault read -token=${SECRET} x")
+        }
+        other => panic!("{other:?}"),
+    }
+    let missing = Config::parse(text, |name: &str| (name == "TOKEN").then(|| "t".to_owned()))
+        .err()
+        .unwrap();
+    assert!(
+        matches!(missing, ConfigError::MissingEnv(ref n) if n == "SECRET"),
+        "{missing}"
+    );
+}
+
+#[test]
+fn a_problem_never_spans_lines_whatever_the_value() {
+    let text = "[server]\ntoken = \"t\"\n\n[backends.\"a\\nb\"]\nurl = \"http://a\"\nheaders = { \"x\\ny\" = \"v\" }\ndrop_fields = [\"p\\n.q\"]\n\n[[models]]\nid = \"m\"\nbackend = \"z\\nz\"\naliases = [\"a\\nb\", \"a\\nb\"]\n\n[routing]\ndefault_model = \"d\\nd\"\n";
+    let p = problems(text);
+    assert!(p.len() >= 4, "{p:?}");
+    for problem in &p {
+        assert!(!problem.contains('\n'), "{problem:?}");
+    }
 }
 
 #[test]

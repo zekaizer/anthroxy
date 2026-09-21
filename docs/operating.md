@@ -50,7 +50,12 @@ networking is set to `mirrored`.
   `logging.body_retention` (default 7 days) are deleted at startup and every 10
   minutes; set it to `0s` to keep everything. A recording holds the whole
   conversation, so on Unix the router creates the directory and everything under
-  it owner-only; a `body_dir` that already exists keeps the mode it has.
+  it owner-only; a `body_dir` that already exists keeps the mode it has, but
+  must belong to the router's account and not be a symbolic link (a shared
+  parent such as `/var/tmp` lets anyone plant one), and no file under it is
+  ever written through a link. A response is kept up to 64 MiB per entry; a
+  longer one is counted in full, stored to that point, and marked
+  `truncated` in `meta.json`.
 - **Console.** The Requests tab has each failure's upstream error body and hints
   without reading the journal; Tools → Probe runs credential commands and model
   lists inside the service process, which is where environment differences show;

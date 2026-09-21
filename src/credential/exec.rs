@@ -1,14 +1,12 @@
 //! Running a credential command and reading what it produced. The router and
 //! `anthroxy credential` share this so a report shows what the router sees.
 
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use tokio::process::Command;
-
 use super::{CredentialError, Output, output};
 use crate::config::CommandOutput;
+use crate::process::{self, RunError};
 
 /// A credential this close to its reported expiry is re-acquired instead of
 /// served from cache.
@@ -26,7 +24,7 @@ pub struct Run {
 }
 
 impl Run {
-    pub fn new(output: &std::process::Output, elapsed: Duration) -> Run {
+    pub fn new(output: &process::Output, elapsed: Duration) -> Run {
         Run {
             success: output.status.success(),
             status: match output.status.code() {
@@ -41,23 +39,20 @@ impl Run {
 }
 
 /// Runs `command` through `sh -c` with no stdin. `Err` only when no exit
-/// status was reached: the process could not start, or `timeout` elapsed.
+/// status was reached: the process could not start, printed past the cap,
+/// or `timeout` elapsed. The command line is not logged: it may carry a
+/// secret.
 pub async fn run(command: &str, timeout: Duration) -> Result<Run, CredentialError> {
-    tracing::debug!(command = %command, "running credential command");
     let started = Instant::now();
-    let child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| CredentialError::Spawn(Arc::new(error)))?;
-    let output = tokio::time::timeout(timeout, child.wait_with_output())
+    let output = process::run("sh", &["-c", command], timeout)
         .await
-        .map_err(|_| CredentialError::Timeout(timeout))?
-        .map_err(|error| CredentialError::Spawn(Arc::new(error)))?;
+        .map_err(|error| match error {
+            RunError::Spawn(error) | RunError::Read(error) => {
+                CredentialError::Spawn(Arc::new(error))
+            }
+            RunError::Timeout(_) => CredentialError::Timeout(timeout),
+            RunError::OutputTooLarge(limit) => CredentialError::OutputTooLarge(limit),
+        })?;
     Ok(Run::new(&output, started.elapsed()))
 }
 

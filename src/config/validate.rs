@@ -9,6 +9,7 @@ use super::{
     origin,
 };
 use crate::openai::SystemPlacement;
+use crate::text::short;
 
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut problems = Vec::new();
@@ -31,6 +32,14 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         .count();
     if passthrough > 1 {
         problems.push("at most one backend with kind = \"passthrough\" is allowed".to_owned());
+    }
+    // With the token gate on, the client's Authorization is the router token,
+    // and a passthrough backend would forward that token to its origin.
+    if passthrough > 0 && config.server.v1_auth == V1Auth::Token {
+        problems.push(
+            "backends: kind = \"passthrough\" requires server.v1_auth = \"none\"; the client's own credential is what it forwards"
+                .to_owned(),
+        );
     }
     let live_models = config.backends.values().any(|b| b.live_models);
     if config.models.is_empty() && passthrough == 0 && !live_models {
@@ -74,9 +83,12 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         if !header_safe(name) {
             problems.push(format!(
                 "backends.{}: the name is sent in `x-anthroxy-backend` and must be header-safe",
-                name.escape_debug()
+                short(name)
             ));
         }
+        // Operator strings reach the log and the console one problem per
+        // line; each travels cut and escaped.
+        let name = &short(name);
         check_url(&format!("backends.{name}.url"), &backend.url, &mut problems);
         check_models_path(name, &backend.models_path, &mut problems);
         if let Some(proxy) = &backend.proxy {
@@ -108,15 +120,17 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         for (header, value) in &backend.headers {
             if http::HeaderName::from_bytes(header.as_bytes()).is_err() {
                 problems.push(format!(
-                    "backends.{name}.headers: `{header}` is not a valid header name"
+                    "backends.{name}.headers: `{}` is not a valid header name",
+                    short(header)
                 ));
             } else if CONNECTION_HEADERS.contains(&header.to_ascii_lowercase().as_str()) {
                 problems.push(format!(
-                    "backends.{name}.headers: `{header}` describes the connection the router makes and cannot be set here"
+                    "backends.{name}.headers: `{}` describes the connection the router makes and cannot be set here", short(header)
                 ));
             } else if http::HeaderValue::from_str(value).is_err() {
                 problems.push(format!(
-                    "backends.{name}.headers: `{header}` has a value that cannot be sent in a header"
+                    "backends.{name}.headers: `{}` has a value that cannot be sent in a header",
+                    short(header)
                 ));
             }
         }
@@ -128,7 +142,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             } else if path.split('.').any(str::is_empty) {
                 problems.push(format!(
-                    "backends.{name}.drop_fields: `{path}` has an empty segment"
+                    "backends.{name}.drop_fields: `{}` has an empty segment",
+                    short(path)
                 ));
             }
         }
@@ -211,18 +226,19 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         if !config.backends.contains_key(&model.backend) {
             problems.push(format!(
                 "models[{index}].backend: `{}` is not a configured backend",
-                model.backend
+                short(&model.backend)
             ));
         } else if config.backends[&model.backend].kind == BackendKind::Passthrough {
             problems.push(format!(
                 "models[{index}].backend: `{0}` has kind = \"passthrough\"; its models come from the backend, not [[models]]",
-                model.backend
+                short(&model.backend)
             ));
         }
         for id in std::iter::once(&model.id).chain(&model.aliases) {
             if !seen.insert(id.as_str()) {
                 problems.push(format!(
-                    "models[{index}]: duplicate model id or alias `{id}`"
+                    "models[{index}]: duplicate model id or alias `{}`",
+                    short(id)
                 ));
             }
         }
@@ -232,7 +248,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         && !seen.contains(default.as_str())
     {
         problems.push(format!(
-            "routing.default_model: `{default}` is not a configured model id or alias"
+            "routing.default_model: `{}` is not a configured model id or alias",
+            short(default)
         ));
     }
 
@@ -286,7 +303,9 @@ fn check_proxies_per_origin(config: &Config, problems: &mut Vec<String>) {
                     (Some(_), Some(_)) => "through another proxy",
                 };
                 problems.push(format!(
-                    "backends.{name}.proxy: backend `{first}` reaches the same origin {origin} {how}; backends on one origin must name the same proxy or none"
+                    "backends.{}.proxy: backend `{}` reaches the same origin {origin} {how}; backends on one origin must name the same proxy or none",
+                    short(name),
+                    short(first)
                 ));
             }
             Some(_) => {}

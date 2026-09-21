@@ -51,6 +51,12 @@ struct Slot {
     cached: Option<Cached>,
     /// When the last run ended and its error; cleared by a run that succeeds.
     failed: Option<(Instant, CredentialError)>,
+    /// The value the last `invalidate` cleared, until a run replaces it.
+    invalidated: Option<Credential>,
+    /// A value a run handed back although it had just been rejected: the
+    /// helper has nothing newer, so further rejections of it within
+    /// [`RETRY_AFTER_FAILURE`] do not run the command again per request.
+    reproduced: Option<(Credential, Instant)>,
 }
 
 impl Slot {
@@ -133,7 +139,14 @@ impl CommandCredential {
 
     /// Runs the command once.
     async fn fetch(&self) -> Result<Cached, CredentialError> {
-        let run = exec::run(&self.command, self.timeout).await?;
+        // `${NAME}` is resolved here, each run, so the loaded configuration,
+        // the console and `check` show the reference, never the secret.
+        let command = crate::config::env::expand(&self.command, &|name| std::env::var(name).ok())
+            .map_err(|error| match error {
+            crate::config::ConfigError::MissingEnv(name) => CredentialError::MissingEnv(name),
+            other => CredentialError::MissingEnv(other.to_string()),
+        })?;
+        let run = exec::run(&command, self.timeout).await?;
         let output = exec::interpret(&run, self.output)?;
         let valid_for = exec::valid_for(self.refresh, output.expires_at)?;
         let now = Instant::now();
@@ -201,6 +214,13 @@ impl CredentialSource for CommandCredential {
             }
         };
         slot.failed = None;
+        if slot.invalidated.take().as_ref() == Some(&fetched.credential) {
+            tracing::warn!(
+                credential = %fetched.credential.masked(),
+                "credential command handed back the rejected value"
+            );
+            slot.reproduced = Some((fetched.credential.clone(), Instant::now()));
+        }
         let expires_at = fetched
             .expires_at
             .map(|t| humantime::format_rfc3339_seconds(t).to_string());
@@ -216,12 +236,18 @@ impl CredentialSource for CommandCredential {
 
     async fn invalidate(&self, rejected: &Credential) {
         let mut slot = self.cache.lock().await;
-        if slot
-            .cached
+        let reproduced = slot
+            .reproduced
             .as_ref()
-            .is_some_and(|cached| cached.credential == *rejected)
+            .is_some_and(|(value, at)| value == rejected && at.elapsed() < RETRY_AFTER_FAILURE);
+        if !reproduced
+            && slot
+                .cached
+                .as_ref()
+                .is_some_and(|cached| cached.credential == *rejected)
         {
             slot.cached = None;
+            slot.invalidated = Some(rejected.clone());
             self.observed().current = None;
         }
     }

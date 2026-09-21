@@ -114,7 +114,18 @@ impl ChunkDecoder {
             // latest call; anything else is a new one after it.
             None => match self.last {
                 Some(last) if call.id.is_none() && call.name.is_none() => last,
-                _ => self.calls.keys().next_back().map_or(0, |last| last + 1),
+                _ => match self
+                    .calls
+                    .keys()
+                    .next_back()
+                    .map_or(Some(0), |last| last.checked_add(1))
+                {
+                    Some(next) => next,
+                    None => {
+                        self.stop_following("tool call indexes are exhausted".to_owned(), events);
+                        return;
+                    }
+                },
             },
         };
         self.last = Some(index);

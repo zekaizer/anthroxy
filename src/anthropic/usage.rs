@@ -32,7 +32,9 @@ impl TokenUsage {
     /// Prompt tokens in all: what was sent fresh, read from the cache and
     /// written to it.
     pub fn prompt(&self) -> u64 {
-        self.input + self.cache_read + self.cache_creation
+        self.input
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_creation)
     }
 }
 
@@ -165,7 +167,10 @@ impl UsageScanner {
         if !fields.contains_key("cache_creation_input_tokens")
             && let Some(nested) = fields.get("cache_creation").and_then(Value::as_object)
         {
-            totals.cache_creation = nested.values().filter_map(Value::as_u64).sum();
+            totals.cache_creation = nested
+                .values()
+                .filter_map(Value::as_u64)
+                .fold(0, u64::saturating_add);
         }
         // Naming a cache field is the answer, whatever the number in it.
         if [
@@ -240,6 +245,14 @@ mod tests {
                 cache_reported: true,
             })
         );
+    }
+
+    #[test]
+    fn counts_at_the_edge_saturate_instead_of_wrapping() {
+        let body = br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":18446744073709551615,"output_tokens":1,"cache_read_input_tokens":1,"cache_creation":{"a":18446744073709551615,"b":1}}}"#;
+        let usage = scan(None, &[body]).usage.unwrap();
+        assert_eq!(usage.cache_creation, u64::MAX);
+        assert_eq!(usage.prompt(), u64::MAX);
     }
 
     #[test]
