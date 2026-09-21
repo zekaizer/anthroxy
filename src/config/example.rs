@@ -7,7 +7,9 @@ pub const EXAMPLE: &str = r##"# anthroxy configuration
 # any model below with /model — switching takes effect on the next request.
 #
 # `${NAME}` is replaced with the environment variable NAME when the file is
-# loaded. Write `$${NAME}` to keep a literal `${NAME}` for a shell command.
+# loaded. Write `$${NAME}` to keep a literal `${NAME}` for a shell command. A
+# credential `command` is the exception: its `${NAME}` is resolved each time
+# it runs, so the secret never sits in the loaded configuration.
 
 [server]
 # Listen on every interface so Claude Code on the Windows host can reach a

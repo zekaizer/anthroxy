@@ -128,8 +128,9 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   first message goes, for a chat template that refuses one anywhere else
   (Qwen 3.5 and later answer 400 `System message must be at the beginning`):
   `"keep"` (default) sends it where it is, `"merge"` appends its text to the
-  leading system message, `"user"` sends it as a user message wrapped in `<system-reminder>`, the
-  tag Claude Code itself uses for system notes inside a user turn; the key is
+  leading system message, `"user"` sends it as a user message wrapped in
+  `<system-reminder>`, the tag Claude Code itself uses for system notes inside
+  a user turn; the key is
   refused on any other kind. A `[[models]]` entry may carry the same key to
   override its backend's value, for a gateway that serves such a model beside
   others. `anthropic_beta` is not accepted on such a backend, and
@@ -185,8 +186,9 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   router shows a backend URL — the console, `check`, the startup lines, a
   rejected configuration — the userinfo is replaced by `<redacted>`.
 - `upstream.retries` sends a request again only when the backend never saw it:
-  a connection that was refused or reset, or a status listed in
-  `retry_on_status`. The wait before a retry is `retry_backoff`, doubled on each
+  a connection that was refused, or reset before the request was written (one
+  closed after it, before any status line, is not resent: the backend may have
+  acted on it), or a status listed in `retry_on_status`. The wait before a retry is `retry_backoff`, doubled on each
   further attempt and never longer than 30 seconds, so a generous retry count
   cannot put a request to sleep for hours.
 

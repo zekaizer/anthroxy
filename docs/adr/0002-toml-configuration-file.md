@@ -2,7 +2,8 @@
 
 ## Status
 
-accepted; `SIGHUP` as the only reload trigger superseded by ADR-0011
+accepted; `SIGHUP` as the only reload trigger superseded by ADR-0011; `${NAME}`
+in a credential `command` superseded by ADR-0018
 
 ## Context
 
