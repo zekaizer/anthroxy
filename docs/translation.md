@@ -60,8 +60,12 @@ backend kind.
    one text; content blocks become typed parts (text, image, tool use, tool
    result with its images kept apart); `thinking` blocks and `cache_control` are
    dropped; a `document` becomes its text or a note saying it was omitted; a
-   block a role cannot carry, a field of the wrong type, or a block type the IR
-   has no place for is a 400 rather than a silent loss.
+   `tool_reference` inside a tool result becomes the definition it names,
+   written as the `<function>` line Claude Code's `ToolSearch` tool promises
+   the model, since the definition is already in the request's `tools` and a
+   Chat Completions server would never expand the reference itself; a block a
+   role cannot carry, a field of the wrong type, or a block type the IR has no
+   place for is a 400 rather than a silent loss.
 3. `openai::encode_request` writes `ir::Request` as a Chat Completions body: the
    system text first, `tool_result` parts as `tool` messages (their images ride
    in the user message that follows), `input_schema` as `function.parameters`

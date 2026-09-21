@@ -74,9 +74,17 @@ is the dominant cost in the context: measured on one session, 150 tools at
 
 `ENABLE_TOOL_SEARCH` in Claude Code's environment turns deferral back on: `auto`
 once the definitions grow large, `auto:N` past N percent of the window, `true`
-always. The same session then reported 804 tokens of MCP tools. The router
-forwards the blocks either way; nothing here needs configuring on the anthroxy
-side.
+always. The same session then reported 804 tokens of MCP tools. Nothing needs
+configuring on the anthroxy side: an Anthropic backend gets the blocks as they
+came, and for an `openai` backend the router spells the referenced definitions
+out in the tool result ([Translation](translation.md)).
+
+What is on the wire, measured: the first request carries every deferred tool's
+*name* in a system reminder and, in `tools`, only a `DeferredToolPlaceholder`
+marked `defer_loading`. Claude Code runs `ToolSearch` itself and answers it
+with `tool_reference` blocks; the referenced tools' full definitions appear in
+`tools` from the next request on, still marked `defer_loading`. A deferred
+tool that was never referenced is never sent.
 
 Two model families are excluded whatever the setting: `claude-3-5-haiku` and
 `claude-3-haiku`.
