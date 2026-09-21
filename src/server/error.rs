@@ -36,7 +36,10 @@ pub enum RouterError {
     #[error("{path} is not available on backend `{backend}` (kind = \"openai\")")]
     NotOnOpenAi { backend: String, path: String },
     /// A 2xx body the router cannot turn into a Messages response.
-    #[error("backend `{backend}` returned a response the router cannot translate: {detail}")]
+    #[error(
+        "backend `{backend}` returned a response the router cannot translate: {}",
+        cut(detail, 200)
+    )]
     BadUpstreamResponse { backend: String, detail: String },
     /// A stop ran out of grace with this request in flight.
     #[error("the router is stopping; send the request again")]

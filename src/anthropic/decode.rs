@@ -9,6 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::ir::{Image, Part, Request, RequestMessage, Role, TEXT_SEPARATOR, Tool, ToolChoice};
+use crate::text::short;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DecodeError {
@@ -183,7 +184,7 @@ fn decode_message(
         other => {
             return Err(DecodeError::Role {
                 index,
-                role: other.to_owned(),
+                role: short(other),
             });
         }
     };
@@ -259,7 +260,7 @@ fn decode_block(
         other => {
             return Err(DecodeError::UnsupportedBlock {
                 index,
-                block: other.to_owned(),
+                block: short(other),
             });
         }
     };
@@ -402,7 +403,7 @@ fn decode_tool(tool: &Value) -> Result<Tool, DecodeError> {
         .get("input_schema")
         .cloned()
         .ok_or_else(|| DecodeError::Tool {
-            name: name.clone(),
+            name: short(&name),
             field: "input_schema",
         })?;
     Ok(Tool {
@@ -943,6 +944,22 @@ mod tests {
             {"type": "text", "text": "hi", "content": [{"type": "tool_reference", "tool_name": "mcp__x__grep"}]}
         ]}]);
         assert!(decode_json(v).unwrap().tools.is_empty());
+    }
+
+    #[test]
+    fn client_text_in_an_error_is_cut_and_escaped() {
+        let long = "x".repeat(10_000);
+        let mut v = base();
+        v["messages"] = json!([{"role": format!("bad\n{long}"), "content": "hi"}]);
+        let message = decode_json(v).unwrap_err().to_string();
+        assert!(message.len() < 200, "{}", message.len());
+        assert!(!message.contains('\n'));
+        let mut v = base();
+        v["tools"] = json!([{"name": long}]);
+        assert!(decode_json(v).unwrap_err().to_string().len() < 200);
+        let mut v = base();
+        v["messages"] = json!([{"role": "user", "content": [{"type": long}]}]);
+        assert!(decode_json(v).unwrap_err().to_string().len() < 200);
     }
 
     #[test]
