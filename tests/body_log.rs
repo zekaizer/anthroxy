@@ -275,6 +275,43 @@ body_dir = "{}"
 }
 
 #[tokio::test]
+async fn a_recorded_response_stops_growing_at_the_cap() {
+    let cap = anthroxy::observability::MAX_RECORDED_RESPONSE_BYTES;
+    let frame = format!("data: {}\n\n", "x".repeat(1024 * 1024 - 8));
+    let frames = cap / frame.len() + 2;
+    let upstream = MockUpstream::start(move |_| {
+        let frame = frame.clone();
+        let events = futures_util::stream::iter(0..frames)
+            .map(move |_| Ok::<_, std::io::Error>(frame.clone()));
+        Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(events))
+            .unwrap()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let extra = format!("[logging]\nbody_dir = \"{}\"\n", dir.path().display());
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), &extra)).await;
+    let res = router
+        .post("/v1/messages", &body("smart", true))
+        .send()
+        .await
+        .unwrap();
+    let relayed = res.bytes().await.unwrap().len();
+    assert!(relayed > cap, "the client still gets everything");
+
+    let entries = wait_for_entries(dir.path(), 1).await;
+    let meta = read_json(&entries[0].join("meta.json"));
+    assert_eq!(meta["truncated"], true, "{meta}");
+    assert_eq!(meta["response_bytes"], relayed);
+    let recorded = std::fs::metadata(entries[0].join("response.sse"))
+        .unwrap()
+        .len();
+    assert!(recorded as usize <= cap, "{recorded}");
+}
+
+#[tokio::test]
 async fn records_sse_stream_after_completion() {
     let upstream = MockUpstream::start(|_| {
         let events = futures_util::stream::iter(0..3).then(|i| async move {

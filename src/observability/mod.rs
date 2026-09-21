@@ -3,5 +3,5 @@
 pub mod body_log;
 mod subscriber;
 
-pub use body_log::{BodyLog, Recorder, RequestRecord};
+pub use body_log::{BodyLog, MAX_RECORDED_RESPONSE_BYTES, Recorder, RequestRecord};
 pub use subscriber::{init, resolve_directives};
