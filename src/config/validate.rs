@@ -198,6 +198,16 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 "models[{index}].aliases: an alias must not be empty"
             ));
         }
+        if model.mid_conversation_system.is_some()
+            && config
+                .backends
+                .get(&model.backend)
+                .is_some_and(|backend| backend.kind != BackendKind::OpenAi)
+        {
+            problems.push(format!(
+                "models[{index}].mid_conversation_system: applies only to a backend with kind = \"openai\""
+            ));
+        }
         if !config.backends.contains_key(&model.backend) {
             problems.push(format!(
                 "models[{index}].backend: `{}` is not a configured backend",

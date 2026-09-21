@@ -200,7 +200,7 @@ async fn handle(
             client_path,
             &backend.name,
             &route.upstream_model,
-            backend.mid_conversation_system,
+            route.mid_conversation_system,
         )?,
     };
     let headers = upstream_headers(&parts.headers, backend);

@@ -917,6 +917,56 @@ backend = "a"
 }
 
 #[test]
+fn a_model_overrides_its_backend_mid_conversation_system() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+kind = "openai"
+url = "http://a"
+
+[[models]]
+id = "m"
+backend = "a"
+mid_conversation_system = "user"
+
+[[models]]
+id = "n"
+backend = "a"
+"#;
+    let c: Config = toml::from_str(text).unwrap();
+    assert_eq!(
+        c.models[0].mid_conversation_system,
+        Some(SystemPlacement::User)
+    );
+    assert_eq!(c.models[1].mid_conversation_system, None);
+}
+
+#[test]
+fn validation_rejects_a_model_mid_conversation_system_off_openai_backend() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+
+[[models]]
+id = "m"
+backend = "a"
+mid_conversation_system = "merge"
+"#;
+    let joined = problems(text).join("\n");
+    assert!(
+        joined.contains(
+            "models[0].mid_conversation_system: applies only to a backend with kind = \"openai\""
+        ),
+        "{joined}"
+    );
+}
+
+#[test]
 fn validation_rejects_mid_conversation_system_off_openai_backend() {
     let text = r#"
 [server]

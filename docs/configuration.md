@@ -67,6 +67,7 @@ backend = "vllm"
 upstream_model = "Qwen/Qwen3.5-32B"          # what vLLM calls it (default: id)
 display_name = "Qwen 3.5 32B"                # /model picker label (default: id)
 aliases = ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]
+# mid_conversation_system = "merge"           # overrides the backend's (openai kind only)
 
 [[models]]
 id = "sonnet"
@@ -124,7 +125,9 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   (Qwen 3.5 and later answer 400 `System message must be at the beginning`):
   `"keep"` (default) sends it where it is, `"merge"` appends its text to the
   leading system message, `"user"` sends it as a user message; the key is
-  refused on any other kind. `anthropic_beta` is not accepted on such a backend, and
+  refused on any other kind. A `[[models]]` entry may carry the same key to
+  override its backend's value, for a gateway that serves such a model beside
+  others. `anthropic_beta` is not accepted on such a backend, and
   `anthropic-version`/`anthropic-beta` are not sent to it. `check` still probes
   `GET /v1/models`, so a server without that endpoint fails `check` while
   `serve` works. See [Translation](translation.md) for the exact mapping.

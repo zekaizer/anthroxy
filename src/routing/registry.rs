@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crate::config::{BackendKind, Config};
+use crate::openai::SystemPlacement;
 use crate::upstream::{Backend, BackendBuildError};
 
 /// One exposed model and where it goes.
@@ -14,6 +15,9 @@ pub struct Route {
     pub upstream_model: String,
     pub display_name: String,
     pub aliases: Vec<String>,
+    /// Where a mid-conversation system message goes on an `openai` backend:
+    /// the model's setting, else the backend's.
+    pub mid_conversation_system: SystemPlacement,
 }
 
 /// Why a request matched a route.
@@ -61,6 +65,9 @@ impl Registry {
                 upstream_model: m.upstream_model.clone().unwrap_or_else(|| m.id.clone()),
                 display_name: m.display_name.clone().unwrap_or_else(|| m.id.clone()),
                 aliases: m.aliases.clone(),
+                mid_conversation_system: m
+                    .mid_conversation_system
+                    .unwrap_or(backends[&m.backend].mid_conversation_system),
             })
             .collect();
         let mut by_name = HashMap::new();

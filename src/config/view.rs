@@ -50,6 +50,7 @@ pub fn masked(config: &Config) -> Value {
                 "upstream_model": model.upstream_model,
                 "display_name": model.display_name,
                 "aliases": model.aliases,
+                "mid_conversation_system": model.mid_conversation_system,
             })
         })
         .collect();

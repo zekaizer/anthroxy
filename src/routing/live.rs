@@ -85,6 +85,7 @@ impl LiveCatalog {
             upstream_model: m.id.clone(),
             display_name: m.display_name.clone(),
             aliases: Vec::new(),
+            mid_conversation_system: self.backend.mid_conversation_system,
         })
     }
 

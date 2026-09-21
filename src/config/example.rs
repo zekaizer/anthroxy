@@ -166,6 +166,8 @@ aliases = ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]
 # [[models]]
 # id = "qwen"
 # backend = "vllm"
+# # Overrides the backend's mid_conversation_system for this model (openai kind).
+# # mid_conversation_system = "merge"
 # upstream_model = "Qwen/Qwen3.5-32B"
 
 [routing]

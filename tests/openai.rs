@@ -136,6 +136,34 @@ async fn mid_conversation_system_merge_leaves_one_leading_system_message() {
 }
 
 #[tokio::test]
+async fn a_model_mid_conversation_system_overrides_the_backend() {
+    let upstream =
+        MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))
+            .await;
+    let config = config_with_openai_backend(&upstream.url(), "").replace(
+        "upstream_model = \"qwen-32b\"",
+        "upstream_model = \"qwen-32b\"\nmid_conversation_system = \"user\"",
+    );
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(
+        upstream.last().json()["messages"][4],
+        json!({"role": "user", "content": "# Environment\ncwd changed"})
+    );
+
+    let mut body = claude_code_request(false);
+    body["model"] = json!("other");
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(upstream.last().json()["messages"][4]["role"], "system");
+}
+
+#[tokio::test]
 async fn drop_fields_apply_before_translation() {
     let upstream =
         MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))

@@ -314,6 +314,9 @@ pub struct ModelConfig {
     /// Further identifiers routed to this model.
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// Overrides the backend's `mid_conversation_system` for this model.
+    #[serde(default)]
+    pub mid_conversation_system: Option<SystemPlacement>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
