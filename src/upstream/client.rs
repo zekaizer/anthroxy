@@ -139,6 +139,7 @@ pub fn http_client(
 ) -> Result<reqwest::ClientBuilder, ClientBuildError> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
+        .tcp_keepalive(Duration::from_secs(60))
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none());
     let proxies = proxies(backends);

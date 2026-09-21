@@ -19,7 +19,8 @@ proxied ones also carry `x-anthroxy-backend`, `x-anthroxy-model` and
 
 The router serves at most 1024 connections at once; a further one is accepted
 when a slot frees. A request head has 30 seconds to arrive, and a `/v1` body
-two minutes.
+two minutes. Connections carry TCP keepalive on both hops, so a peer that
+vanished without closing frees its slot within a few minutes.
 
 Errors the router produces are
 `{"type":"error","error":{"type":…,"message":…},"request_id":…}`: 400 for a body
