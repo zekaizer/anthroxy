@@ -2,6 +2,8 @@
 //! IR are dropped; block types the IR cannot carry are an error, so content
 //! the model needs is never silently lost.
 
+use std::collections::HashSet;
+
 use serde_json::Value;
 
 use crate::ir::{Image, Part, Request, RequestMessage, Role, TEXT_SEPARATOR, Tool, ToolChoice};
@@ -36,14 +38,23 @@ pub fn decode(body: &[u8]) -> Result<Request, DecodeError> {
         .and_then(Value::as_str)
         .ok_or(DecodeError::Field("model"))?
         .to_owned();
+    let raw_messages = root
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or(DecodeError::Field("messages"))?;
+    // A tool marked `defer_loading` is invisible to the model until a
+    // `tool_reference` names it, so an unreferenced one is not sent.
+    let referenced = referenced_tools(raw_messages);
     let tools = optional_array(root, "tools")?
         .iter()
         .map(decode_tool)
+        .filter_map(|tool| match tool {
+            Ok((tool, deferred)) if deferred && !referenced.contains(tool.name.as_str()) => None,
+            Ok((tool, _)) => Some(Ok(tool)),
+            Err(error) => Some(Err(error)),
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    let messages = root
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or(DecodeError::Field("messages"))?
+    let messages = raw_messages
         .iter()
         .enumerate()
         .map(|(index, message)| decode_message(index, message, &tools))
@@ -323,7 +334,21 @@ fn functions_block(names: &[&str], tools: &[Tool]) -> String {
     out
 }
 
-fn decode_tool(tool: &Value) -> Result<Tool, DecodeError> {
+/// Every name a `tool_reference` block in the conversation carries.
+fn referenced_tools(messages: &[Value]) -> HashSet<&str> {
+    messages
+        .iter()
+        .filter_map(|message| message.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|block| block.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_reference"))
+        .filter_map(|block| block.get("tool_name").and_then(Value::as_str))
+        .collect()
+}
+
+/// The tool and whether it is marked `defer_loading`.
+fn decode_tool(tool: &Value) -> Result<(Tool, bool), DecodeError> {
     let name = field_str(tool, "name")?.to_owned();
     let parameters = tool
         .get("input_schema")
@@ -332,14 +357,21 @@ fn decode_tool(tool: &Value) -> Result<Tool, DecodeError> {
             name: name.clone(),
             field: "input_schema",
         })?;
-    Ok(Tool {
-        name,
-        description: tool
-            .get("description")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        parameters,
-    })
+    let deferred = tool
+        .get("defer_loading")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok((
+        Tool {
+            name,
+            description: tool
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            parameters,
+        },
+        deferred,
+    ))
 }
 
 fn field_str<'a>(value: &'a Value, field: &'static str) -> Result<&'a str, DecodeError> {
@@ -803,5 +835,29 @@ mod tests {
                 images: vec![],
             }]
         );
+    }
+
+    #[test]
+    fn deferred_tools_are_sent_only_once_referenced() {
+        let mut v = base();
+        v["tools"] = json!([
+            {"name": "ToolSearch", "input_schema": {"type": "object"}},
+            {"name": "DeferredToolPlaceholder", "input_schema": {"type": "object"}, "defer_loading": true},
+            {"name": "mcp__x__grep", "input_schema": {"type": "object"}, "defer_loading": true}
+        ]);
+        v["messages"] = json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "ToolSearch", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": [
+                {"type": "tool_reference", "tool_name": "mcp__x__grep"}
+            ]}]}
+        ]);
+        let names: Vec<String> = decode_json(v)
+            .unwrap()
+            .tools
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(names, ["ToolSearch", "mcp__x__grep"]);
     }
 }

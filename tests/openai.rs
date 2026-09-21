@@ -920,6 +920,7 @@ async fn deferred_tools_loaded_by_tool_search_reach_the_backend() {
     let mut body = messages_body("qwen");
     body["tools"] = json!([
         {"name": "ToolSearch", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}}},
+        {"name": "DeferredToolPlaceholder", "input_schema": {"type": "object", "properties": {}}, "defer_loading": true},
         {"name": "mcp__dummy__kernel_repos", "description": "List kernel repositories", "input_schema": {"type": "object", "properties": {}}, "defer_loading": true}
     ]);
     body["messages"] = json!([
