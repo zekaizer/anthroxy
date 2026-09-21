@@ -63,7 +63,9 @@ backend kind.
    `tool_reference` inside a tool result becomes the definition it names,
    written as the `<function>` line Claude Code's `ToolSearch` tool promises
    the model, since the definition is already in the request's `tools` and a
-   Chat Completions server would never expand the reference itself; a tool
+   Chat Completions server would never expand the reference itself (once per
+   request; a repeated reference is written by name alone, and `</` inside a
+   definition is escaped so it cannot close the line); a tool
    marked `defer_loading` that no `tool_reference` names is left out, as the
    Anthropic API keeps it from the model too; a block a role cannot carry, a
    field of the wrong type, or a block type the IR has no place for is a 400

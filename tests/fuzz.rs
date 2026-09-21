@@ -25,7 +25,7 @@ impl Rng {
     }
 }
 
-const ATOMS: [&str; 34] = [
+const ATOMS: [&str; 41] = [
     "null",
     "true",
     "false",
@@ -60,9 +60,16 @@ const ATOMS: [&str; 34] = [
     "\"type\"",
     "\"text\"",
     "\"role\"",
+    "\"tools\"",
+    "\"tool_result\"",
+    "\"tool_reference\"",
+    "\"tool_name\"",
+    "\"tool_use_id\"",
+    "\"defer_loading\"",
+    "\"input_schema\"",
 ];
 
-const KEYS: [&str; 22] = [
+const KEYS: [&str; 29] = [
     "model",
     "stream",
     "messages",
@@ -85,6 +92,13 @@ const KEYS: [&str; 22] = [
     "prompt_tokens",
     "data",
     "object",
+    "tools",
+    "tool_result",
+    "tool_reference",
+    "tool_name",
+    "tool_use_id",
+    "defer_loading",
+    "input_schema",
 ];
 
 fn value(rng: &mut Rng, depth: usize) -> String {
