@@ -33,15 +33,16 @@ pub enum RunError {
 
 /// Runs `program` with `args`, no stdin, until it exits or `timeout` passes.
 pub async fn run(program: &str, args: &[&str], timeout: Duration) -> Result<Output, RunError> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .process_group(0)
-        .spawn()
-        .map_err(RunError::Spawn)?;
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(RunError::Spawn)?;
     let group = child.id();
     let result = tokio::time::timeout(timeout, collect(&mut child)).await;
     match result {
@@ -86,6 +87,7 @@ async fn read_capped(stream: &mut (impl AsyncReadExt + Unpin)) -> Result<Vec<u8>
 
 /// Kills the child's whole process group; `kill_on_drop` reaches only the
 /// child itself, not what it started.
+#[cfg(unix)]
 fn kill_group(pid: Option<u32>) {
     if let Some(pid) = pid.and_then(|pid| i32::try_from(pid).ok()) {
         // SAFETY: killpg has no memory-safety preconditions; the group is
@@ -95,3 +97,6 @@ fn kill_group(pid: Option<u32>) {
         }
     }
 }
+
+#[cfg(not(unix))]
+fn kill_group(_pid: Option<u32>) {}
