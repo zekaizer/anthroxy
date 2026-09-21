@@ -8,7 +8,7 @@ mod byte_size;
 pub mod client_env;
 mod credential_header;
 mod drop_headers;
-mod env;
+pub(crate) mod env;
 mod error;
 pub mod example;
 mod origin;
@@ -87,6 +87,13 @@ impl Config {
         let mut config: Config = document
             .try_into()
             .map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))?;
+        // A credential command keeps its references and expands them each
+        // run; that every one resolves is still checked here.
+        for backend in config.backends.values() {
+            if let CredentialConfig::Command { command, .. } = &backend.credential {
+                env::expand(command, &lookup)?;
+            }
+        }
         normalize(&mut config);
         validate::validate(&config)?;
         Ok(config)

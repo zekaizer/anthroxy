@@ -83,7 +83,11 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
 ### Values and files
 
 - `${NAME}` in any string value is replaced with the environment variable `NAME`
-  at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands.
+  at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands. A
+  credential `command` is the exception: it keeps its `${NAME}` references and
+  resolves them each time it runs, so a secret it names never sits in the
+  loaded configuration, the console or `check` output (that every variable
+  exists is still checked at load).
 - Unknown keys are errors. `check` reports every problem at once with its TOML
   path.
 
@@ -150,7 +154,9 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   upstream. When a refresh fails, a JSON token more than two minutes from its
   `expires_at` keeps being sent, with the command retried at most every 30
   seconds, so a brief token-helper outage does not fail requests; a text token
-  is not reused past `refresh` (ADR-0015).
+  is not reused past `refresh` (ADR-0015). The command runs in its own process
+  group, killed whole when `timeout` passes, and may print at most 64 KiB on
+  each of stdout and stderr; more is a failed run.
 
 ### Reaching a backend
 

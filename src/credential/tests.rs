@@ -259,6 +259,34 @@ async fn command_empty_output_is_an_error() {
 }
 
 #[tokio::test]
+async fn command_env_references_are_expanded_when_run() {
+    let name = "ANTHROXY_TEST_CMD_TOKEN";
+    // SAFETY: test-local variable, no other thread reads it concurrently.
+    unsafe { std::env::set_var(name, "from-run-time") };
+    let source = command(
+        "echo ${ANTHROXY_TEST_CMD_TOKEN}",
+        Duration::ZERO,
+        Duration::from_secs(5),
+    );
+    assert_eq!(
+        source.credential().await.unwrap(),
+        Some(bearer("from-run-time"))
+    );
+    assert!(
+        source.describe().contains("${ANTHROXY_TEST_CMD_TOKEN}"),
+        "{}",
+        source.describe()
+    );
+    let missing = command(
+        "echo ${ANTHROXY_TEST_CMD_MISSING}",
+        Duration::ZERO,
+        Duration::from_secs(5),
+    );
+    let err = missing.credential().await.err().unwrap();
+    assert!(matches!(err, CredentialError::MissingEnv(_)), "{err}");
+}
+
+#[tokio::test]
 async fn command_timeout_is_enforced() {
     let source = command(
         "sleep 5; echo late",

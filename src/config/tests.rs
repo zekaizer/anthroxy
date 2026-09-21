@@ -887,6 +887,42 @@ fn backend_kind_rejects_unknown_values() {
 }
 
 #[test]
+fn a_credential_command_keeps_its_env_references_for_run_time() {
+    let text = r#"
+[server]
+token = "${TOKEN}"
+
+[backends.a]
+url = "http://a"
+credential = { kind = "command", command = "vault read -token=${SECRET} x" }
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let lookup = |name: &str| match name {
+        "TOKEN" => Some("t".to_owned()),
+        "SECRET" => Some("s".to_owned()),
+        _ => None,
+    };
+    let c = Config::parse(text, lookup).unwrap();
+    assert_eq!(c.server.token, "t");
+    match &c.backends["a"].credential {
+        CredentialConfig::Command { command, .. } => {
+            assert_eq!(command, "vault read -token=${SECRET} x")
+        }
+        other => panic!("{other:?}"),
+    }
+    let missing = Config::parse(text, |name: &str| (name == "TOKEN").then(|| "t".to_owned()))
+        .err()
+        .unwrap();
+    assert!(
+        matches!(missing, ConfigError::MissingEnv(ref n) if n == "SECRET"),
+        "{missing}"
+    );
+}
+
+#[test]
 fn mid_conversation_system_parses_and_defaults_to_keep() {
     let text = r#"
 [server]

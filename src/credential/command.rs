@@ -133,7 +133,14 @@ impl CommandCredential {
 
     /// Runs the command once.
     async fn fetch(&self) -> Result<Cached, CredentialError> {
-        let run = exec::run(&self.command, self.timeout).await?;
+        // `${NAME}` is resolved here, each run, so the loaded configuration,
+        // the console and `check` show the reference, never the secret.
+        let command = crate::config::env::expand(&self.command, &|name| std::env::var(name).ok())
+            .map_err(|error| match error {
+            crate::config::ConfigError::MissingEnv(name) => CredentialError::MissingEnv(name),
+            other => CredentialError::MissingEnv(other.to_string()),
+        })?;
+        let run = exec::run(&command, self.timeout).await?;
         let output = exec::interpret(&run, self.output)?;
         let valid_for = exec::valid_for(self.refresh, output.expires_at)?;
         let now = Instant::now();

@@ -3,10 +3,20 @@
 
 use super::ConfigError;
 
-/// Expands every string value in `value`, recursively.
+/// Expands every string value in `value`, recursively, except a
+/// `credential.command`: that one is expanded when it runs, so a secret it
+/// references never sits in the loaded configuration.
 pub fn expand_value(
     value: &mut toml::Value,
     lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<(), ConfigError> {
+    walk(value, lookup, false)
+}
+
+fn walk(
+    value: &mut toml::Value,
+    lookup: &impl Fn(&str) -> Option<String>,
+    in_credential: bool,
 ) -> Result<(), ConfigError> {
     match value {
         toml::Value::String(text) => {
@@ -14,12 +24,15 @@ pub fn expand_value(
         }
         toml::Value::Array(items) => {
             for item in items {
-                expand_value(item, lookup)?;
+                walk(item, lookup, false)?;
             }
         }
         toml::Value::Table(table) => {
-            for (_, item) in table.iter_mut() {
-                expand_value(item, lookup)?;
+            for (key, item) in table.iter_mut() {
+                if in_credential && key == "command" {
+                    continue;
+                }
+                walk(item, lookup, key == "credential")?;
             }
         }
         _ => {}
