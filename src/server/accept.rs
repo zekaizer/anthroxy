@@ -13,7 +13,7 @@ use hyper::service::{Service, service_fn};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 
 /// Serves `app` until `shutdown` resolves, then has every connection close
 /// after its current response, and resolves once all have closed.
@@ -25,13 +25,21 @@ pub async fn serve(
     listener: TcpListener,
     app: Router,
     head_timeout: Duration,
+    max_connections: usize,
     shutdown: impl Future<Output = ()>,
 ) {
     let (stop, stopped) = watch::channel(false);
     // Every connection holds a receiver; the sender sees them all go.
     let (open, open_marker) = watch::channel(());
+    // At most `max_connections` served at once; the next is accepted when
+    // one closes, so idle sockets cannot hold every descriptor.
+    let slots = std::sync::Arc::new(Semaphore::new(max_connections.max(1)));
     tokio::pin!(shutdown);
     loop {
+        let slot = tokio::select! {
+            slot = slots.clone().acquire_owned() => slot.expect("the semaphore is never closed"),
+            () = &mut shutdown => break,
+        };
         let (stream, peer) = tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok(accepted) => accepted,
@@ -51,6 +59,7 @@ pub async fn serve(
         let marker = open_marker.clone();
         tokio::spawn(async move {
             let _marker = marker;
+            let _slot = slot;
             let connection = http1::Builder::new()
                 .timer(TokioTimer::new())
                 .header_read_timeout(head_timeout)

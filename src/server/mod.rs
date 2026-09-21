@@ -65,12 +65,20 @@ pub enum ServerBuildError {
 /// it included. hyper's own default, which `axum::serve` leaves inactive.
 const HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Connections served at once; the next one waits for a slot, so a crowd of
+/// idle sockets cannot use up the process's descriptors.
+const MAX_CONNECTIONS: usize = 1024;
+
+/// How long a request body may take to arrive whole once its head has.
+pub(crate) const BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// A router bound to `server.listen`, ready to serve.
 pub struct Server {
     listener: TcpListener,
     app: Router,
     state: AppState,
     head_timeout: std::time::Duration,
+    max_connections: usize,
 }
 
 impl Server {
@@ -90,12 +98,26 @@ impl Server {
             app: routes::build(state.clone()),
             state,
             head_timeout: HEAD_TIMEOUT,
+            max_connections: MAX_CONNECTIONS,
         })
     }
 
     /// Replaces the 30 seconds a connection has to send each request head.
     pub fn with_head_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.head_timeout = timeout;
+        self
+    }
+
+    /// Replaces the number of connections served at once.
+    pub fn with_max_connections(mut self, limit: usize) -> Self {
+        self.max_connections = limit;
+        self
+    }
+
+    /// Replaces the time a request body has to arrive whole.
+    pub fn with_body_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.state.body_timeout = timeout;
+        self.app = routes::build(self.state.clone());
         self
     }
 
@@ -122,10 +144,16 @@ impl Server {
     ) {
         let pruner = tokio::spawn(prune_loop(self.state.clone()));
         let (stopping, stopped) = tokio::sync::oneshot::channel::<()>();
-        let drained = accept::serve(self.listener, self.app, self.head_timeout, async move {
-            shutdown.await;
-            let _ = stopping.send(());
-        });
+        let drained = accept::serve(
+            self.listener,
+            self.app,
+            self.head_timeout,
+            self.max_connections,
+            async move {
+                shutdown.await;
+                let _ = stopping.send(());
+            },
+        );
         let deadline = async move {
             let _ = stopped.await;
             tokio::time::sleep(grace).await;
