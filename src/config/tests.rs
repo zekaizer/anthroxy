@@ -812,6 +812,24 @@ backend = "local"
 }
 
 #[test]
+fn passthrough_requires_v1_auth_none() {
+    let text = r#"
+[server]
+listen = "127.0.0.1:8787"
+token = "t"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+"#;
+    let joined = problems(text).join("\n");
+    assert!(
+        joined.contains("kind = \"passthrough\" requires server.v1_auth = \"none\""),
+        "{joined}"
+    );
+}
+
+#[test]
 fn passthrough_backend_allows_no_models_table() {
     let c = parse(
         r#"

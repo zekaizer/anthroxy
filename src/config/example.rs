@@ -20,8 +20,9 @@ listen = "0.0.0.0:8787"
 token = "__TOKEN__"
 # How /v1 authenticates. "token" (default) requires this value as x-api-key
 # or Authorization: Bearer. "none" is unauthenticated /v1 and requires a
-# loopback listen; the console still uses token. Use "none" with a
-# kind = "passthrough" backend so Claude Code can send only ANTHROPIC_BASE_URL.
+# loopback listen; the console still uses token. A kind = "passthrough"
+# backend requires "none": it forwards the client's own credential, which
+# under "token" would be this router token.
 # v1_auth = "token"
 # Largest accepted request body. Claude Code sends whole conversations.
 max_body_bytes = "64MiB"

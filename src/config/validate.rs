@@ -33,6 +33,14 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     if passthrough > 1 {
         problems.push("at most one backend with kind = \"passthrough\" is allowed".to_owned());
     }
+    // With the token gate on, the client's Authorization is the router token,
+    // and a passthrough backend would forward that token to its origin.
+    if passthrough > 0 && config.server.v1_auth == V1Auth::Token {
+        problems.push(
+            "backends: kind = \"passthrough\" requires server.v1_auth = \"none\"; the client's own credential is what it forwards"
+                .to_owned(),
+        );
+    }
     let live_models = config.backends.values().any(|b| b.live_models);
     if config.models.is_empty() && passthrough == 0 && !live_models {
         problems.push("at least one [[models]] entry is required".to_owned());
