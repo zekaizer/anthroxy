@@ -562,8 +562,11 @@ impl Recorder {
                 write_private(&self.dir.join(self.response_file), &tail)
             }
         });
-        let result = result
-            .and_then(|()| write_private(&self.dir.join("meta.json"), &to_pretty_json(&self.meta)));
+        let result = result.and_then(|()| {
+            let temp = self.dir.join("meta.json.tmp");
+            write_private(&temp, &to_pretty_json(&self.meta))
+                .and_then(|()| std::fs::rename(&temp, self.dir.join("meta.json")))
+        });
         if let Err(error) = result {
             tracing::error!(dir = %self.dir.display(), %error, "cannot finish the recording");
         }
@@ -612,11 +615,12 @@ impl Drop for Recorder {
     fn drop(&mut self) {
         if self.meta.end.is_none() {
             let outcome = RelayOutcome::dropped(&self.cut);
-            if *self.cut.borrow() {
-                // A cut means the runtime is about to go: a task spawned now
-                // may never run, so what is left is written here, in order
-                // behind nothing (the writes queued before were awaited by
-                // the stop, or are lost with the runtime either way).
+            if *self.cut.borrow() && self.pending.is_none() {
+                // A cut means the runtime is about to go and a task spawned
+                // now may never run, so with nothing queued to order behind
+                // what is left is written here. With a write still queued
+                // the ordered path is kept: its PendingWrite is counted at
+                // spawn, so the stop's settled() waits for it.
                 self.record_now(&outcome);
             } else {
                 self.record(&outcome);
