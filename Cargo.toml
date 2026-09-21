@@ -1,6 +1,6 @@
 [package]
 name = "anthroxy"
-version = "0.12.7"
+version = "0.12.8"
 edition = "2024"
 authors = ["Luke Lee"]
 description = "One endpoint for Claude Code in front of several Anthropic-compatible backends"

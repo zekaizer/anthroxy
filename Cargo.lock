@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "anthroxy"
-version = "0.12.7"
+version = "0.12.8"
 dependencies = [
  "anyhow",
  "assert_cmd",
