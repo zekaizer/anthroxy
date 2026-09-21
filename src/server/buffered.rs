@@ -45,6 +45,13 @@ pub async fn read_all(
                     clock,
                 });
             }
+            // The stream itself never caps; the check above does.
+            Some(Err(BodyError::TooLarge { limit })) => {
+                break Err(UpstreamError::BodyTooLarge {
+                    backend: backend.to_owned(),
+                    limit,
+                });
+            }
         }
     };
     match read {

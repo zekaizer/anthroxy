@@ -88,13 +88,14 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
                 .iter()
                 .map(|(name, value)| (name.to_string(), header_text(value).to_owned()))
                 .collect();
-            let body = upstream.body_bytes().await.unwrap_or_default();
-            let mut models = translate::models(backend.kind, &body);
-            let detail = if (200..300).contains(&status) {
-                None
-            } else {
-                Some(translate::failure(backend.kind, Some(status), &body).message)
+            let (body, mut detail) = match upstream.body_bytes().await {
+                Ok(body) => (body, None),
+                Err(error) => (Bytes::new(), Some(error.to_string())),
             };
+            let mut models = translate::models(backend.kind, &body);
+            if detail.is_none() && !(200..300).contains(&status) {
+                detail = Some(translate::failure(backend.kind, Some(status), &body).message);
+            }
             if detail.is_none()
                 && !models.is_empty()
                 && models.iter().all(|m| m.context_window.is_none())

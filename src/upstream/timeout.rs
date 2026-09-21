@@ -62,6 +62,10 @@ impl std::fmt::Display for TimeoutClock {
 pub enum BodyError {
     TimedOut(TimeoutClock),
     Upstream(reqwest::Error),
+    /// The body outgrew what is read whole; `limit` is the cap in bytes.
+    TooLarge {
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for BodyError {
@@ -71,6 +75,7 @@ impl std::fmt::Display for BodyError {
                 write!(f, "upstream.{} elapsed", clock.as_str())
             }
             Self::Upstream(error) => write!(f, "{error}"),
+            Self::TooLarge { limit } => write!(f, "body is larger than {limit} bytes"),
         }
     }
 }
@@ -78,7 +83,7 @@ impl std::fmt::Display for BodyError {
 impl std::error::Error for BodyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::TimedOut(_) => None,
+            Self::TimedOut(_) | Self::TooLarge { .. } => None,
             Self::Upstream(error) => Some(error),
         }
     }

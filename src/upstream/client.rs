@@ -34,6 +34,9 @@ pub struct UpstreamRequest<'a> {
     pub stream: bool,
 }
 
+/// Largest body [`UpstreamResponse::body_bytes`] reads whole.
+pub const MAX_WHOLE_BODY_BYTES: usize = 16 * 1024 * 1024;
+
 pub struct UpstreamResponse {
     /// Headers arrived; nothing of the body has been consumed.
     pub response: reqwest::Response,
@@ -329,12 +332,20 @@ impl UpstreamResponse {
         TimedBody::new(self.response.bytes_stream(), self.body)
     }
 
+    /// The whole body, up to [`MAX_WHOLE_BODY_BYTES`]; a model list or a
+    /// probe answer past that is a failure, not a buffer.
     pub async fn body_bytes(self) -> Result<Bytes, BodyError> {
         use futures_util::StreamExt;
         let mut stream = self.bytes_stream();
         let mut out = Vec::new();
         while let Some(chunk) = stream.next().await {
-            out.extend_from_slice(&chunk?);
+            let chunk = chunk?;
+            if out.len() + chunk.len() > MAX_WHOLE_BODY_BYTES {
+                return Err(BodyError::TooLarge {
+                    limit: MAX_WHOLE_BODY_BYTES,
+                });
+            }
+            out.extend_from_slice(&chunk);
         }
         Ok(Bytes::from(out))
     }

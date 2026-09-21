@@ -170,6 +170,12 @@ impl LiveCatalog {
                     source,
                 });
             }
+            Err(crate::upstream::BodyError::TooLarge { limit }) => {
+                return Err(crate::upstream::UpstreamError::BodyTooLarge {
+                    backend: self.backend.name.clone(),
+                    limit,
+                });
+            }
         };
         Ok(crate::translate::catalog(self.backend.kind, &raw))
     }
