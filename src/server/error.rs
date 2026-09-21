@@ -19,6 +19,8 @@ pub enum RouterError {
     BodyTooLarge { limit: usize },
     #[error("cannot read request body: {0}")]
     BodyRead(String),
+    #[error("request body did not arrive within {}", humantime::format_duration(*.0))]
+    BodyTimeout(std::time::Duration),
     #[error("model `{}` is not served by this router; configured models: {}", short(model), known.join(", "))]
     UnknownModel { model: String, known: Vec<String> },
     #[error("no route for {} {}", short(method), short(path))]
@@ -63,6 +65,7 @@ impl RouterError {
             RouterError::Unauthorized => ErrorType::AuthenticationError,
             RouterError::BadRequest(_)
             | RouterError::BodyRead(_)
+            | RouterError::BodyTimeout(_)
             | RouterError::Translate { .. } => ErrorType::InvalidRequestError,
             RouterError::BodyTooLarge { .. } => ErrorType::RequestTooLarge,
             RouterError::UnknownModel { .. }
@@ -82,6 +85,7 @@ impl RouterError {
                 StatusCode::BAD_GATEWAY
             }
             RouterError::Stopping => StatusCode::SERVICE_UNAVAILABLE,
+            RouterError::BodyTimeout(_) => StatusCode::REQUEST_TIMEOUT,
             other => other.error_type().status(),
         }
     }

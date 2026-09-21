@@ -75,7 +75,15 @@ pub async fn smoke(
         ttfb_ms,
         duration_ms,
         failure,
-    } = answer(&snapshot, &id, request(&payload), exchange, DEADLINE).await;
+    } = answer(
+        &snapshot,
+        &id,
+        request(&payload),
+        exchange,
+        DEADLINE,
+        app.body_timeout,
+    )
+    .await;
 
     let events = content_type
         .as_deref()
@@ -140,6 +148,7 @@ async fn answer(
     request: http::Request<Body>,
     exchange: Exchange,
     deadline: Duration,
+    body_timeout: Duration,
 ) -> Answer {
     let started = Instant::now();
     let mut status = None;
@@ -148,7 +157,7 @@ async fn answer(
     let mut ttfb_ms = None;
     let mut failure = None;
     let whole = async {
-        let response = proxy::serve(snapshot, id, request, exchange).await;
+        let response = proxy::serve(snapshot, id, request, exchange, body_timeout).await;
         status = Some(response.status().as_u16());
         content_type = response
             .headers()
@@ -261,6 +270,7 @@ mod tests {
                 request(&payload),
                 exchange,
                 Duration::from_millis(300),
+                crate::server::BODY_TIMEOUT,
             ),
         )
         .await

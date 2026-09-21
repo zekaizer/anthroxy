@@ -150,6 +150,8 @@ pub struct AppState {
     /// Held across a reload's load and apply, so two reloads (a SIGHUP and
     /// the console) cannot interleave and leave the older file current.
     reloading: Arc<Mutex<()>>,
+    /// How long a request body may take to arrive whole.
+    pub body_timeout: std::time::Duration,
 }
 
 impl AppState {
@@ -173,6 +175,7 @@ impl AppState {
             probed: Arc::new(Mutex::new(HashMap::new())),
             cut: tokio::sync::watch::Sender::new(false),
             reloading: Arc::new(Mutex::new(())),
+            body_timeout: super::BODY_TIMEOUT,
         }
     }
 
