@@ -923,6 +923,16 @@ backend = "a"
 }
 
 #[test]
+fn a_problem_never_spans_lines_whatever_the_value() {
+    let text = "[server]\ntoken = \"t\"\n\n[backends.\"a\\nb\"]\nurl = \"http://a\"\nheaders = { \"x\\ny\" = \"v\" }\ndrop_fields = [\"p\\n.q\"]\n\n[[models]]\nid = \"m\"\nbackend = \"z\\nz\"\naliases = [\"a\\nb\", \"a\\nb\"]\n\n[routing]\ndefault_model = \"d\\nd\"\n";
+    let p = problems(text);
+    assert!(p.len() >= 4, "{p:?}");
+    for problem in &p {
+        assert!(!problem.contains('\n'), "{problem:?}");
+    }
+}
+
+#[test]
 fn mid_conversation_system_parses_and_defaults_to_keep() {
     let text = r#"
 [server]
