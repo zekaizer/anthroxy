@@ -1,7 +1,7 @@
 //! `POST /v1/messages` (and siblings): route by `model`, forward, relay.
 
 /// Claude Code names the conversation a request belongs to in this header.
-const SESSION_ID: &str = "x-claude-code-session-id";
+pub(crate) const SESSION_ID: &str = "x-claude-code-session-id";
 
 use std::net::SocketAddr;
 use std::sync::Arc;

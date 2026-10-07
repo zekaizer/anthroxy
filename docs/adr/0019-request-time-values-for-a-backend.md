@@ -87,7 +87,9 @@ Body fields:
 - A request the router originates has no client behind it (the probe of
   `check` and the console), so a header whose value has a placeholder is absent
   from it. A gateway that refuses such a request without that header fails the
-  probe while `serve` works.
+  probe while `serve` works. The console's test request is the exception for
+  one header: it carries an `x-claude-code-session-id` of its own, since it
+  stands in for a Claude Code request and that is the header a gateway reads.
 - A forced header value is still shown as a secret wherever headers are
   reported, whether or not it came from a placeholder. A body field is not a
   secret: the body log records the request as sent, so the console shows the

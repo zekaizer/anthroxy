@@ -637,6 +637,36 @@ async fn probe_reads_lm_studio_context_from_its_native_list() {
 }
 
 #[tokio::test]
+async fn a_test_request_names_a_session_of_its_own() {
+    let upstream = MockUpstream::start(backend).await;
+    let router = TestRouter::start(&config_with_backend(
+        &upstream.url(),
+        "\n[backends.mock.set_fields]\n\"extraData.sessionId\" = \"{header:x-claude-code-session-id}\"\n",
+    ))
+    .await;
+
+    let (status, smoke) = post_api(
+        &router,
+        "/api/smoke",
+        json!({"model": "fast", "stream": false}),
+    )
+    .await;
+    assert_eq!(status, 200, "{smoke}");
+    let id = smoke["request_id"].as_str().unwrap();
+    assert_eq!(
+        upstream.last().json()["extraData"]["sessionId"],
+        id,
+        "a value read from the session header is filled for the console too"
+    );
+
+    let status = api(&router, "/api/status").await;
+    assert_eq!(
+        status["backends"][0]["set_fields"],
+        json!(["extraData.sessionId"])
+    );
+}
+
+#[tokio::test]
 async fn a_test_request_goes_through_the_route_and_is_marked_as_the_consoles() {
     let upstream = MockUpstream::start(backend).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
