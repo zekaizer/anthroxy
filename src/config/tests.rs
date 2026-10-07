@@ -364,7 +364,7 @@ fn a_backend_header_placeholder_must_be_one_the_router_can_fill() {
     let joined = problems(&text).join("\n");
     for expected in [
         "backends.local.headers: `x-open`: `{header:` is not closed by `}`",
-        "backends.local.headers: `x-name`: `{header:x session}` does not name a header",
+        "backends.local.headers: `x-name`: a `{header:…}` placeholder does not name a header",
         "backends.local.headers: `x-token`: `{header:authorization}` would send the client's credential to the backend",
         "backends.local.headers: `x-key`: `{header:x-api-key}` would send the client's credential to the backend",
     ] {
@@ -373,6 +373,19 @@ fn a_backend_header_placeholder_must_be_one_the_router_can_fill() {
             "missing `{expected}` in:\n{joined}"
         );
     }
+}
+
+#[test]
+fn a_backend_header_problem_quotes_none_of_the_value() {
+    // A header value may be a key, and what follows `{header:` is part of it.
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"x-gw-auth\" = '{{header:\"v\", key:\"sk-live-SECRET\"}}'\n"
+    );
+    let p = problems(&text);
+    assert_eq!(
+        p,
+        ["backends.local.headers: `x-gw-auth`: a `{header:…}` placeholder does not name a header"]
+    );
 }
 
 #[test]

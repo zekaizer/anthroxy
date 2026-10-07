@@ -7,7 +7,7 @@ use super::set_fields;
 use super::view::redacted_url;
 use super::{
     BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, Template,
-    V1Auth, origin,
+    TemplateError, V1Auth, origin,
 };
 use crate::openai::SystemPlacement;
 use crate::text::short;
@@ -146,11 +146,20 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                     "backends.{name}.headers: `{}` has a value that cannot be sent in a header",
                     short(header)
                 ));
-            } else if let Err(problem) = Template::parse(value) {
-                problems.push(format!(
-                    "backends.{name}.headers: `{}`: {problem}",
-                    short(header)
-                ));
+            } else {
+                match Template::parse(value) {
+                    // The value may be a key, and what follows `{header:` is
+                    // part of it: the problem quotes none of it.
+                    Err(TemplateError::NotAHeaderName(_)) => problems.push(format!(
+                        "backends.{name}.headers: `{}`: a `{{header:…}}` placeholder does not name a header",
+                        short(header)
+                    )),
+                    Err(problem) => problems.push(format!(
+                        "backends.{name}.headers: `{}`: {problem}",
+                        short(header)
+                    )),
+                    Ok(_) => {}
+                }
             }
         }
         check_drop_headers(name, backend, &mut problems);
