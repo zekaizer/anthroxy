@@ -106,6 +106,9 @@ Body fields:
   way.
 - A field the gateway requires and whose header the client did not send is
   missing, and the gateway's own refusal is what the client sees.
+- `set_fields` has no notion of the route: `count_tokens` gets the same fields
+  as `/v1/messages`. A backend that wants a field on one and refuses it on the
+  other cannot be served by it.
 - A live model list (ADR-0017) is pulled with the headers of the request that
   missed. One pulled without a forced header is kept only for requests that
   lack it too, so a refusal earned by one request is not served to another
