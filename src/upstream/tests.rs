@@ -27,6 +27,7 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
             anthropic_beta: beta.iter().map(|s| s.to_string()).collect(),
             drop_headers: Vec::new(),
             drop_fields: Vec::new(),
+            set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
         },
@@ -47,6 +48,31 @@ fn backend_with_drops(drops: &[&str]) -> Backend {
             anthropic_beta: Vec::new(),
             drop_headers: drops.iter().map(|s| s.to_string()).collect(),
             drop_fields: Vec::new(),
+            set_fields: Default::default(),
+            mid_conversation_system: Default::default(),
+            proxy: None,
+        },
+    )
+    .unwrap()
+}
+
+fn backend_forcing(headers: &[(&str, &str)], drops: &[&str]) -> Backend {
+    Backend::from_config(
+        "b",
+        &BackendConfig {
+            kind: BackendKind::Anthropic,
+            url: "http://backend".into(),
+            models_path: BackendConfig::default_models_path(),
+            live_models: false,
+            credential: CredentialConfig::None,
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            anthropic_beta: Vec::new(),
+            drop_headers: drops.iter().map(|s| s.to_string()).collect(),
+            drop_fields: Vec::new(),
+            set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
         },
@@ -154,6 +180,84 @@ fn upstream_headers_apply_backend_overrides() {
 }
 
 #[test]
+fn a_forced_header_reads_the_client_request_as_it_arrived() {
+    let mut client = client_headers();
+    client.append(
+        "x-claude-code-session-id",
+        HeaderValue::from_static("abc-123"),
+    );
+    let backend = backend_forcing(
+        &[
+            ("x-session-id", "cc-{header:x-claude-code-session-id}"),
+            ("x-agent", "{header:user-agent}"),
+        ],
+        &["@claude-code", "user-agent"],
+    );
+    let out = upstream_headers(&client, &backend);
+    assert_eq!(out["x-session-id"], "cc-abc-123");
+    assert!(out["x-session-id"].is_sensitive());
+    assert_eq!(
+        out["x-agent"], "claude-cli/2.0",
+        "a dropped header can still be read"
+    );
+    assert!(out.get("x-claude-code-session-id").is_none(), "{out:?}");
+    assert!(out.get("user-agent").is_none(), "{out:?}");
+}
+
+#[test]
+fn a_forced_header_carries_a_value_outside_ascii_as_the_client_sent_it() {
+    let mut client = client_headers();
+    client.append(
+        "x-user-name",
+        HeaderValue::from_bytes("홍길동".as_bytes()).unwrap(),
+    );
+    let backend = backend_forcing(&[("x-gateway-user", "{header:x-user-name}")], &[]);
+    let out = upstream_headers(&client, &backend);
+    assert_eq!(out["x-gateway-user"].as_bytes(), "홍길동".as_bytes());
+}
+
+#[test]
+fn a_forced_header_with_nothing_to_read_is_not_sent_and_neither_is_the_client_s() {
+    let mut client = client_headers();
+    client.append("x-session-id", HeaderValue::from_static("from-client"));
+    let backend = backend_forcing(
+        &[("x-session-id", "{header:x-claude-code-session-id}")],
+        &[],
+    );
+    let out = upstream_headers(&client, &backend);
+    assert!(out.get("x-session-id").is_none(), "{out:?}");
+
+    let dropped = dropped_headers(&client, &backend);
+    let entry = dropped
+        .iter()
+        .find(|h| h.name == "x-session-id")
+        .expect("reported");
+    assert_eq!(
+        (entry.value.as_str(), entry.reason),
+        ("from-client", DropReason::Overridden)
+    );
+    let sent = sent_headers(&backend, &out, None, 0, SecretView::Redacted);
+    assert!(sent.iter().all(|h| h.name != "x-session-id"), "{sent:?}");
+}
+
+#[test]
+fn a_backend_shown_for_debugging_keeps_its_forced_header_values_out() {
+    let backend = backend_forcing(
+        &[
+            ("x-client-api-key", "llm_secret-value"),
+            ("x-session-id", "cc-secret-prefix-{header:x-session}"),
+        ],
+        &[],
+    );
+    let shown = format!("{backend:?}");
+    for secret in ["llm_secret-value", "cc-secret-prefix"] {
+        assert!(!shown.contains(secret), "`{secret}` in {shown}");
+    }
+    assert!(shown.contains("x-client-api-key"), "{shown}");
+    assert!(shown.contains("x-session-id"), "{shown}");
+}
+
+#[test]
 fn upstream_headers_drop_what_the_backend_named() {
     let backend = backend_with_drops(&["x-stainless-*", "User-Agent"]);
     let out = upstream_headers(&client_headers(), &backend);
@@ -200,6 +304,7 @@ fn every_header_the_backend_does_not_see_says_why() {
             anthropic_beta: Vec::new(),
             drop_headers: vec!["x-stainless-*".into()],
             drop_fields: Vec::new(),
+            set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
         },
@@ -470,6 +575,7 @@ fn the_logged_request_target_keeps_the_url_userinfo_out() {
             anthropic_beta: Vec::new(),
             drop_headers: Vec::new(),
             drop_fields: Vec::new(),
+            set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
         },

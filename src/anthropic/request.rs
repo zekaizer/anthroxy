@@ -7,6 +7,8 @@ use std::fmt;
 use serde::Deserialize;
 use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
 
+use crate::body_field::{BodyField, set_all};
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RequestPeek {
     pub model: Option<String>,
@@ -65,8 +67,9 @@ pub fn peek(body: &[u8]) -> Result<RequestPeek, PeekError> {
     Ok(peek)
 }
 
-/// Returns `body` with `model` replaced when `model` is given and every path
-/// in `drop_fields` removed. For an Anthropic backend (`for_anthropic`),
+/// Returns `body` with `model` replaced when `model` is given, every path in
+/// `drop_fields` removed and then every one of `set_fields` set (ADR-0019).
+/// For an Anthropic backend (`for_anthropic`),
 /// unsigned `thinking` blocks are removed too (ADR-0010: the router's own
 /// thinking blocks, which an Anthropic backend rejects; an assistant message
 /// left empty by that goes with them) and tool call ids are put in the form
@@ -83,6 +86,7 @@ pub fn rewrite(
     body: &[u8],
     model: Option<&str>,
     drop_fields: &[String],
+    set_fields: &[BodyField],
     for_anthropic: bool,
 ) -> Result<Option<Vec<u8>>, PeekError> {
     // Parsing is paid only when a rewrite can apply; the Anthropic rules need
@@ -92,7 +96,12 @@ pub fn rewrite(
     let text = std::str::from_utf8(body).unwrap_or_default();
     let may_strip = for_anthropic && text.contains(THINKING);
     let may_rename_ids = for_anthropic && text.contains(TOOL_USE);
-    if model.is_none() && drop_fields.is_empty() && !may_strip && !may_rename_ids {
+    if model.is_none()
+        && drop_fields.is_empty()
+        && set_fields.is_empty()
+        && !may_strip
+        && !may_rename_ids
+    {
         return Ok(None);
     }
     let mut value: serde_json::Map<String, serde_json::Value> =
@@ -113,6 +122,10 @@ pub fn rewrite(
     }
     if may_rename_ids {
         changed |= accepted_tool_ids(&mut value);
+    }
+    if !set_fields.is_empty() {
+        set_all(&mut value, set_fields);
+        changed = true;
     }
     Ok(changed.then(|| serde_json::to_vec(&value).expect("a parsed document serializes")))
 }

@@ -13,7 +13,9 @@ mod error;
 pub mod example;
 mod origin;
 mod schema;
+mod set_fields;
 pub mod snippet;
+mod template;
 mod validate;
 pub mod view;
 
@@ -30,6 +32,8 @@ pub use schema::{
     BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, LogFormat, LoggingConfig,
     ModelConfig, RoutingConfig, ServerConfig, StatsConfig, UpstreamConfig, V1Auth,
 };
+pub use set_fields::{FieldError, SetFields};
+pub use template::{Template, TemplateError};
 
 /// Environment variable naming the configuration file.
 pub const CONFIG_ENV: &str = "ANTHROXY_CONFIG";

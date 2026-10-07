@@ -3,10 +3,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::set_fields;
 use super::view::redacted_url;
 use super::{
-    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, V1Auth,
-    origin,
+    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, Template,
+    TemplateError, V1Auth, origin,
 };
 use crate::openai::SystemPlacement;
 use crate::text::short;
@@ -117,6 +118,19 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 "backends.{name}.credential.timeout: 0 is not `no limit` here; it kills the command before it can print"
             ));
         }
+        // Header names are case-insensitive, table keys are not: two
+        // spellings would be one header set twice, the later undoing the
+        // earlier.
+        let mut spelled: HashMap<String, &str> = HashMap::new();
+        for header in backend.headers.keys() {
+            if let Some(first) = spelled.insert(header.to_ascii_lowercase(), header) {
+                problems.push(format!(
+                    "backends.{name}.headers: `{}` and `{}` are the same header",
+                    short(first),
+                    short(header)
+                ));
+            }
+        }
         for (header, value) in &backend.headers {
             if http::HeaderName::from_bytes(header.as_bytes()).is_err() {
                 problems.push(format!(
@@ -132,6 +146,32 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                     "backends.{name}.headers: `{}` has a value that cannot be sent in a header",
                     short(header)
                 ));
+            } else {
+                match Template::parse(value) {
+                    // The value may be a key, and what follows `{header:` is
+                    // part of it: the problem quotes none of it.
+                    Err(TemplateError::NotAHeaderName(_)) => problems.push(format!(
+                        "backends.{name}.headers: `{}`: a `{{header:…}}` placeholder does not name a header",
+                        short(header)
+                    )),
+                    Err(problem) => problems.push(format!(
+                        "backends.{name}.headers: `{}`: {problem}",
+                        short(header)
+                    )),
+                    Ok(template) => {
+                        let required = REQUIRED
+                            .iter()
+                            .find(|(required, _)| header.eq_ignore_ascii_case(required));
+                        if let Some((_, why)) = required
+                            && template.reads_client()
+                        {
+                            problems.push(format!(
+                                "backends.{name}.headers: `{}` {why}; a value read from the client's request may be left out",
+                                short(header)
+                            ));
+                        }
+                    }
+                }
             }
         }
         check_drop_headers(name, backend, &mut problems);
@@ -146,6 +186,22 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                     short(path)
                 ));
             }
+        }
+        let fields = set_fields::leaves(&backend.set_fields);
+        for (path, value) in &fields {
+            if let Err(problem) = set_fields::check(path, value) {
+                problems.push(format!(
+                    "backends.{name}.set_fields: `{}`: {problem}",
+                    short(path)
+                ));
+            }
+        }
+        for (outer, inner) in set_fields::overlaps(fields.iter().map(|(path, _)| path)) {
+            problems.push(format!(
+                "backends.{name}.set_fields: `{}` and `{}` set the same field",
+                short(outer),
+                short(inner)
+            ));
         }
         if backend.kind != BackendKind::OpenAi
             && backend.mid_conversation_system != SystemPlacement::Keep
@@ -166,11 +222,12 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
             if !backend.drop_fields.is_empty()
+                || !backend.set_fields.is_empty()
                 || !backend.headers.is_empty()
                 || !backend.anthropic_beta.is_empty()
             {
                 problems.push(format!(
-                    "backends.{name}: kind = \"passthrough\" relays the request unmodified; drop_fields, headers and anthropic_beta are not applied"
+                    "backends.{name}: kind = \"passthrough\" relays the request unmodified; drop_fields, set_fields, headers and anthropic_beta are not applied"
                 ));
             }
         }

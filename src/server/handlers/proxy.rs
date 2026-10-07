@@ -1,7 +1,7 @@
 //! `POST /v1/messages` (and siblings): route by `model`, forward, relay.
 
 /// Claude Code names the conversation a request belongs to in this header.
-const SESSION_ID: &str = "x-claude-code-session-id";
+pub(crate) const SESSION_ID: &str = "x-claude-code-session-id";
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -187,15 +187,23 @@ async fn handle(
         body_bytes = body.len(),
         "routed"
     );
-    // The translated body names the upstream model itself; only a relayed
-    // body needs the rename here.
+    let set_fields = backend.set_fields.resolve(&parts.headers);
+    // The translated body names the upstream model itself and takes
+    // `set_fields` once it is written; only a relayed body needs either here.
     let anthropic_kind = backend.kind == BackendKind::Anthropic;
     let body = if backend.kind == BackendKind::Passthrough {
         body
     } else {
         let rename = (anthropic_kind && requested_model != route.upstream_model)
             .then_some(route.upstream_model.as_str());
-        match anthropic::rewrite(&body, rename, &backend.drop_fields, anthropic_kind)? {
+        let relayed_fields: &[_] = if anthropic_kind { &set_fields } else { &[] };
+        match anthropic::rewrite(
+            &body,
+            rename,
+            &backend.drop_fields,
+            relayed_fields,
+            anthropic_kind,
+        )? {
             Some(rewritten) => Bytes::from(rewritten),
             None => body,
         }
@@ -214,6 +222,7 @@ async fn handle(
             &backend.name,
             &route.upstream_model,
             route.mid_conversation_system,
+            &set_fields,
         )?,
     };
     let headers = upstream_headers(&parts.headers, backend);
@@ -316,6 +325,7 @@ async fn handle(
         // Hints are read from the prefix the exchange keeps, so no error body
         // can grow a hint past that.
         let text = String::from_utf8_lossy(&raw[..raw.len().min(ERROR_BODY_BYTES)]);
+        let set_paths = backend.set_fields.paths();
         note(exchange, |e| {
             e.upstream_error(
                 &raw,
@@ -324,6 +334,7 @@ async fn handle(
                     kind: backend.kind,
                     upstream_model: &route.upstream_model,
                     drop_fields: &backend.drop_fields,
+                    set_fields: &set_paths,
                     status: status.as_u16(),
                     body: &text,
                 }),

@@ -17,9 +17,9 @@ pub use client::{
     http_client,
 };
 pub use headers::{
-    DropReason, DroppedHeader, HeaderSource, SecretView, SentHeader, X_ROUTER_BACKEND,
-    X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, dropped_headers, header_value, is_event_stream,
-    response_headers, sent_headers, upstream_headers,
+    DropReason, DroppedHeader, ForcedHeaders, HeaderSource, SecretView, SentHeader,
+    X_ROUTER_BACKEND, X_ROUTER_MODEL, X_ROUTER_UPSTREAM_MODEL, dropped_headers, header_value,
+    is_event_stream, response_headers, sent_headers, upstream_headers,
 };
 pub use retry::{Decision, MAX_BACKOFF, RetryPolicy, is_connection_failure};
 pub use timeout::{BodyClock, BodyError, TimedBody, TimeoutClock, Timeouts};

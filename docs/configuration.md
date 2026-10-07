@@ -54,6 +54,7 @@ credential = { kind = "command", command = "some-cli token --json | jq '{token: 
 kind = "openai"
 url = "https://llm.example.corp"
 credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
+# set_fields = { "chat_template_kwargs.enable_thinking" = false }   # body fields this backend is given
 
 [backends.grok]                              # xAI Chat Completions + OAuth helper
 kind = "openai"
@@ -103,6 +104,51 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   The `anthropic-beta` header is left alone. Claude Code's own
   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is the client-side alternative, but
   it applies to every backend in the session.
+- `set_fields` sets fields in the request body that backend receives, by the
+  same dot-separated paths as `drop_fields`. Objects on the way are created,
+  and a step that is not an object is replaced by one. A table is the paths of
+  its entries: `metadata.user_id = "u"`, `metadata = { user_id = "u" }` and
+  `"metadata.user_id" = "u"` are one spelling, and each sets that one field
+  beside whatever else `metadata` holds. A value is anything else JSON can
+  hold: a string, number, boolean or array (a date is sent as its text; an
+  empty table is an empty object, and a table inside an array is an object set
+  whole). A string in it, at any depth, may contain `{header:<name>}` exactly
+  as in `headers` below; a field whose value names a header the client did not
+  send is left out whole, and the other fields are still set. It applies after
+  `drop_fields` and replaces what the client sent at that path. On a `kind = "openai"` backend the paths name fields of the
+  Chat Completions body, since that is the body the backend receives, while
+  `drop_fields` there still names fields of the Messages body. `model` and
+  `stream` cannot be set, because the router reads them, and no path may be
+  named twice or lie inside another. The values are not secrets: the console
+  shows them and the body log holds them as sent, so a credential belongs in
+  `credential` or `headers`. For a gateway that wants each request to say
+  which session it belongs to:
+
+  ```toml
+  [backends.gateway.set_fields]
+  "extraData.clientVersion" = "1.0.0"
+  "extraData.sessionId" = "cc-{header:x-claude-code-session-id}"
+  ```
+
+  See ADR-0019.
+- `headers` sets headers on every request to that backend, replacing whatever
+  the client sent under the same name. A value may contain `{header:<name>}`,
+  which is replaced per request with the value the client sent under that
+  header (its first value, when the client repeated it), read before
+  `drop_headers` applies; text around it is kept, so
+  `"x-session-id" = "cc-{header:x-claude-code-session-id}"` hands a gateway the
+  session under the name and shape it reads. When the client sent no such
+  header, or sent it empty or as bytes that are not UTF-8, the forced header is
+  left out, and the client's own value under its name is not sent either. For
+  that reason `content-type`, which no request can do without, takes no
+  placeholder. `authorization`, `x-api-key` and `proxy-authorization` cannot
+  be named: they carry the client's credential. A
+  request the router makes on its own (the probe of `check` and the console)
+  has no client behind it, so a value with a placeholder is absent from it; the
+  console's test request names a session of its own, so
+  `x-claude-code-session-id` can be read there. A header may be named once:
+  two keys that differ only in case are an error. Forced values are shown as
+  `<redacted>` wherever headers are reported. See ADR-0019.
 - `live_models = true` fetches `GET {url}{models_path}` and publishes those ids
   as Anthropic model identity (`id`, `display_name`, `created_at`). Anthropic
   and OpenAI list JSON both work (ADR-0017). `kind = "passthrough"` always does

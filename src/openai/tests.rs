@@ -38,7 +38,7 @@ fn assistant(parts: Vec<Part>) -> RequestMessage {
 }
 
 fn encoded(request: &Request) -> Value {
-    serde_json::from_slice(&encode_request(request, SystemPlacement::Keep)).unwrap()
+    Value::Object(encode_request(request, SystemPlacement::Keep))
 }
 
 #[test]
@@ -749,11 +749,10 @@ fn with_mid_conversation_system() -> Request {
 
 #[test]
 fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
-    let body = serde_json::from_slice::<Value>(&encode_request(
+    let body = Value::Object(encode_request(
         &with_mid_conversation_system(),
         SystemPlacement::Merge,
-    ))
-    .unwrap();
+    ));
     assert_eq!(
         body["messages"],
         json!([
@@ -764,8 +763,7 @@ fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
     );
     let mut r = with_mid_conversation_system();
     r.system = None;
-    let body =
-        serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::Merge)).unwrap();
+    let body = Value::Object(encode_request(&r, SystemPlacement::Merge));
     assert_eq!(
         body["messages"][0],
         json!({"role": "system", "content": "env changed"})
@@ -774,11 +772,10 @@ fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
 
 #[test]
 fn user_sends_a_mid_conversation_system_as_a_user_message() {
-    let body = serde_json::from_slice::<Value>(&encode_request(
+    let body = Value::Object(encode_request(
         &with_mid_conversation_system(),
         SystemPlacement::User,
-    ))
-    .unwrap();
+    ));
     assert_eq!(
         body["messages"],
         json!([
@@ -800,7 +797,7 @@ fn a_leading_system_message_stays_system_under_user_placement() {
         user(vec![Part::Text("hi".into())]),
     ]);
     r.system = None;
-    let body = serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::User)).unwrap();
+    let body = Value::Object(encode_request(&r, SystemPlacement::User));
     assert_eq!(
         body["messages"],
         json!([
@@ -820,8 +817,7 @@ fn merge_skips_an_empty_system_message() {
         },
     ]);
     r.system = Some("top".into());
-    let body =
-        serde_json::from_slice::<Value>(&encode_request(&r, SystemPlacement::Merge)).unwrap();
+    let body = Value::Object(encode_request(&r, SystemPlacement::Merge));
     assert_eq!(
         body["messages"][0],
         json!({"role": "system", "content": "top"})

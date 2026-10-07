@@ -9,7 +9,7 @@ use http::header::{
 
 use super::Backend;
 use crate::config::view::REDACTED;
-use crate::config::{BackendKind, CredentialHeader, X_API_KEY};
+use crate::config::{BackendKind, CredentialHeader, Template, X_API_KEY};
 
 pub static ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
 static ANTHROPIC_VERSION: HeaderName = HeaderName::from_static("anthropic-version");
@@ -26,6 +26,73 @@ static PROXY_AUTHORIZATION: HeaderName = HeaderName::from_static("proxy-authoriz
 /// are header-safe.
 pub fn header_value(text: &str) -> HeaderValue {
     HeaderValue::from_str(text).expect("validated header-safe")
+}
+
+/// Headers a backend forces onto every upstream request. A value may read the
+/// client's request (ADR-0019).
+#[derive(Default)]
+pub struct ForcedHeaders(Vec<(HeaderName, Template)>);
+
+/// Names only: a forced value may be a key, and what it is written with is
+/// most of one.
+impl std::fmt::Debug for ForcedHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.iter().map(|(name, _)| (name.as_str(), REDACTED)))
+            .finish()
+    }
+}
+
+impl ForcedHeaders {
+    /// Assumes `config` passed validation (names, values and placeholders).
+    pub fn new(config: &BTreeMap<String, String>) -> Self {
+        Self(
+            config
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        HeaderName::from_bytes(name.as_bytes()).expect("validated header name"),
+                        Template::parse(value).expect("validated header value"),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn contains_key(&self, name: &HeaderName) -> bool {
+        self.0.iter().any(|(forced, _)| forced == name)
+    }
+
+    /// Whether a request carrying `client` gives every forced header a value.
+    pub fn filled_by(&self, client: &HeaderMap) -> bool {
+        self.resolve(client).all(|(_, value)| value.is_some())
+    }
+
+    /// Every forced header with its value for a request carrying `client`,
+    /// marked sensitive. `None` when the value names a header `client` lacks.
+    fn resolve<'a>(
+        &'a self,
+        client: &'a HeaderMap,
+    ) -> impl Iterator<Item = (&'a HeaderName, Option<HeaderValue>)> {
+        self.0.iter().map(|(name, template)| {
+            let value = template
+                .render(client)
+                .and_then(|text| HeaderValue::from_str(&text).ok())
+                .map(|mut value| {
+                    value.set_sensitive(true);
+                    value
+                });
+            (name, value)
+        })
+    }
 }
 
 /// Hop-by-hop headers belong to one connection and are never relayed. The
@@ -51,9 +118,11 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// client library), the client's own `authorization`/`x-api-key` (replaced by
 /// the backend credential), `accept-encoding` (bodies are relayed and logged
 /// uncompressed) and whatever the backend's `drop_headers` names. Backend
-/// `headers` override, `anthropic_beta` flags are merged into the client's
-/// list. An `openai` backend gets no `anthropic-version` or `anthropic-beta`
-/// at all (ADR-0010).
+/// `headers` override, each read against `client` as it arrived; one whose
+/// value names a header `client` lacks is not sent, and neither is the
+/// client's own value under that name (ADR-0019). `anthropic_beta` flags are
+/// merged into the client's list. An `openai` backend gets no
+/// `anthropic-version` or `anthropic-beta` at all (ADR-0010).
 pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
     let mut out = HeaderMap::with_capacity(client.len() + backend.headers.len() + 1);
     for (name, value) in client {
@@ -62,8 +131,15 @@ pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
         }
         out.append(name.clone(), value.clone());
     }
-    for (name, value) in &backend.headers {
-        out.insert(name.clone(), value.clone());
+    for (name, value) in backend.headers.resolve(client) {
+        match value {
+            Some(value) => {
+                out.insert(name.clone(), value);
+            }
+            None => {
+                out.remove(name);
+            }
+        }
     }
     if !backend.anthropic_beta.is_empty() {
         let merged = merge_beta(out.get_all(&ANTHROPIC_BETA), &backend.anthropic_beta);

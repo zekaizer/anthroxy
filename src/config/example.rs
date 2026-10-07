@@ -97,6 +97,10 @@ credential = { kind = "none" }
 # # Request body fields this backend rejects as unknown, removed before
 # # forwarding. Dot-separated paths reach into objects (not arrays).
 # drop_fields = ["context_management", "metadata.user_id"]
+# # Fields set in the body this backend receives, by the same paths, after
+# # the drop. A string may read the client's request with `{header:<name>}`,
+# # as in `headers`; a field with nothing to read is left out.
+# set_fields = { "chat_template_kwargs.enable_thinking" = false, "extraData.sessionId" = "cc-{header:x-claude-code-session-id}" }
 # # Client headers this backend never sees, for a gateway that refuses what it
 # # does not know. A name, a `*` pattern, or `@claude-code` for the headers
 # # Claude Code adds to name itself and its SDK (x-stainless-*, x-app,
@@ -145,9 +149,13 @@ credential = { kind = "none" }
 # proxy = "http://proxy.corp:3128"
 # # Beta flags merged into the client's anthropic-beta header.
 # anthropic_beta = ["oauth-2025-04-20"]
-# # Headers forced on every request to this backend.
+# # Headers forced on every request to this backend. `{header:<name>}` is
+# # replaced with what the client sent under that header, so a value can
+# # travel under the name a gateway reads; when the client sent none, the
+# # forced header is left out.
 # [backends.claude.headers]
 # "anthropic-version" = "2023-06-01"
+# "x-session-id" = "cc-{header:x-claude-code-session-id}"
 
 # ---------------------------------------------------------------------------
 # Models: what Claude Code sees, in picker order.

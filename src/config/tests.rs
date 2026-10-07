@@ -339,6 +339,83 @@ fn backend_headers_cannot_take_over_the_connection() {
 }
 
 #[test]
+fn a_backend_header_may_read_the_client_request() {
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"x-session-id\" = \"cc-{{header:x-claude-code-session-id}}\"\n"
+    );
+    let c = parse(&text).unwrap();
+    assert_eq!(
+        c.backends["local"].headers["x-session-id"], "cc-{header:x-claude-code-session-id}",
+        "kept as written: it is filled in per request"
+    );
+}
+
+#[test]
+fn a_backend_header_placeholder_must_be_one_the_router_can_fill() {
+    let text = format!(
+        r#"{MINIMAL}
+[backends.local.headers]
+"x-open" = "cc-{{header:x-session"
+"x-name" = "{{header:x session}}"
+"x-token" = "{{header:Authorization}}"
+"x-key" = "{{header:x-api-key}}"
+"#
+    );
+    let joined = problems(&text).join("\n");
+    for expected in [
+        "backends.local.headers: `x-open`: `{header:` is not closed by `}`",
+        "backends.local.headers: `x-name`: a `{header:…}` placeholder does not name a header",
+        "backends.local.headers: `x-token`: `{header:authorization}` would send the client's credential to the backend",
+        "backends.local.headers: `x-key`: `{header:x-api-key}` would send the client's credential to the backend",
+    ] {
+        assert!(
+            joined.contains(expected),
+            "missing `{expected}` in:\n{joined}"
+        );
+    }
+}
+
+#[test]
+fn a_backend_header_problem_quotes_none_of_the_value() {
+    // A header value may be a key, and what follows `{header:` is part of it.
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"x-gw-auth\" = '{{header:\"v\", key:\"sk-live-SECRET\"}}'\n"
+    );
+    let p = problems(&text);
+    assert_eq!(
+        p,
+        ["backends.local.headers: `x-gw-auth`: a `{header:…}` placeholder does not name a header"]
+    );
+}
+
+#[test]
+fn a_header_the_backend_cannot_do_without_takes_no_placeholder() {
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"Content-Type\" = \"{{header:x-content-type}}\"\n"
+    );
+    assert_eq!(
+        problems(&text),
+        [
+            "backends.local.headers: `Content-Type` says what the body is; a value read from the client's request may be left out"
+        ]
+    );
+    let text = format!("{MINIMAL}\n[backends.local.headers]\n\"content-type\" = \"text/json\"\n");
+    assert!(parse(&text).is_ok(), "a fixed value is always sent");
+}
+
+#[test]
+fn a_backend_header_cannot_be_set_twice_under_two_spellings() {
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"X-Session\" = \"{{header:x-a}}\"\n\"x-session\" = \"fixed\"\n\"x-other\" = \"1\"\n"
+    );
+    let p = problems(&text);
+    assert_eq!(
+        p,
+        ["backends.local.headers: `X-Session` and `x-session` are the same header"]
+    );
+}
+
+#[test]
 fn names_that_are_empty_are_rejected_wherever_they_appear() {
     let cases = [
         ("\n[backends.\"\"]\nurl = \"http://a\"\n", "backends:"),
@@ -478,6 +555,116 @@ upstream_model = "up\nbreak"
     assert!(joined.contains("models[0].id"), "{joined}");
     assert!(joined.contains("models[0].upstream_model"), "{joined}");
     assert_eq!(p.len(), 3, "{joined}");
+}
+
+#[test]
+fn set_fields_take_values_of_any_json_shape() {
+    let text = format!(
+        r#"{MINIMAL}
+[backends.local.set_fields]
+"extraData.clientVersion" = "${{CLIENT_VERSION}}"
+"extraData.sessionId" = "cc-{{header:x-claude-code-session-id}}"
+"chat_template_kwargs.enable_thinking" = false
+stop_token_ids = [1, 2]
+"#
+    );
+    let c = Config::parse(&text, |name| {
+        (name == "CLIENT_VERSION").then(|| "1.2.3".to_owned())
+    })
+    .unwrap();
+    let fields = &c.backends["local"].set_fields;
+    assert_eq!(
+        fields["extraData.clientVersion"].as_str(),
+        Some("1.2.3"),
+        "${{NAME}} is expanded at load"
+    );
+    assert_eq!(
+        fields["extraData.sessionId"].as_str(),
+        Some("cc-{header:x-claude-code-session-id}"),
+        "a placeholder is kept for the request"
+    );
+    assert_eq!(
+        fields["chat_template_kwargs.enable_thinking"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(fields["stop_token_ids"].as_array().unwrap().len(), 2);
+    assert!(
+        parse(MINIMAL).unwrap().backends["local"]
+            .set_fields
+            .is_empty()
+    );
+}
+
+#[test]
+fn validation_rejects_unusable_set_fields() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+
+[backends.a.set_fields]
+"ok.field" = "fine"
+"a..b" = 1
+model = "other"
+"stream.x" = true
+weight = nan
+"who" = "{header:authorization}"
+"open" = ["{header:x-session"]
+"extra" = 1
+"extra.inner" = 2
+twice = { over = 1 }
+"twice.over" = 2
+stream = { options = 1 }
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    for expected in [
+        "backends.a.set_fields: `a..b`: the path has an empty segment",
+        "backends.a.set_fields: `model`: `model` is read by the router and cannot be set",
+        "backends.a.set_fields: `stream.x`: `stream` is read by the router and cannot be set",
+        "backends.a.set_fields: `weight`: a number that is not finite has no JSON form",
+        "backends.a.set_fields: `who`: `{header:authorization}` would send the client's credential to the backend",
+        "backends.a.set_fields: `open`: `{header:` is not closed by `}`",
+        "backends.a.set_fields: `extra` and `extra.inner` set the same field",
+        "backends.a.set_fields: `twice.over` and `twice.over` set the same field",
+        "backends.a.set_fields: `stream.options`: `stream` is read by the router and cannot be set",
+    ] {
+        assert!(
+            joined.contains(expected),
+            "missing `{expected}` in:\n{joined}"
+        );
+    }
+    assert_eq!(p.len(), 9, "{joined}");
+}
+
+#[test]
+fn passthrough_takes_no_set_fields() {
+    let text = r#"
+[server]
+token = "t"
+v1_auth = "none"
+listen = "127.0.0.1:8787"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+
+[backends.account.set_fields]
+"metadata.source" = "router"
+"#;
+    let joined = problems(text).join("\n");
+    assert!(
+        joined.contains(
+            "backends.account: kind = \"passthrough\" relays the request unmodified; drop_fields, set_fields, headers and anthropic_beta are not applied"
+        ),
+        "{joined}"
+    );
 }
 
 #[test]

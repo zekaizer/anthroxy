@@ -4,6 +4,7 @@
 //! tests that know the format.
 
 use anthroxy::anthropic;
+use anthroxy::body_field::BodyField;
 use anthroxy::openai;
 use anthroxy::sse;
 use anthroxy::translate;
@@ -148,7 +149,7 @@ fn the_request_decoder_survives_arbitrary_tools_and_tool_results() {
         let bytes = text.as_bytes();
         let _ = anthropic::decode(bytes);
         let _ = anthropic::summarize(bytes);
-        let _ = translate::request(bytes, "m", Default::default());
+        let _ = translate::request(bytes, "m", Default::default(), &[]);
         let _ = case;
     }
 }
@@ -160,15 +161,19 @@ fn decoders_survive_arbitrary_documents() {
         let text = value(&mut rng, 4);
         let bytes = text.as_bytes();
         let _ = anthropic::peek(bytes);
-        let _ = anthropic::rewrite(bytes, Some("m"), &["a".into(), "a.b".into()], true);
-        let _ = anthropic::rewrite(bytes, None, &[], false);
+        let fields = [BodyField {
+            path: vec!["a".into(), "b".into(), "c".into()],
+            value: serde_json::Value::Bool(true),
+        }];
+        let _ = anthropic::rewrite(bytes, Some("m"), &["a".into(), "a.b".into()], &fields, true);
+        let _ = anthropic::rewrite(bytes, None, &[], &[], false);
         let _ = anthropic::summarize(bytes);
         let _ = anthropic::decode(bytes);
         let _ = anthropic::decode_models(bytes);
         let _ = openai::decode_response(bytes);
         let _ = openai::decode_models(bytes);
         let _ = openai::decode_error(Some(500), bytes);
-        let _ = translate::request(bytes, "m", Default::default());
+        let _ = translate::request(bytes, "m", Default::default(), &[]);
         let _ = translate::response(bytes, "m");
         let _ = translate::document_events(bytes, "m");
         let _ = translate::models(anthroxy::config::BackendKind::OpenAi, bytes);

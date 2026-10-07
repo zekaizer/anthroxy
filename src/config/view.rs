@@ -34,6 +34,7 @@ pub fn masked(config: &Config) -> Value {
                     "anthropic_beta": backend.anthropic_beta,
                     "drop_headers": backend.drop_headers,
                     "drop_fields": backend.drop_fields,
+                    "set_fields": backend.set_fields,
                     "mid_conversation_system": backend.mid_conversation_system,
                     "proxy": backend.proxy.as_deref().map(redacted_url),
                 }),
@@ -190,6 +191,10 @@ credential = { kind = "static", value = "static-secret-value", header = "x_api_k
 [backends.a.headers]
 "x-forced" = "forced-secret-value"
 
+[backends.a.set_fields]
+"extraData.clientVersion" = "1.2.3"
+"extraData.flags" = { debug = false, tags = ["a"] }
+
 [backends.b]
 url = "http://b"
 credential = { kind = "command", command = "cat ~/.token", output = "json", refresh = "1m" }
@@ -217,6 +222,15 @@ backend = "a"
             "x-api-key: …"
         );
         assert_eq!(view["backends"]["a"]["headers"]["x-forced"], REDACTED);
+        assert_eq!(
+            view["backends"]["a"]["set_fields"],
+            json!({
+                "extraData.clientVersion": "1.2.3",
+                "extraData.flags": {"debug": false, "tags": ["a"]}
+            }),
+            "a body field is no secret: the body log holds it as sent"
+        );
+        assert_eq!(view["backends"]["b"]["set_fields"], json!({}));
         assert_eq!(
             view["backends"]["b"]["credential"]["command"],
             "cat ~/.token"

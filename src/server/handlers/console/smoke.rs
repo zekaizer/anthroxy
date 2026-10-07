@@ -78,7 +78,7 @@ pub async fn smoke(
     } = answer(
         &snapshot,
         &id,
-        request(&payload),
+        request(&payload, &id),
         exchange,
         DEADLINE,
         app.body_timeout,
@@ -119,12 +119,16 @@ pub async fn smoke(
     }))
 }
 
-fn request(payload: &Value) -> http::Request<Body> {
+/// The request names a session of its own, as Claude Code would: a backend
+/// whose configuration reads that header (ADR-0019) is otherwise sent a
+/// request it never gets from a client.
+fn request(payload: &Value, id: &RequestId) -> http::Request<Body> {
     http::Request::builder()
         .method(http::Method::POST)
         .uri("/v1/messages")
         .header(CONTENT_TYPE, "application/json")
         .header("anthropic-version", "2023-06-01")
+        .header(proxy::SESSION_ID, id.as_str())
         .body(Body::from(payload.to_string()))
         .expect("a static request builds")
 }
@@ -267,7 +271,7 @@ mod tests {
             answer(
                 &snapshot,
                 &id,
-                request(&payload),
+                request(&payload, &id),
                 exchange,
                 Duration::from_millis(300),
                 crate::server::BODY_TIMEOUT,

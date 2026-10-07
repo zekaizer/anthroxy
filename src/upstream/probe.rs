@@ -182,6 +182,46 @@ mod tests {
         UpstreamClient::new(reqwest::Client::new(), RetryPolicy::never())
     }
 
+    #[test]
+    fn a_probe_has_no_client_to_read_a_forced_header_from() {
+        let backend = Backend::from_config(
+            "gw",
+            &BackendConfig {
+                kind: BackendKind::Anthropic,
+                url: "http://127.0.0.1:1".into(),
+                models_path: BackendConfig::default_models_path(),
+                live_models: false,
+                credential: CredentialConfig::None,
+                headers: [
+                    (
+                        "x-session-id".to_owned(),
+                        "cc-{header:x-claude-code-session-id}".to_owned(),
+                    ),
+                    ("x-fixed".to_owned(), "1".to_owned()),
+                    (
+                        "x-version".to_owned(),
+                        "{header:anthropic-version}".to_owned(),
+                    ),
+                ]
+                .into(),
+                anthropic_beta: Vec::new(),
+                drop_headers: Vec::new(),
+                drop_fields: Vec::new(),
+                set_fields: Default::default(),
+                mid_conversation_system: Default::default(),
+                proxy: None,
+            },
+        )
+        .unwrap();
+        let request = list_request(&backend, "/v1/models");
+        assert!(request.headers.get("x-session-id").is_none());
+        assert_eq!(request.headers["x-fixed"], "1");
+        assert_eq!(
+            request.headers["x-version"], "2023-06-01",
+            "what the probe itself sends can be read"
+        );
+    }
+
     #[tokio::test]
     async fn passthrough_is_not_probed() {
         let backend = Backend::from_config(
@@ -196,6 +236,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
             },
@@ -240,6 +281,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
             },
@@ -305,6 +347,7 @@ mod tests {
                 anthropic_beta: vec!["oauth-2025-04-20".into()],
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
             },
@@ -386,6 +429,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
             },
@@ -441,6 +485,7 @@ mod tests {
                 anthropic_beta: Vec::new(),
                 drop_headers: Vec::new(),
                 drop_fields: Vec::new(),
+                set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
             },

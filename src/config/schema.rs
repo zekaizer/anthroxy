@@ -225,6 +225,11 @@ pub struct BackendConfig {
     /// parameters it does not know.
     #[serde(default)]
     pub drop_fields: Vec<String>,
+    /// Fields set in the request body this backend receives, by the same
+    /// dot-separated paths; a string value may read the client's request with
+    /// `{header:<name>}` (ADR-0019). Applied after `drop_fields`.
+    #[serde(default)]
+    pub set_fields: BTreeMap<String, toml::Value>,
     /// `kind = "openai"` only: where a `system` message that is not the
     /// first message goes, for a chat template that refuses one anywhere
     /// else (Qwen 3.5+). `keep` (default) sends it where it is, `merge`
