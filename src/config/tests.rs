@@ -389,6 +389,21 @@ fn a_backend_header_problem_quotes_none_of_the_value() {
 }
 
 #[test]
+fn a_header_the_backend_cannot_do_without_takes_no_placeholder() {
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"Content-Type\" = \"{{header:x-content-type}}\"\n"
+    );
+    assert_eq!(
+        problems(&text),
+        [
+            "backends.local.headers: `Content-Type` says what the body is; a value read from the client's request may be left out"
+        ]
+    );
+    let text = format!("{MINIMAL}\n[backends.local.headers]\n\"content-type\" = \"text/json\"\n");
+    assert!(parse(&text).is_ok(), "a fixed value is always sent");
+}
+
+#[test]
 fn a_backend_header_cannot_be_set_twice_under_two_spellings() {
     let text = format!(
         "{MINIMAL}\n[backends.local.headers]\n\"X-Session\" = \"{{header:x-a}}\"\n\"x-session\" = \"fixed\"\n\"x-other\" = \"1\"\n"

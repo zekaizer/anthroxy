@@ -55,7 +55,8 @@ Headers:
 
 - A value in `backends.<name>.headers` takes placeholders. When it cannot be
   filled, the header still belongs to the backend: the client's own value under
-  that name does not pass either.
+  that name does not pass either. A header the backend cannot read the request
+  without (`content-type`) therefore takes none.
 - A problem with a header value is reported without quoting any of the value,
   which may be a key.
 

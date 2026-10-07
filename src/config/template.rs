@@ -57,6 +57,11 @@ impl Template {
         Ok(Self(parts))
     }
 
+    /// Whether the value depends on the request, and so may be left out.
+    pub fn reads_client(&self) -> bool {
+        self.0.iter().any(|part| matches!(part, Part::Header(_)))
+    }
+
     /// The value for a request carrying `client`. `None` when a header it
     /// names is absent, empty or not UTF-8: a value filled in part is not
     /// sent.
@@ -188,6 +193,8 @@ mod tests {
         );
         let template = Template::parse("user:{header:x-user-name}").unwrap();
         assert_eq!(template.render(&client).as_deref(), Some("user:홍길동"));
+        assert!(template.reads_client());
+        assert!(!Template::parse("fixed").unwrap().reads_client());
     }
 
     #[test]

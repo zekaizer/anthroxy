@@ -158,7 +158,19 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                         "backends.{name}.headers: `{}`: {problem}",
                         short(header)
                     )),
-                    Ok(_) => {}
+                    Ok(template) => {
+                        let required = REQUIRED
+                            .iter()
+                            .find(|(required, _)| header.eq_ignore_ascii_case(required));
+                        if let Some((_, why)) = required
+                            && template.reads_client()
+                        {
+                            problems.push(format!(
+                                "backends.{name}.headers: `{}` {why}; a value read from the client's request may be left out",
+                                short(header)
+                            ));
+                        }
+                    }
                 }
             }
         }
