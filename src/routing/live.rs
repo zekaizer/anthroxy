@@ -21,6 +21,9 @@ const PULL_TIMEOUT: Duration = Duration::from_secs(10);
 struct Entry {
     fetched_at: Instant,
     auth: String,
+    /// Whether the request that pulled it gave every forced header a value
+    /// (ADR-0019). A list pulled without one may be the backend's refusal.
+    complete: bool,
     models: Vec<ModelObject>,
 }
 
@@ -107,11 +110,15 @@ impl LiveCatalog {
         } else {
             self.backend.name.clone()
         };
+        let complete = self.backend.headers.filled_by(client_headers);
         // The lock is held across the pull, so concurrent misses share one
         // fetch instead of each asking the backend.
         let mut cache = self.cache.lock().await;
         if let Some(entry) = cache.as_ref()
             && entry.auth == auth
+            // What a request lacking a forced header was answered does not
+            // stand for one that has them all; the reverse does.
+            && (entry.complete || !complete)
             && Instant::now().saturating_duration_since(entry.fetched_at) < TTL
         {
             return entry.models.clone();
@@ -139,6 +146,7 @@ impl LiveCatalog {
         *cache = Some(Entry {
             fetched_at: Instant::now(),
             auth,
+            complete,
             models: models.clone(),
         });
         models

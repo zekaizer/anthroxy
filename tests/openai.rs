@@ -1177,6 +1177,78 @@ credential = {{ kind = "static", value = "k" }}
 }
 
 #[tokio::test]
+async fn a_live_list_refused_for_want_of_a_header_is_asked_for_again_with_it() {
+    // A gateway that answers nothing, the model list included, to a request
+    // that does not say which session it belongs to.
+    let upstream = MockUpstream::start(|req| {
+        if req.header("x-session-id").is_none() {
+            json_response(400, json!({"error": {"message": "missing session"}}))
+        } else if req.path_and_query.starts_with("/v1/models") {
+            json_response(
+                200,
+                json!({"object": "list", "data": [{"id": "live-x", "object": "model"}]}),
+            )
+        } else {
+            completion(json!({"role": "assistant", "content": "ok"}), "stop")
+        }
+    })
+    .await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.gateway]
+kind = "openai"
+url = "{url}"
+live_models = true
+credential = {{ kind = "static", value = "k" }}
+headers = {{ "x-session-id" = "cc-{{header:x-claude-code-session-id}}" }}
+"#,
+        url = upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+    let body = json!({"model": "live-x", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]});
+    let pulls = || {
+        upstream
+            .received()
+            .iter()
+            .filter(|r| r.path_and_query.starts_with("/v1/models"))
+            .count()
+    };
+
+    // Nothing to read the session from: the list cannot be had.
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    assert_eq!(pulls(), 1);
+
+    // The refusal says nothing about a request that can name its session.
+    let res = router
+        .post("/v1/messages", &body)
+        .header("x-claude-code-session-id", "s-1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    assert_eq!(pulls(), 2);
+
+    // That list serves every request for as long as it is kept, whatever
+    // the session and whether or not the request names one.
+    let res = router
+        .post("/v1/messages", &body)
+        .header("x-claude-code-session-id", "s-2")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let res = router.get("/v1/models").send().await.unwrap();
+    let list: Value = res.json().await.unwrap();
+    assert_eq!(list["data"][0]["id"], "live-x");
+    assert_eq!(pulls(), 2);
+}
+
+#[tokio::test]
 async fn live_models_publishes_openai_identity_and_routes() {
     let upstream = MockUpstream::start(|req| {
         if req.path_and_query.starts_with("/v1/models") {

@@ -71,6 +71,11 @@ impl ForcedHeaders {
         self.0.iter().any(|(forced, _)| forced == name)
     }
 
+    /// Whether a request carrying `client` gives every forced header a value.
+    pub fn filled_by(&self, client: &HeaderMap) -> bool {
+        self.resolve(client).all(|(_, value)| value.is_some())
+    }
+
     /// Every forced header with its value for a request carrying `client`,
     /// marked sensitive. `None` when the value names a header `client` lacks.
     fn resolve<'a>(
