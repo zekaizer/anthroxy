@@ -206,6 +206,78 @@ backend = "gateway"
 }
 
 #[tokio::test]
+async fn sets_configured_fields_in_the_body_the_backend_receives() {
+    let upstream = MockUpstream::start(echo).await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.gateway]
+url = "{}"
+drop_fields = ["metadata"]
+
+[backends.gateway.set_fields]
+"extraData.clientVersion" = "1.2.3"
+"extraData.sessionId" = "cc-{{header:x-claude-code-session-id}}"
+"metadata.user_id" = "gateway-user"
+
+[[models]]
+id = "fast"
+backend = "gateway"
+upstream_model = "mock-fast-v1"
+"#,
+        upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .header("x-claude-code-session-id", "e96634a3-fa28")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let sent = upstream.last().json();
+    assert_eq!(
+        sent["extraData"],
+        json!({"clientVersion": "1.2.3", "sessionId": "cc-e96634a3-fa28"})
+    );
+    assert_eq!(
+        sent["metadata"],
+        json!({"user_id": "gateway-user"}),
+        "set after the drop, over what the client sent"
+    );
+    assert_eq!(sent["model"], "mock-fast-v1");
+    assert_eq!(sent["future_field"]["nested"], json!([1, 2, 3]));
+
+    // `count_tokens` is a proxied body like any other.
+    let res = router
+        .post("/v1/messages/count_tokens", &messages_body("fast"))
+        .header("x-claude-code-session-id", "e96634a3-fa28")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let seen = upstream.last();
+    assert_eq!(seen.path_and_query, "/v1/messages/count_tokens");
+    assert_eq!(seen.json()["extraData"]["sessionId"], "cc-e96634a3-fa28");
+
+    // No session header to read: that one field is left out, the rest stay.
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        upstream.last().json()["extraData"],
+        json!({"clientVersion": "1.2.3"})
+    );
+}
+
+#[tokio::test]
 async fn forwards_messages_with_rewritten_model_and_backend_credential() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

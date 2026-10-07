@@ -65,6 +65,8 @@ cargo fmt
   - `cli/` — clap grammar and one file per subcommand.
   - `text.rs` — escaping and cutting for anything the router did not choose that
     reaches a message or a log line.
+  - `body_field.rs` — a field the configuration sets in the request body a
+    backend receives, whichever format that body is in.
   - `private_fs.rs` — owner-only directory creation, writes and appends for
     files that hold what a user sent or did; the count of writes still queued,
     which a stop waits for.

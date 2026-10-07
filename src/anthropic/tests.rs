@@ -1,11 +1,12 @@
 use super::*;
 use crate::anthropic::summary::{NOTICES, WAKING};
+use crate::body_field::BodyField;
 use http::StatusCode;
 use serde_json::{Value, json};
 
 /// `rewrite` for a body already known to parse.
 fn unwrapped_rewrite(body: &[u8], model: Option<&str>, drop_fields: &[String]) -> Option<Vec<u8>> {
-    rewrite(body, model, drop_fields, false).expect("a body peek accepted")
+    rewrite(body, model, drop_fields, &[], false).expect("a body peek accepted")
 }
 
 #[test]
@@ -155,6 +156,40 @@ fn rewrite_drops_paths_and_keeps_order() {
 }
 
 #[test]
+fn rewrite_sets_fields_after_dropping_and_keeps_order() {
+    let field = |path: &str, value: Value| BodyField {
+        path: path.split('.').map(str::to_owned).collect(),
+        value,
+    };
+    let body = br#"{"model":"m","metadata":{"user_id":"u","keep":1},"messages":[]}"#;
+    let fields = [
+        field("metadata.user_id", json!("gateway")),
+        field("extraData.sessionId", json!("s-1")),
+    ];
+    let out = rewrite(body, Some("up"), &["metadata".to_owned()], &fields, false)
+        .unwrap()
+        .expect("fields were set");
+    assert_eq!(
+        std::str::from_utf8(&out).unwrap(),
+        r#"{"model":"up","messages":[],"metadata":{"user_id":"gateway"},"extraData":{"sessionId":"s-1"}}"#,
+        "what was dropped is gone before a field is set under it"
+    );
+
+    let out = rewrite(body, None, &[], &fields[..1], false)
+        .unwrap()
+        .expect("a field was set");
+    assert_eq!(
+        std::str::from_utf8(&out).unwrap(),
+        r#"{"model":"m","metadata":{"user_id":"gateway","keep":1},"messages":[]}"#
+    );
+    assert_eq!(
+        rewrite(body, None, &[], &[], false).unwrap(),
+        None,
+        "nothing to set leaves the bytes alone"
+    );
+}
+
+#[test]
 fn rewrite_reports_a_body_it_cannot_parse_as_a_bad_request() {
     // `peek` skips a value it does not read without measuring its depth;
     // parsing the whole document has a recursion limit.
@@ -167,13 +202,13 @@ fn rewrite_reports_a_body_it_cannot_parse_as_a_bad_request() {
         peek(deep.as_bytes()).is_ok(),
         "the body reaches the rewrite"
     );
-    let err = rewrite(deep.as_bytes(), Some("m2"), &[], false)
+    let err = rewrite(deep.as_bytes(), Some("m2"), &[], &[], false)
         .err()
         .unwrap();
     assert!(matches!(err, PeekError::NotJson(_)), "{err}");
 
     assert!(
-        rewrite(deep.as_bytes(), None, &[], false)
+        rewrite(deep.as_bytes(), None, &[], &[], false)
             .unwrap()
             .is_none(),
         "nothing to rewrite: the body is forwarded unread"
@@ -224,7 +259,7 @@ fn error_type_from_status_follows_the_api_table() {
 // ---- unsigned thinking blocks (rewrite)
 
 fn run(body: Value) -> Option<Value> {
-    rewrite(&serde_json::to_vec(&body).unwrap(), None, &[], true)
+    rewrite(&serde_json::to_vec(&body).unwrap(), None, &[], &[], true)
         .expect("a JSON object")
         .map(|b| serde_json::from_slice(&b).unwrap())
 }
@@ -299,7 +334,7 @@ fn untouched_bodies_are_not_rewritten() {
         run(json!({"model": "m", "messages": [{"role": "user", "content": "the word thinking"}]})),
         None
     );
-    assert_eq!(rewrite(b"{}", None, &[], true).unwrap(), None);
+    assert_eq!(rewrite(b"{}", None, &[], &[], true).unwrap(), None);
 }
 
 // ---- tool call ids (rewrite, ADR-0013)
@@ -345,7 +380,14 @@ fn accepted_tool_call_ids_leave_the_body_alone() {
     let mut foreign = body;
     foreign["messages"][0]["content"][0]["id"] = json!("functions.read:0");
     assert_eq!(
-        rewrite(&serde_json::to_vec(&foreign).unwrap(), None, &[], false).unwrap(),
+        rewrite(
+            &serde_json::to_vec(&foreign).unwrap(),
+            None,
+            &[],
+            &[],
+            false
+        )
+        .unwrap(),
         None,
         "a body for an openai backend keeps its ids"
     );

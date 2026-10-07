@@ -54,6 +54,7 @@ credential = { kind = "command", command = "some-cli token --json | jq '{token: 
 kind = "openai"
 url = "https://llm.example.corp"
 credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
+# set_fields = { "chat_template_kwargs.enable_thinking" = false }   # body fields this backend is given
 
 [backends.grok]                              # xAI Chat Completions + OAuth helper
 kind = "openai"
@@ -103,6 +104,30 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   The `anthropic-beta` header is left alone. Claude Code's own
   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is the client-side alternative, but
   it applies to every backend in the session.
+- `set_fields` sets fields in the request body that backend receives, by the
+  same dot-separated paths as `drop_fields`. Objects on the way are created,
+  and a step that is not an object is replaced by one. A value is any TOML
+  value JSON can hold: a string, number, boolean, array or table (a date is
+  sent as its text). A string in it, at any depth, may contain
+  `{header:<name>}` exactly as in `headers` below; a field whose value names a
+  header the client did not send is left out whole, and the other fields are
+  still set. It applies after `drop_fields` and replaces what the client sent
+  at that path. On a `kind = "openai"` backend the paths name fields of the
+  Chat Completions body, since that is the body the backend receives, while
+  `drop_fields` there still names fields of the Messages body. `model` and
+  `stream` cannot be set, because the router reads them, and no path may lie
+  inside another. The values are not secrets: the console shows them and the
+  body log holds them as sent, so a credential belongs in `credential` or
+  `headers`. For a gateway that wants each request to say which session it
+  belongs to:
+
+  ```toml
+  [backends.gateway.set_fields]
+  "extraData.clientVersion" = "1.0.0"
+  "extraData.sessionId" = "cc-{header:x-claude-code-session-id}"
+  ```
+
+  See ADR-0019.
 - `headers` sets headers on every request to that backend, replacing whatever
   the client sent under the same name. A value may contain `{header:<name>}`,
   which is replaced per request with the value the client sent under that

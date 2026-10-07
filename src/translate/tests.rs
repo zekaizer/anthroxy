@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::anthropic::{DecodeError, ErrorType};
+use crate::body_field::BodyField;
 use crate::openai::ResponseError;
 
 fn chunk(delta: Value, finish: Option<&str>) -> String {
@@ -117,7 +118,13 @@ fn request_round_trips_through_the_ir() {
         "metadata": {"user_id": "u"}
     });
     let out: Value = serde_json::from_slice(
-        &request(&serde_json::to_vec(&body).unwrap(), "m", Default::default()).unwrap(),
+        &request(
+            &serde_json::to_vec(&body).unwrap(),
+            "m",
+            Default::default(),
+            &[],
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -132,8 +139,49 @@ fn request_round_trips_through_the_ir() {
         })
     );
     assert_eq!(
-        request(b"[]", "m", Default::default()),
+        request(b"[]", "m", Default::default(), &[]),
         Err(DecodeError::NotAnObject)
+    );
+}
+
+#[test]
+fn configured_fields_are_set_in_the_translated_body() {
+    let body = json!({
+        "model": "m", "max_tokens": 5,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"user_id": "u"}
+    });
+    let fields = [
+        BodyField {
+            path: vec!["extraData".into(), "sessionId".into()],
+            value: json!("s-1"),
+        },
+        BodyField {
+            path: vec!["user".into()],
+            value: json!("gateway-user"),
+        },
+    ];
+    let out: Value = serde_json::from_slice(
+        &request(
+            &serde_json::to_vec(&body).unwrap(),
+            "up",
+            Default::default(),
+            &fields,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        out,
+        json!({
+            "model": "up",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5,
+            "user": "gateway-user",
+            "stream": false,
+            "extraData": {"sessionId": "s-1"}
+        }),
+        "set in the Chat Completions body, over what the translation wrote"
     );
 }
 

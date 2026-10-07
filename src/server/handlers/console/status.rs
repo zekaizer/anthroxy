@@ -26,6 +26,7 @@ pub async fn status(
                 "url": backend.shown_url(),
                 "credential": backend.credential.status(),
                 "drop_fields": backend.drop_fields,
+                "set_fields": backend.set_fields.paths(),
                 "drop_headers": snapshot
                     .config
                     .backends

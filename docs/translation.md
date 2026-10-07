@@ -80,7 +80,9 @@ backend kind.
    `function.parameters`
    (an object schema always gets `properties`), `metadata.user_id` as `user`,
    `output_config.effort` as `reasoning_effort`, and
-   `stream_options.include_usage` on every stream.
+   `stream_options.include_usage` on every stream. `translate::request` then
+   sets the backend's `set_fields` in that document and writes it out, so
+   their paths name Chat Completions fields.
 4. The request goes to `<url>/v1/chat/completions` with the credential and
    without `anthropic-version` / `anthropic-beta`.
 

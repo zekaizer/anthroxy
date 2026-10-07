@@ -1,5 +1,5 @@
 use super::headers::ForcedHeaders;
-use crate::config::{BackendConfig, BackendKind, DropHeaders};
+use crate::config::{BackendConfig, BackendKind, DropHeaders, SetFields};
 use crate::credential::{self, CredentialError, CredentialSource};
 use crate::openai::SystemPlacement;
 
@@ -23,6 +23,8 @@ pub struct Backend {
     pub drop_headers: DropHeaders,
     /// Body paths removed before forwarding.
     pub drop_fields: Vec<String>,
+    /// Body fields set in what the backend receives.
+    pub set_fields: SetFields,
     /// `kind = "openai"`: where a mid-conversation system message goes.
     pub mid_conversation_system: SystemPlacement,
     /// `kind = "passthrough"`: send the client's `Authorization` / `x-api-key`.
@@ -62,6 +64,7 @@ impl Backend {
             anthropic_beta: config.anthropic_beta.clone(),
             drop_headers: DropHeaders::new(&config.drop_headers),
             drop_fields: config.drop_fields.clone(),
+            set_fields: SetFields::new(&config.set_fields),
             mid_conversation_system: config.mid_conversation_system,
             forwards_client_auth: config.kind == BackendKind::Passthrough,
             live_models: config.kind == BackendKind::Passthrough || config.live_models,

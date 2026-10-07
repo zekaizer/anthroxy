@@ -518,6 +518,111 @@ upstream_model = "up\nbreak"
 }
 
 #[test]
+fn set_fields_take_values_of_any_json_shape() {
+    let text = format!(
+        r#"{MINIMAL}
+[backends.local.set_fields]
+"extraData.clientVersion" = "${{CLIENT_VERSION}}"
+"extraData.sessionId" = "cc-{{header:x-claude-code-session-id}}"
+"chat_template_kwargs.enable_thinking" = false
+stop_token_ids = [1, 2]
+"#
+    );
+    let c = Config::parse(&text, |name| {
+        (name == "CLIENT_VERSION").then(|| "1.2.3".to_owned())
+    })
+    .unwrap();
+    let fields = &c.backends["local"].set_fields;
+    assert_eq!(
+        fields["extraData.clientVersion"].as_str(),
+        Some("1.2.3"),
+        "${{NAME}} is expanded at load"
+    );
+    assert_eq!(
+        fields["extraData.sessionId"].as_str(),
+        Some("cc-{header:x-claude-code-session-id}"),
+        "a placeholder is kept for the request"
+    );
+    assert_eq!(
+        fields["chat_template_kwargs.enable_thinking"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(fields["stop_token_ids"].as_array().unwrap().len(), 2);
+    assert!(
+        parse(MINIMAL).unwrap().backends["local"]
+            .set_fields
+            .is_empty()
+    );
+}
+
+#[test]
+fn validation_rejects_unusable_set_fields() {
+    let text = r#"
+[server]
+token = "t"
+
+[backends.a]
+url = "http://a"
+
+[backends.a.set_fields]
+"ok.field" = "fine"
+"a..b" = 1
+model = "other"
+"stream.x" = true
+weight = nan
+"who" = "{header:authorization}"
+"open" = ["{header:x-session"]
+"extra" = 1
+"extra.inner" = 2
+
+[[models]]
+id = "m"
+backend = "a"
+"#;
+    let p = problems(text);
+    let joined = p.join("\n");
+    for expected in [
+        "backends.a.set_fields: `a..b`: the path has an empty segment",
+        "backends.a.set_fields: `model`: `model` is read by the router and cannot be set",
+        "backends.a.set_fields: `stream.x`: `stream` is read by the router and cannot be set",
+        "backends.a.set_fields: `weight`: a number that is not finite has no JSON form",
+        "backends.a.set_fields: `who`: `{header:authorization}` would send the client's credential to the backend",
+        "backends.a.set_fields: `open`: `{header:` is not closed by `}`",
+        "backends.a.set_fields: `extra` and `extra.inner` set the same field",
+    ] {
+        assert!(
+            joined.contains(expected),
+            "missing `{expected}` in:\n{joined}"
+        );
+    }
+    assert_eq!(p.len(), 7, "{joined}");
+}
+
+#[test]
+fn passthrough_takes_no_set_fields() {
+    let text = r#"
+[server]
+token = "t"
+v1_auth = "none"
+listen = "127.0.0.1:8787"
+
+[backends.account]
+kind = "passthrough"
+url = "https://api.anthropic.com"
+
+[backends.account.set_fields]
+"metadata.source" = "router"
+"#;
+    let joined = problems(text).join("\n");
+    assert!(
+        joined.contains(
+            "backends.account: kind = \"passthrough\" relays the request unmodified; drop_fields, set_fields, headers and anthropic_beta are not applied"
+        ),
+        "{joined}"
+    );
+}
+
+#[test]
 fn validation_rejects_unusable_drop_fields() {
     let text = r#"
 [server]

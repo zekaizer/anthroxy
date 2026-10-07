@@ -164,6 +164,43 @@ async fn a_model_mid_conversation_system_overrides_the_backend() {
 }
 
 #[tokio::test]
+async fn set_fields_are_set_in_the_chat_completions_body() {
+    let upstream =
+        MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))
+            .await;
+    let config = config_with_openai_backend(&upstream.url(), "").replace(
+        "kind = \"openai\"",
+        r#"kind = "openai"
+set_fields = { "extraData.clientVersion" = "1.2.3", "extraData.sessionId" = "{header:x-claude-code-session-id}", "chat_template_kwargs.enable_thinking" = false, user = "gateway-user" }"#,
+    );
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(false))
+        .header("x-claude-code-session-id", "e96634a3-fa28")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    let sent = upstream.last();
+    assert_eq!(sent.path_and_query, "/v1/chat/completions");
+    let sent = sent.json();
+    assert_eq!(
+        sent["extraData"],
+        json!({"clientVersion": "1.2.3", "sessionId": "e96634a3-fa28"})
+    );
+    assert_eq!(
+        sent["chat_template_kwargs"],
+        json!({"enable_thinking": false})
+    );
+    assert_eq!(
+        sent["user"], "gateway-user",
+        "over what the translation wrote from metadata.user_id"
+    );
+    assert_eq!(sent["model"], "qwen-32b");
+    assert_eq!(sent["messages"][0]["role"], "system");
+}
+
+#[tokio::test]
 async fn drop_fields_apply_before_translation() {
     let upstream =
         MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))

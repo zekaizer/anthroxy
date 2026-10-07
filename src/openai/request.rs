@@ -22,7 +22,9 @@ pub enum SystemPlacement {
     User,
 }
 
-pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
+/// The body as a document: the caller writes it out, once it has set what the
+/// backend's configuration adds.
+pub fn encode(request: &Request, placement: SystemPlacement) -> Map<String, Value> {
     let mut messages = Vec::new();
     let mut system = request.system.clone().unwrap_or_default();
     if placement == SystemPlacement::Merge {
@@ -113,7 +115,7 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Vec<u8> {
     if request.stream {
         body.insert("stream_options".into(), json!({"include_usage": true}));
     }
-    serde_json::to_vec(&Value::Object(body)).expect("a JSON tree serializes")
+    body
 }
 
 /// A user message yields one `tool` message per tool result, then one

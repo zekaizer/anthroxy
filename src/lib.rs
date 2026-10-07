@@ -6,6 +6,7 @@
 
 pub mod activity;
 pub mod anthropic;
+pub mod body_field;
 pub mod build_info;
 pub mod cli;
 pub mod config;

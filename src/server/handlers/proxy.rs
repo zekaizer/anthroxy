@@ -187,15 +187,23 @@ async fn handle(
         body_bytes = body.len(),
         "routed"
     );
-    // The translated body names the upstream model itself; only a relayed
-    // body needs the rename here.
+    let set_fields = backend.set_fields.resolve(&parts.headers);
+    // The translated body names the upstream model itself and takes
+    // `set_fields` once it is written; only a relayed body needs either here.
     let anthropic_kind = backend.kind == BackendKind::Anthropic;
     let body = if backend.kind == BackendKind::Passthrough {
         body
     } else {
         let rename = (anthropic_kind && requested_model != route.upstream_model)
             .then_some(route.upstream_model.as_str());
-        match anthropic::rewrite(&body, rename, &backend.drop_fields, anthropic_kind)? {
+        let relayed_fields: &[_] = if anthropic_kind { &set_fields } else { &[] };
+        match anthropic::rewrite(
+            &body,
+            rename,
+            &backend.drop_fields,
+            relayed_fields,
+            anthropic_kind,
+        )? {
             Some(rewritten) => Bytes::from(rewritten),
             None => body,
         }
@@ -214,6 +222,7 @@ async fn handle(
             &backend.name,
             &route.upstream_model,
             route.mid_conversation_system,
+            &set_fields,
         )?,
     };
     let headers = upstream_headers(&parts.headers, backend);

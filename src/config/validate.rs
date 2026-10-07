@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::set_fields;
 use super::view::redacted_url;
 use super::{
     BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, Template,
@@ -152,6 +153,21 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
         }
+        for (path, value) in &backend.set_fields {
+            if let Err(problem) = set_fields::check(path, value) {
+                problems.push(format!(
+                    "backends.{name}.set_fields: `{}`: {problem}",
+                    short(path)
+                ));
+            }
+        }
+        for (outer, inner) in set_fields::overlaps(backend.set_fields.keys()) {
+            problems.push(format!(
+                "backends.{name}.set_fields: `{}` and `{}` set the same field",
+                short(outer),
+                short(inner)
+            ));
+        }
         if backend.kind != BackendKind::OpenAi
             && backend.mid_conversation_system != SystemPlacement::Keep
         {
@@ -171,11 +187,12 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
             if !backend.drop_fields.is_empty()
+                || !backend.set_fields.is_empty()
                 || !backend.headers.is_empty()
                 || !backend.anthropic_beta.is_empty()
             {
                 problems.push(format!(
-                    "backends.{name}: kind = \"passthrough\" relays the request unmodified; drop_fields, headers and anthropic_beta are not applied"
+                    "backends.{name}: kind = \"passthrough\" relays the request unmodified; drop_fields, set_fields, headers and anthropic_beta are not applied"
                 ));
             }
         }
