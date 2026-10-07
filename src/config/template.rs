@@ -133,6 +133,23 @@ mod tests {
     }
 
     #[test]
+    fn text_of_any_script_surrounds_a_placeholder() {
+        let headers = [("x-session", "abc")];
+        assert_eq!(
+            render("세션-{header:x-session}-끝 {header:x-session}é", &headers).as_deref(),
+            Some("세션-abc-끝 abcé")
+        );
+        assert_eq!(
+            Template::parse("한{header:세션}"),
+            Err(TemplateError::NotAHeaderName("세션".into()))
+        );
+        assert_eq!(
+            Template::parse("é{header:x-a}é{header:"),
+            Err(TemplateError::Unterminated)
+        );
+    }
+
+    #[test]
     fn a_repeated_client_header_gives_its_first_value() {
         assert_eq!(
             render("{header:x-app}", &[("x-app", "one"), ("x-app", "two")]).as_deref(),
