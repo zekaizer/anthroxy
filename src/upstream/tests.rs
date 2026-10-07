@@ -229,6 +229,23 @@ fn a_forced_header_with_nothing_to_read_is_not_sent_and_neither_is_the_client_s(
 }
 
 #[test]
+fn a_backend_shown_for_debugging_keeps_its_forced_header_values_out() {
+    let backend = backend_forcing(
+        &[
+            ("x-client-api-key", "llm_secret-value"),
+            ("x-session-id", "cc-secret-prefix-{header:x-session}"),
+        ],
+        &[],
+    );
+    let shown = format!("{backend:?}");
+    for secret in ["llm_secret-value", "cc-secret-prefix"] {
+        assert!(!shown.contains(secret), "`{secret}` in {shown}");
+    }
+    assert!(shown.contains("x-client-api-key"), "{shown}");
+    assert!(shown.contains("x-session-id"), "{shown}");
+}
+
+#[test]
 fn upstream_headers_drop_what_the_backend_named() {
     let backend = backend_with_drops(&["x-stainless-*", "User-Agent"]);
     let out = upstream_headers(&client_headers(), &backend);

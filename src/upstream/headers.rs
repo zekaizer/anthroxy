@@ -30,8 +30,18 @@ pub fn header_value(text: &str) -> HeaderValue {
 
 /// Headers a backend forces onto every upstream request. A value may read the
 /// client's request (ADR-0019).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ForcedHeaders(Vec<(HeaderName, Template)>);
+
+/// Names only: a forced value may be a key, and what it is written with is
+/// most of one.
+impl std::fmt::Debug for ForcedHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.iter().map(|(name, _)| (name.as_str(), REDACTED)))
+            .finish()
+    }
+}
 
 impl ForcedHeaders {
     /// Assumes `config` passed validation (names, values and placeholders).
