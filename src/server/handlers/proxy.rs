@@ -325,6 +325,7 @@ async fn handle(
         // Hints are read from the prefix the exchange keeps, so no error body
         // can grow a hint past that.
         let text = String::from_utf8_lossy(&raw[..raw.len().min(ERROR_BODY_BYTES)]);
+        let set_paths = backend.set_fields.paths();
         note(exchange, |e| {
             e.upstream_error(
                 &raw,
@@ -333,6 +334,7 @@ async fn handle(
                     kind: backend.kind,
                     upstream_model: &route.upstream_model,
                     drop_fields: &backend.drop_fields,
+                    set_fields: &set_paths,
                     status: status.as_u16(),
                     body: &text,
                 }),

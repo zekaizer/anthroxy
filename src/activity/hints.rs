@@ -20,12 +20,15 @@ pub struct UpstreamFailure<'a> {
     pub upstream_model: &'a str,
     /// The backend's configured `drop_fields`.
     pub drop_fields: &'a [String],
+    /// The paths of the backend's configured `set_fields`.
+    pub set_fields: &'a [String],
     pub status: u16,
     pub body: &'a str,
 }
 
 pub fn hints(failure: &UpstreamFailure<'_>) -> Vec<Hint> {
     let mut hints = Vec::new();
+    hints.extend(set_fields_hint(failure));
     // An `openai` backend receives the router's translation, not the client's
     // fields, so dropping a field of the client request would not reach it.
     if failure.kind == BackendKind::Anthropic {
@@ -65,13 +68,56 @@ pub fn hints(failure: &UpstreamFailure<'_>) -> Vec<Hint> {
 /// Fields a hint names at most; an error body can list any number.
 pub const MAX_REJECTED_FIELDS: usize = 16;
 
+/// Whether `field` is one the backend's `set_fields` puts in the body: a
+/// configured path, an object on the way to one, or something inside one.
+/// `drop_fields` runs first, so it cannot take such a field out.
+fn set_by_backend(failure: &UpstreamFailure<'_>, field: &str) -> bool {
+    let inside = |outer: &str, inner: &str| {
+        inner
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    };
+    failure
+        .set_fields
+        .iter()
+        .any(|path| inside(path, field) || inside(field, path))
+}
+
+fn set_fields_hint(failure: &UpstreamFailure<'_>) -> Option<Hint> {
+    let mut fields: Vec<String> = Vec::new();
+    for field in rejected_fields(failure.body) {
+        if fields.len() == MAX_REJECTED_FIELDS {
+            break;
+        }
+        if set_by_backend(failure, &field) && !fields.contains(&field) {
+            fields.push(field);
+        }
+    }
+    if fields.is_empty() {
+        return None;
+    }
+    let named: Vec<String> = fields.iter().map(|f| format!("`{f}`")).collect();
+    Some(Hint {
+        summary: format!(
+            "backend `{}` rejects the request field(s) {}, which its `set_fields` puts there; take them out of `set_fields`",
+            failure.backend,
+            named.join(", ")
+        ),
+        snippet: None,
+    })
+}
+
 fn drop_fields_hint(failure: &UpstreamFailure<'_>) -> Option<Hint> {
     let mut fields: Vec<String> = Vec::new();
     for field in rejected_fields(failure.body) {
         if fields.len() == MAX_REJECTED_FIELDS {
             break;
         }
-        if field != "model" && !failure.drop_fields.contains(&field) && !fields.contains(&field) {
+        if field != "model"
+            && !failure.drop_fields.contains(&field)
+            && !set_by_backend(failure, &field)
+            && !fields.contains(&field)
+        {
             fields.push(field);
         }
     }
@@ -209,6 +255,7 @@ mod tests {
             kind: BackendKind::Anthropic,
             upstream_model: "Qwen/Qwen3.5-32B",
             drop_fields,
+            set_fields: &[],
             status,
             body,
         }
@@ -276,6 +323,33 @@ drop_fields = ["metadata.user_id", "context_management", "metadata.trace"]"#]
             hints(&openai).is_empty(),
             "the router wrote that body, not Claude Code"
         );
+    }
+
+    #[test]
+    fn a_rejected_field_the_backend_sets_itself_is_not_one_to_drop() {
+        let body = r#"{"detail":[{"type":"extra_forbidden","loc":["body","extraData"],"msg":"Extra inputs are not permitted"},{"type":"extra_forbidden","loc":["body","context_management"],"msg":"Extra inputs are not permitted"},{"type":"extra_forbidden","loc":["body","flags","debug"],"msg":"Extra inputs are not permitted"}]}"#;
+        let set = vec!["extraData.sessionId".to_owned(), "flags".to_owned()];
+        let mut failure = failure(400, body, &[]);
+        failure.set_fields = &set;
+        let hints = hints(&failure);
+        assert_eq!(hints.len(), 2, "{hints:?}");
+        assert_eq!(
+            hints[0].summary,
+            "backend `vllm` rejects the request field(s) `extraData`, `flags.debug`, which its `set_fields` puts there; take them out of `set_fields`"
+        );
+        assert_eq!(hints[0].snippet, None);
+        assert_eq!(
+            snippets(&hints),
+            ["[backends.vllm]\ndrop_fields = [\"context_management\"]"],
+            "dropping cannot remove what is set after the drop"
+        );
+
+        // The translated body carries them too, so an `openai` backend gets
+        // this hint, and still none about dropping.
+        failure.kind = BackendKind::OpenAi;
+        let hints = super::hints(&failure);
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert!(hints[0].summary.contains("`set_fields`"), "{hints:?}");
     }
 
     #[test]
