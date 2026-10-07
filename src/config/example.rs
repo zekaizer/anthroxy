@@ -145,9 +145,13 @@ credential = { kind = "none" }
 # proxy = "http://proxy.corp:3128"
 # # Beta flags merged into the client's anthropic-beta header.
 # anthropic_beta = ["oauth-2025-04-20"]
-# # Headers forced on every request to this backend.
+# # Headers forced on every request to this backend. `{header:<name>}` is
+# # replaced with what the client sent under that header, so a value can
+# # travel under the name a gateway reads; when the client sent none, the
+# # forced header is left out.
 # [backends.claude.headers]
 # "anthropic-version" = "2023-06-01"
+# "x-session-id" = "cc-{header:x-claude-code-session-id}"
 
 # ---------------------------------------------------------------------------
 # Models: what Claude Code sees, in picker order.

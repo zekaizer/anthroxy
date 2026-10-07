@@ -155,6 +155,57 @@ upstream_model = "mock-fast-v1"
 }
 
 #[tokio::test]
+async fn a_backend_header_carries_what_the_client_sent_under_another_name() {
+    let upstream = MockUpstream::start(echo).await;
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "{TOKEN}"
+
+[backends.gateway]
+url = "{}"
+drop_headers = ["@claude-code"]
+
+[backends.gateway.headers]
+"x-session-id" = "cc-{{header:x-claude-code-session-id}}"
+"x-client" = "anthroxy"
+
+[[models]]
+id = "fast"
+backend = "gateway"
+"#,
+        upstream.url()
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .header("x-claude-code-session-id", "e96634a3-fa28")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let seen = upstream.last();
+    assert_eq!(seen.header("x-session-id"), Some("cc-e96634a3-fa28"));
+    assert_eq!(seen.header("x-client"), Some("anthroxy"));
+    assert_eq!(seen.header("x-claude-code-session-id"), None);
+
+    // No session header to read: the backend gets no half-filled value, and
+    // not the client's own either.
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .header("x-session-id", "from-client")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let seen = upstream.last();
+    assert_eq!(seen.header("x-session-id"), None);
+    assert_eq!(seen.header("x-client"), Some("anthroxy"));
+}
+
+#[tokio::test]
 async fn forwards_messages_with_rewritten_model_and_backend_credential() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

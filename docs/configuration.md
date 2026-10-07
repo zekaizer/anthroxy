@@ -103,6 +103,19 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   The `anthropic-beta` header is left alone. Claude Code's own
   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is the client-side alternative, but
   it applies to every backend in the session.
+- `headers` sets headers on every request to that backend, replacing whatever
+  the client sent under the same name. A value may contain `{header:<name>}`,
+  which is replaced per request with the value the client sent under that
+  header, read before `drop_headers` applies; text around it is kept, so
+  `"x-session-id" = "cc-{header:x-claude-code-session-id}"` hands a gateway the
+  session under the name and shape it reads. When the client sent no such
+  header, or an empty one, the forced header is left out, and the client's own
+  value under its name is not sent either. `authorization`, `x-api-key` and
+  `proxy-authorization` cannot be named: they carry the client's credential. A
+  request the router makes on its own (the probe of `check` and the console)
+  has no client behind it, so a value with a placeholder is absent from it.
+  Forced values are shown as `<redacted>` wherever headers are reported. See
+  ADR-0019.
 - `live_models = true` fetches `GET {url}{models_path}` and publishes those ids
   as Anthropic model identity (`id`, `display_name`, `created_at`). Anthropic
   and OpenAI list JSON both work (ADR-0017). `kind = "passthrough"` always does

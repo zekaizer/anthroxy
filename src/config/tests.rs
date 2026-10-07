@@ -339,6 +339,43 @@ fn backend_headers_cannot_take_over_the_connection() {
 }
 
 #[test]
+fn a_backend_header_may_read_the_client_request() {
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"x-session-id\" = \"cc-{{header:x-claude-code-session-id}}\"\n"
+    );
+    let c = parse(&text).unwrap();
+    assert_eq!(
+        c.backends["local"].headers["x-session-id"], "cc-{header:x-claude-code-session-id}",
+        "kept as written: it is filled in per request"
+    );
+}
+
+#[test]
+fn a_backend_header_placeholder_must_be_one_the_router_can_fill() {
+    let text = format!(
+        r#"{MINIMAL}
+[backends.local.headers]
+"x-open" = "cc-{{header:x-session"
+"x-name" = "{{header:x session}}"
+"x-token" = "{{header:Authorization}}"
+"x-key" = "{{header:x-api-key}}"
+"#
+    );
+    let joined = problems(&text).join("\n");
+    for expected in [
+        "backends.local.headers: `x-open`: `{header:` is not closed by `}`",
+        "backends.local.headers: `x-name`: `{header:x session}` does not name a header",
+        "backends.local.headers: `x-token`: `{header:authorization}` would send the client's credential to the backend",
+        "backends.local.headers: `x-key`: `{header:x-api-key}` would send the client's credential to the backend",
+    ] {
+        assert!(
+            joined.contains(expected),
+            "missing `{expected}` in:\n{joined}"
+        );
+    }
+}
+
+#[test]
 fn names_that_are_empty_are_rejected_wherever_they_appear() {
     let cases = [
         ("\n[backends.\"\"]\nurl = \"http://a\"\n", "backends:"),

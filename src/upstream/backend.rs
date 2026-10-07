@@ -1,5 +1,4 @@
-use http::{HeaderMap, HeaderName, HeaderValue};
-
+use super::headers::ForcedHeaders;
 use crate::config::{BackendConfig, BackendKind, DropHeaders};
 use crate::credential::{self, CredentialError, CredentialSource};
 use crate::openai::SystemPlacement;
@@ -16,8 +15,8 @@ pub struct Backend {
     /// Path the probe fetches the model list from.
     pub models_path: String,
     pub credential: Box<dyn CredentialSource>,
-    /// Headers forced onto every upstream request, values marked sensitive.
-    pub headers: HeaderMap,
+    /// Headers forced onto every upstream request.
+    pub headers: ForcedHeaders,
     /// Beta flags merged into `anthropic-beta`.
     pub anthropic_beta: Vec<String>,
     /// Client headers this backend never sees.
@@ -53,20 +52,13 @@ impl Backend {
                 backend: name.to_owned(),
                 source,
             })?;
-        let mut headers = HeaderMap::new();
-        for (key, value) in &config.headers {
-            let key = HeaderName::from_bytes(key.as_bytes()).expect("validated header name");
-            let mut value = HeaderValue::from_str(value).expect("validated header value");
-            value.set_sensitive(true);
-            headers.insert(key, value);
-        }
         Ok(Self {
             name: name.to_owned(),
             kind: config.kind,
             url: config.url.clone(),
             models_path: config.models_path.clone(),
             credential,
-            headers,
+            headers: ForcedHeaders::new(&config.headers),
             anthropic_beta: config.anthropic_beta.clone(),
             drop_headers: DropHeaders::new(&config.drop_headers),
             drop_fields: config.drop_fields.clone(),

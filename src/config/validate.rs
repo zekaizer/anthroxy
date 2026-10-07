@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::view::redacted_url;
 use super::{
-    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, V1Auth,
-    origin,
+    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, Template,
+    V1Auth, origin,
 };
 use crate::openai::SystemPlacement;
 use crate::text::short;
@@ -130,6 +130,11 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             } else if http::HeaderValue::from_str(value).is_err() {
                 problems.push(format!(
                     "backends.{name}.headers: `{}` has a value that cannot be sent in a header",
+                    short(header)
+                ));
+            } else if let Err(problem) = Template::parse(value) {
+                problems.push(format!(
+                    "backends.{name}.headers: `{}`: {problem}",
                     short(header)
                 ));
             }

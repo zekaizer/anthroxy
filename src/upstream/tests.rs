@@ -54,6 +54,29 @@ fn backend_with_drops(drops: &[&str]) -> Backend {
     .unwrap()
 }
 
+fn backend_forcing(headers: &[(&str, &str)], drops: &[&str]) -> Backend {
+    Backend::from_config(
+        "b",
+        &BackendConfig {
+            kind: BackendKind::Anthropic,
+            url: "http://backend".into(),
+            models_path: BackendConfig::default_models_path(),
+            live_models: false,
+            credential: CredentialConfig::None,
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            anthropic_beta: Vec::new(),
+            drop_headers: drops.iter().map(|s| s.to_string()).collect(),
+            drop_fields: Vec::new(),
+            mid_conversation_system: Default::default(),
+            proxy: None,
+        },
+    )
+    .unwrap()
+}
+
 fn client_headers() -> HeaderMap {
     let mut h = HeaderMap::new();
     for (k, v) in [
@@ -151,6 +174,55 @@ fn upstream_headers_apply_backend_overrides() {
         "backend header overrides client"
     );
     assert_eq!(out["x-extra"], "1");
+}
+
+#[test]
+fn a_forced_header_reads_the_client_request_as_it_arrived() {
+    let mut client = client_headers();
+    client.append(
+        "x-claude-code-session-id",
+        HeaderValue::from_static("abc-123"),
+    );
+    let backend = backend_forcing(
+        &[
+            ("x-session-id", "cc-{header:x-claude-code-session-id}"),
+            ("x-agent", "{header:user-agent}"),
+        ],
+        &["@claude-code", "user-agent"],
+    );
+    let out = upstream_headers(&client, &backend);
+    assert_eq!(out["x-session-id"], "cc-abc-123");
+    assert!(out["x-session-id"].is_sensitive());
+    assert_eq!(
+        out["x-agent"], "claude-cli/2.0",
+        "a dropped header can still be read"
+    );
+    assert!(out.get("x-claude-code-session-id").is_none(), "{out:?}");
+    assert!(out.get("user-agent").is_none(), "{out:?}");
+}
+
+#[test]
+fn a_forced_header_with_nothing_to_read_is_not_sent_and_neither_is_the_client_s() {
+    let mut client = client_headers();
+    client.append("x-session-id", HeaderValue::from_static("from-client"));
+    let backend = backend_forcing(
+        &[("x-session-id", "{header:x-claude-code-session-id}")],
+        &[],
+    );
+    let out = upstream_headers(&client, &backend);
+    assert!(out.get("x-session-id").is_none(), "{out:?}");
+
+    let dropped = dropped_headers(&client, &backend);
+    let entry = dropped
+        .iter()
+        .find(|h| h.name == "x-session-id")
+        .expect("reported");
+    assert_eq!(
+        (entry.value.as_str(), entry.reason),
+        ("from-client", DropReason::Overridden)
+    );
+    let sent = sent_headers(&backend, &out, None, 0, SecretView::Redacted);
+    assert!(sent.iter().all(|h| h.name != "x-session-id"), "{sent:?}");
 }
 
 #[test]
