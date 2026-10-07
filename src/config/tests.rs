@@ -586,6 +586,9 @@ weight = nan
 "open" = ["{header:x-session"]
 "extra" = 1
 "extra.inner" = 2
+twice = { over = 1 }
+"twice.over" = 2
+stream = { options = 1 }
 
 [[models]]
 id = "m"
@@ -601,13 +604,15 @@ backend = "a"
         "backends.a.set_fields: `who`: `{header:authorization}` would send the client's credential to the backend",
         "backends.a.set_fields: `open`: `{header:` is not closed by `}`",
         "backends.a.set_fields: `extra` and `extra.inner` set the same field",
+        "backends.a.set_fields: `twice.over` and `twice.over` set the same field",
+        "backends.a.set_fields: `stream.options`: `stream` is read by the router and cannot be set",
     ] {
         assert!(
             joined.contains(expected),
             "missing `{expected}` in:\n{joined}"
         );
     }
-    assert_eq!(p.len(), 7, "{joined}");
+    assert_eq!(p.len(), 9, "{joined}");
 }
 
 #[test]

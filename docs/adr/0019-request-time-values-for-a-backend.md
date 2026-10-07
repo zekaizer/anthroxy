@@ -64,9 +64,13 @@ Body fields:
   the router forwards to it, after `drop_fields`, and replaces what is at the
   path. An object missing on the way is created; a step that is not an object
   is replaced by one.
-- A value is whatever JSON can hold, written in TOML. A string in it, at any
-  depth, takes placeholders; when one cannot be filled, that field is left out
-  whole and the other fields are still set.
+- A table is the paths of its entries. TOML reads an unquoted `a.b = 1` as a
+  table inside `a`, so that, `a = { b = 1 }` and `"a.b" = 1` set the same one
+  field; were a table a value, the first would replace all of `a` and the last
+  would not. An empty table, and a table inside an array, are values.
+- A value is whatever else JSON can hold, written in TOML. A string in it, at
+  any depth, takes placeholders; when one cannot be filled, that field is left
+  out whole and the other fields are still set.
 - The body is the one the backend reads. For a `kind = "openai"` backend that
   is the Chat Completions document, written from the IR and then given these
   fields, so its paths name Chat Completions fields; `drop_fields` still names

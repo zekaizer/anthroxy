@@ -166,7 +166,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
         }
-        for (path, value) in &backend.set_fields {
+        let fields = set_fields::leaves(&backend.set_fields);
+        for (path, value) in &fields {
             if let Err(problem) = set_fields::check(path, value) {
                 problems.push(format!(
                     "backends.{name}.set_fields: `{}`: {problem}",
@@ -174,7 +175,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 ));
             }
         }
-        for (outer, inner) in set_fields::overlaps(backend.set_fields.keys()) {
+        for (outer, inner) in set_fields::overlaps(fields.iter().map(|(path, _)| path)) {
             problems.push(format!(
                 "backends.{name}.set_fields: `{}` and `{}` set the same field",
                 short(outer),

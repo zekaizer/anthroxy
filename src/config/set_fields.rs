@@ -84,7 +84,30 @@ impl Node {
     }
 }
 
-/// Whether `path` and `value` are an entry the router can apply.
+/// Every field `config` sets, by path. A table is the paths of its entries:
+/// TOML reads an unquoted `a.b = 1` as a table inside `a`, and that, `a = { b
+/// = 1 }` and `"a.b" = 1` have to set the same one field. An empty table and
+/// whatever is inside an array are values.
+pub fn leaves(config: &BTreeMap<String, toml::Value>) -> Vec<(String, &toml::Value)> {
+    fn walk<'a>(path: String, value: &'a toml::Value, out: &mut Vec<(String, &'a toml::Value)>) {
+        match value {
+            toml::Value::Table(table) if !table.is_empty() => {
+                for (key, value) in table {
+                    walk(format!("{path}.{key}"), value, out);
+                }
+            }
+            _ => out.push((path, value)),
+        }
+    }
+    let mut out = Vec::new();
+    for (key, value) in config {
+        walk(key.clone(), value, &mut out);
+    }
+    out
+}
+
+/// Whether `path` and `value`, one of [`leaves`], are a field the router can
+/// set.
 pub fn check(path: &str, value: &toml::Value) -> Result<(), FieldError> {
     if path.split('.').any(str::is_empty) {
         return Err(FieldError::EmptySegment);
@@ -96,17 +119,18 @@ pub fn check(path: &str, value: &toml::Value) -> Result<(), FieldError> {
     Node::compile(value).map(drop)
 }
 
-/// Every two of `paths` where the second names a field inside the first:
-/// whichever is set last would undo the other.
+/// Every two of `paths` where the second names the first's field or one
+/// inside it: whichever is set last would undo the other.
 pub fn overlaps<'a>(paths: impl IntoIterator<Item = &'a String>) -> Vec<(&'a str, &'a str)> {
     let paths: Vec<&str> = paths.into_iter().map(String::as_str).collect();
     let mut found = Vec::new();
-    for outer in &paths {
-        for inner in &paths {
-            if inner
+    for (at, outer) in paths.iter().enumerate() {
+        for (other, inner) in paths.iter().enumerate() {
+            let same = inner == outer && at < other;
+            let inside = inner
                 .strip_prefix(outer)
-                .is_some_and(|rest| rest.starts_with('.'))
-            {
+                .is_some_and(|rest| rest.starts_with('.'));
+            if same || inside {
                 found.push((*outer, *inner));
             }
         }
@@ -115,11 +139,11 @@ pub fn overlaps<'a>(paths: impl IntoIterator<Item = &'a String>) -> Vec<(&'a str
 }
 
 impl SetFields {
-    /// Assumes every entry of `config` passed [`check`].
+    /// Assumes every one of `config`'s [`leaves`] passed [`check`].
     pub fn new(config: &BTreeMap<String, toml::Value>) -> Self {
         Self(
-            config
-                .iter()
+            leaves(config)
+                .into_iter()
                 .map(|(path, value)| {
                     (
                         path.split('.').map(str::to_owned).collect(),
@@ -134,7 +158,7 @@ impl SetFields {
         self.0.is_empty()
     }
 
-    /// The configured paths, as written.
+    /// The path of every field set.
     pub fn paths(&self) -> Vec<String> {
         self.0.iter().map(|(path, _)| path.join(".")).collect()
     }
@@ -201,7 +225,8 @@ since = 1979-05-27T07:32:00Z
                     "chat_template_kwargs.enable_thinking".to_owned(),
                     json!(false)
                 ),
-                ("extra".to_owned(), json!({"a": "x", "b": [{"c": 1}]})),
+                ("extra.a".to_owned(), json!("x")),
+                ("extra.b".to_owned(), json!([{"c": 1}])),
                 ("extraData.clientVersion".to_owned(), json!("1.2.3")),
                 ("penalty".to_owned(), json!(1.5)),
                 ("since".to_owned(), json!("1979-05-27T07:32:00Z")),
@@ -229,9 +254,36 @@ meta = { agent = "{header:user-agent}" }
             ),
             [
                 ("extraData.sessionId".to_owned(), json!("cc-abc")),
-                ("meta".to_owned(), json!({"agent": "claude-cli/2.0"})),
+                ("meta.agent".to_owned(), json!("claude-cli/2.0")),
                 ("tags".to_owned(), json!(["fixed", "cli"])),
             ]
+        );
+    }
+
+    #[test]
+    fn a_table_is_the_paths_of_its_entries() {
+        // TOML reads an unquoted `metadata.user_id` as a table inside
+        // `metadata`; the three spellings must set the same one field.
+        for text in [
+            "metadata.user_id = \"u\"",
+            "metadata = { user_id = \"u\" }",
+            "\"metadata.user_id\" = \"u\"",
+            "[metadata]\nuser_id = \"u\"",
+        ] {
+            assert_eq!(
+                resolved(text, &[]),
+                [("metadata.user_id".to_owned(), json!("u"))],
+                "{text}"
+            );
+        }
+        assert_eq!(
+            resolved("a = { b = { c = 1, d = {} }, e = [{ f = {} }] }", &[]),
+            [
+                ("a.b.c".to_owned(), json!(1)),
+                ("a.b.d".to_owned(), json!({})),
+                ("a.e".to_owned(), json!([{"f": {}}])),
+            ],
+            "an empty table and a table inside an array are values"
         );
     }
 
@@ -289,6 +341,11 @@ tags = ["fixed", "{header:x-app}"]
         assert_eq!(
             overlaps(&paths(&["a", "a-b", "a.b", "a.b.c"])),
             [("a", "a.b"), ("a", "a.b.c"), ("a.b", "a.b.c")]
+        );
+        assert_eq!(
+            overlaps(&paths(&["a.b", "x", "a.b"])),
+            [("a.b", "a.b")],
+            "two spellings of one path"
         );
     }
 }

@@ -222,6 +222,7 @@ drop_fields = ["metadata"]
 "extraData.clientVersion" = "1.2.3"
 "extraData.sessionId" = "cc-{{header:x-claude-code-session-id}}"
 "metadata.user_id" = "gateway-user"
+future_field.added = true
 
 [[models]]
 id = "fast"
@@ -250,7 +251,11 @@ upstream_model = "mock-fast-v1"
         "set after the drop, over what the client sent"
     );
     assert_eq!(sent["model"], "mock-fast-v1");
-    assert_eq!(sent["future_field"]["nested"], json!([1, 2, 3]));
+    assert_eq!(
+        sent["future_field"],
+        json!({"nested": [1, 2, 3], "added": true}),
+        "an unquoted dotted key sets one field, beside what the client sent"
+    );
 
     // `count_tokens` is a proxied body like any other.
     let res = router

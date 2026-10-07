@@ -106,20 +106,23 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   it applies to every backend in the session.
 - `set_fields` sets fields in the request body that backend receives, by the
   same dot-separated paths as `drop_fields`. Objects on the way are created,
-  and a step that is not an object is replaced by one. A value is any TOML
-  value JSON can hold: a string, number, boolean, array or table (a date is
-  sent as its text). A string in it, at any depth, may contain
-  `{header:<name>}` exactly as in `headers` below; a field whose value names a
-  header the client did not send is left out whole, and the other fields are
-  still set. It applies after `drop_fields` and replaces what the client sent
-  at that path. On a `kind = "openai"` backend the paths name fields of the
+  and a step that is not an object is replaced by one. A table is the paths of
+  its entries: `metadata.user_id = "u"`, `metadata = { user_id = "u" }` and
+  `"metadata.user_id" = "u"` are one spelling, and each sets that one field
+  beside whatever else `metadata` holds. A value is anything else JSON can
+  hold: a string, number, boolean or array (a date is sent as its text; an
+  empty table is an empty object, and a table inside an array is an object set
+  whole). A string in it, at any depth, may contain `{header:<name>}` exactly
+  as in `headers` below; a field whose value names a header the client did not
+  send is left out whole, and the other fields are still set. It applies after
+  `drop_fields` and replaces what the client sent at that path. On a `kind = "openai"` backend the paths name fields of the
   Chat Completions body, since that is the body the backend receives, while
   `drop_fields` there still names fields of the Messages body. `model` and
-  `stream` cannot be set, because the router reads them, and no path may lie
-  inside another. The values are not secrets: the console shows them and the
-  body log holds them as sent, so a credential belongs in `credential` or
-  `headers`. For a gateway that wants each request to say which session it
-  belongs to:
+  `stream` cannot be set, because the router reads them, and no path may be
+  named twice or lie inside another. The values are not secrets: the console
+  shows them and the body log holds them as sent, so a credential belongs in
+  `credential` or `headers`. For a gateway that wants each request to say
+  which session it belongs to:
 
   ```toml
   [backends.gateway.set_fields]
