@@ -274,6 +274,65 @@ body_dir = "{}"
     );
 }
 
+/// What the configuration read off the client's request is recorded as
+/// sent: a forced header as a secret, a body field as part of the body.
+#[tokio::test]
+async fn the_recording_holds_what_a_placeholder_became() {
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = format!(
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = "router-test-token"
+
+[backends.mock]
+url = "{}"
+headers = {{ "x-session-id" = "gw-secret-{{header:x-claude-code-session-id}}" }}
+set_fields = {{ "extraData.sessionId" = "cc-{{header:x-claude-code-session-id}}" }}
+
+[[models]]
+id = "fast"
+backend = "mock"
+
+[logging]
+body_dir = "{}"
+"#,
+        upstream.url(),
+        dir.path().display()
+    );
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .post("/v1/messages", &body("fast", false))
+        .header("x-claude-code-session-id", "s-1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let _ = res.bytes().await.unwrap();
+
+    let entries = wait_for_entries(dir.path(), 1).await;
+    let meta = std::fs::read_to_string(entries[0].join("meta.json")).unwrap();
+    assert!(!meta.contains("gw-secret"), "{meta}");
+    let meta: Value = serde_json::from_str(&meta).unwrap();
+    let forced = meta["request_headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["name"] == "x-session-id")
+        .expect("the header the backend saw is recorded");
+    assert_eq!(forced["value"], "<redacted>");
+    assert_eq!(forced["source"], "backend");
+    assert_eq!(
+        read_json(&entries[0].join("request.json"))["extraData"]["sessionId"],
+        "cc-s-1"
+    );
+    assert_eq!(
+        upstream.last().header("x-session-id"),
+        Some("gw-secret-s-1")
+    );
+}
+
 #[tokio::test]
 async fn a_recorded_response_stops_growing_at_the_cap() {
     let cap = anthroxy::observability::MAX_RECORDED_RESPONSE_BYTES;
