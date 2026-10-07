@@ -58,14 +58,17 @@ impl Template {
     }
 
     /// The value for a request carrying `client`. `None` when a header it
-    /// names is absent, empty or not text: a value filled in part is not sent.
+    /// names is absent, empty or not UTF-8: a value filled in part is not
+    /// sent.
     pub fn render(&self, client: &HeaderMap) -> Option<String> {
         let mut out = String::new();
         for part in &self.0 {
             match part {
                 Part::Text(text) => out.push_str(text),
                 Part::Header(name) => {
-                    let value = client.get(name)?.to_str().ok()?;
+                    // Not `to_str`, which is ASCII only: a name in another
+                    // script is a value like any other.
+                    let value = std::str::from_utf8(client.get(name)?.as_bytes()).ok()?;
                     if value.is_empty() {
                         return None;
                     }
@@ -174,6 +177,17 @@ mod tests {
                 .render(&binary),
             None
         );
+    }
+
+    #[test]
+    fn a_header_value_outside_ascii_is_read_as_utf_8() {
+        let mut client = HeaderMap::new();
+        client.insert(
+            "x-user-name",
+            HeaderValue::from_bytes("홍길동".as_bytes()).unwrap(),
+        );
+        let template = Template::parse("user:{header:x-user-name}").unwrap();
+        assert_eq!(template.render(&client).as_deref(), Some("user:홍길동"));
     }
 
     #[test]

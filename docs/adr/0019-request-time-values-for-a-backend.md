@@ -40,8 +40,8 @@ Placeholders:
   `drop_headers` and before `headers` itself, so a header can be dropped under
   its own name and sent under another.
 - A value whose placeholder names a header the client did not send, or sent
-  empty, is not sent at all; a value filled in part would be wrong in a way the
-  backend cannot tell.
+  empty or as bytes that are not UTF-8, is not sent at all; a value filled in
+  part would be wrong in a way the backend cannot tell.
 - `{header:authorization}`, `{header:x-api-key}` and
   `{header:proxy-authorization}` are configuration errors. They carry the
   client's credential; with `server.v1_auth = "token"` that is the router's

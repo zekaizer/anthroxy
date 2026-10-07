@@ -205,6 +205,18 @@ fn a_forced_header_reads_the_client_request_as_it_arrived() {
 }
 
 #[test]
+fn a_forced_header_carries_a_value_outside_ascii_as_the_client_sent_it() {
+    let mut client = client_headers();
+    client.append(
+        "x-user-name",
+        HeaderValue::from_bytes("홍길동".as_bytes()).unwrap(),
+    );
+    let backend = backend_forcing(&[("x-gateway-user", "{header:x-user-name}")], &[]);
+    let out = upstream_headers(&client, &backend);
+    assert_eq!(out["x-gateway-user"].as_bytes(), "홍길동".as_bytes());
+}
+
+#[test]
 fn a_forced_header_with_nothing_to_read_is_not_sent_and_neither_is_the_client_s() {
     let mut client = client_headers();
     client.append("x-session-id", HeaderValue::from_static("from-client"));

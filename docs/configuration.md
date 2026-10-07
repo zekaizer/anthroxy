@@ -138,9 +138,10 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   `drop_headers` applies; text around it is kept, so
   `"x-session-id" = "cc-{header:x-claude-code-session-id}"` hands a gateway the
   session under the name and shape it reads. When the client sent no such
-  header, or an empty one, the forced header is left out, and the client's own
-  value under its name is not sent either. `authorization`, `x-api-key` and
-  `proxy-authorization` cannot be named: they carry the client's credential. A
+  header, or sent it empty or as bytes that are not UTF-8, the forced header is
+  left out, and the client's own value under its name is not sent either.
+  `authorization`, `x-api-key` and `proxy-authorization` cannot be named: they
+  carry the client's credential. A
   request the router makes on its own (the probe of `check` and the console)
   has no client behind it, so a value with a placeholder is absent from it; the
   console's test request names a session of its own, so
