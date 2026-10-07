@@ -131,7 +131,8 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
 - `headers` sets headers on every request to that backend, replacing whatever
   the client sent under the same name. A value may contain `{header:<name>}`,
   which is replaced per request with the value the client sent under that
-  header, read before `drop_headers` applies; text around it is kept, so
+  header (its first value, when the client repeated it), read before
+  `drop_headers` applies; text around it is kept, so
   `"x-session-id" = "cc-{header:x-claude-code-session-id}"` hands a gateway the
   session under the name and shape it reads. When the client sent no such
   header, or an empty one, the forced header is left out, and the client's own
