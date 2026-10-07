@@ -118,6 +118,19 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 "backends.{name}.credential.timeout: 0 is not `no limit` here; it kills the command before it can print"
             ));
         }
+        // Header names are case-insensitive, table keys are not: two
+        // spellings would be one header set twice, the later undoing the
+        // earlier.
+        let mut spelled: HashMap<String, &str> = HashMap::new();
+        for header in backend.headers.keys() {
+            if let Some(first) = spelled.insert(header.to_ascii_lowercase(), header) {
+                problems.push(format!(
+                    "backends.{name}.headers: `{}` and `{}` are the same header",
+                    short(first),
+                    short(header)
+                ));
+            }
+        }
         for (header, value) in &backend.headers {
             if http::HeaderName::from_bytes(header.as_bytes()).is_err() {
                 problems.push(format!(

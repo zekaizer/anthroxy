@@ -376,6 +376,18 @@ fn a_backend_header_placeholder_must_be_one_the_router_can_fill() {
 }
 
 #[test]
+fn a_backend_header_cannot_be_set_twice_under_two_spellings() {
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"X-Session\" = \"{{header:x-a}}\"\n\"x-session\" = \"fixed\"\n\"x-other\" = \"1\"\n"
+    );
+    let p = problems(&text);
+    assert_eq!(
+        p,
+        ["backends.local.headers: `X-Session` and `x-session` are the same header"]
+    );
+}
+
+#[test]
 fn names_that_are_empty_are_rejected_wherever_they_appear() {
     let cases = [
         ("\n[backends.\"\"]\nurl = \"http://a\"\n", "backends:"),

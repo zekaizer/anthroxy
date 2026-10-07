@@ -138,7 +138,8 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   value under its name is not sent either. `authorization`, `x-api-key` and
   `proxy-authorization` cannot be named: they carry the client's credential. A
   request the router makes on its own (the probe of `check` and the console)
-  has no client behind it, so a value with a placeholder is absent from it.
+  has no client behind it, so a value with a placeholder is absent from it. A
+  header may be named once: two keys that differ only in case are an error.
   Forced values are shown as `<redacted>` wherever headers are reported. See
   ADR-0019.
 - `live_models = true` fetches `GET {url}{models_path}` and publishes those ids
