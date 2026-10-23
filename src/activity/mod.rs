@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::anthropic::TokenUsage;
+use crate::anthropic::{RequestParams, TokenUsage};
 use crate::config::BackendKind;
 
 pub use exchange::{Exchange, Tracked};
@@ -53,6 +53,10 @@ pub struct ExchangeView {
     pub peer: Option<String>,
     /// Claude Code's `x-claude-code-session-id`, as the client sent it.
     pub session: Option<String>,
+    /// The client's `user-agent`, cut.
+    pub client: Option<String>,
+    /// The `anthropic-beta` flags the client sent, each once and cut.
+    pub betas: Vec<String>,
     pub method: String,
     pub path: String,
     /// What the client named, cut.
@@ -74,6 +78,8 @@ pub struct ExchangeView {
     pub step: Option<String>,
     /// The request carries on the turn of the one before it.
     pub answers: bool,
+    /// What the request asked for besides its content.
+    pub params: RequestParams,
     pub status: Option<u16>,
     pub attempts: Option<u32>,
     /// A rejected credential was re-acquired and the request sent again.
@@ -85,6 +91,8 @@ pub struct ExchangeView {
     pub duration_ms: Option<u64>,
     pub bytes: u64,
     pub usage: Option<TokenUsage>,
+    /// Why the model stopped, as the response said it, cut.
+    pub stop_reason: Option<String>,
     /// `None` while in flight.
     pub outcome: Option<Outcome>,
     pub error: Option<String>,
@@ -128,6 +136,8 @@ impl Activity {
                 source,
                 peer,
                 session: None,
+                client: None,
+                betas: Vec::new(),
                 method: method.to_owned(),
                 path: path.to_owned(),
                 requested_model: None,
@@ -141,6 +151,7 @@ impl Activity {
                 prompt: None,
                 step: None,
                 answers: false,
+                params: RequestParams::default(),
                 status: None,
                 attempts: None,
                 credential_refreshed: false,
@@ -149,6 +160,7 @@ impl Activity {
                 duration_ms: None,
                 bytes: 0,
                 usage: None,
+                stop_reason: None,
                 outcome: None,
                 error: None,
                 error_body: None,

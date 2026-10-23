@@ -499,6 +499,10 @@ button.badge:hover:not(:disabled) { border-color: currentColor; }
 dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-3); margin: var(--space-1) 0 var(--space-2); font-size: var(--text-sm); }
 dl.facts dt { color: var(--muted); }
 dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+dl.facts dd .sub { color: var(--faint); font-size: var(--text-xs); }
+/* A request's detail is several lists under headings; one label width
+   keeps their values in one column. */
+.detail dl.facts { grid-template-columns: 7rem minmax(0, 1fr); }
 
 .snippet { position: relative; }
 .snippet pre { padding-right: 4.75rem; }
@@ -628,6 +632,6 @@ img.thumb { display: block; max-width: min(100%, 320px); max-height: 240px; bord
 @media (max-width: 640px) {
   main { padding: var(--space-3); }
   section.panel { padding: var(--space-2) var(--space-3) var(--space-3); }
-  dl.facts { grid-template-columns: 1fr; }
+  dl.facts, .detail dl.facts { grid-template-columns: 1fr; }
   dl.facts dt { margin-top: var(--space-1); }
 }

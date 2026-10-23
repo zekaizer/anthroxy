@@ -168,6 +168,7 @@ fn decoders_survive_arbitrary_documents() {
         let _ = anthropic::rewrite(bytes, Some("m"), &["a".into(), "a.b".into()], &fields, true);
         let _ = anthropic::rewrite(bytes, None, &[], &[], false);
         let _ = anthropic::summarize(bytes);
+        let _ = anthropic::params(bytes);
         let _ = anthropic::decode(bytes);
         let _ = anthropic::decode_models(bytes);
         let _ = openai::decode_response(bytes);

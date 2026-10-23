@@ -10,10 +10,13 @@ use futures_util::Stream;
 use tokio::sync::watch;
 
 use super::{Activity, ERROR_BODY_BYTES, ExchangeView, Hint, Outcome};
-use crate::anthropic::{RequestSummary, UsageScanner};
+use crate::anthropic::{RequestParams, RequestSummary, UsageScanner};
 use crate::config::BackendKind;
 use crate::routing::Match;
 use crate::text::cut;
+
+/// `anthropic-beta` flags kept; a client sends a handful.
+const MAX_BETAS: usize = 32;
 
 /// Runs once with the finished view.
 type OnFinish = Box<dyn FnOnce(&ExchangeView) + Send>;
@@ -81,6 +84,39 @@ impl Exchange {
             v.prompt = summary.prompt.clone();
             v.step = summary.step.clone();
             v.answers = summary.answers;
+        });
+    }
+
+    /// What the request asked for besides its content.
+    pub fn asked(&self, mut params: RequestParams) {
+        params.thinking = params.thinking.map(|thinking| cut(&thinking, 40));
+        self.update(|v| v.params = params);
+    }
+
+    /// Who sent the request, from its headers: the `user-agent` and the
+    /// `anthropic-beta` flags of every such header.
+    pub fn client(&self, headers: &http::HeaderMap) {
+        let agent = headers
+            .get(http::header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .map(|agent| cut(agent, 200));
+        let mut betas: Vec<String> = Vec::new();
+        let flags = headers
+            .get_all("anthropic-beta")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .map(str::trim)
+            .filter(|flag| !flag.is_empty())
+            .map(|flag| cut(flag, 100));
+        for flag in flags {
+            if betas.len() < MAX_BETAS && !betas.contains(&flag) {
+                betas.push(flag);
+            }
+        }
+        self.update(|v| {
+            v.client = agent;
+            v.betas = betas;
         });
     }
 
@@ -174,6 +210,7 @@ impl Exchange {
             v.ttfb_ms = Some(ttfb);
             v.bytes = body.len() as u64;
             v.usage = scan.usage;
+            v.stop_reason = scan.stop_reason.as_deref().map(|reason| cut(reason, 40));
             v.error = scan
                 .error
                 .or_else(|| failed.then(|| cut(&String::from_utf8_lossy(body), 200)));
@@ -270,6 +307,7 @@ impl<S> Tracked<S> {
         };
         exchange.update(|v| {
             v.usage = scan.usage.or(v.usage);
+            v.stop_reason = scan.stop_reason.as_deref().map(|reason| cut(reason, 40));
             if failure.is_some() {
                 v.error = failure.clone();
             }

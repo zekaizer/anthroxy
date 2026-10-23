@@ -116,6 +116,7 @@ async fn a_streamed_exchange_is_tracked_and_persisted_with_its_usage() {
         cache_reported: true,
     });
     assert_eq!(view.usage, usage);
+    assert_eq!(view.stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(view.session, None);
 
     let records = stats_records(&router.stats_dir, 1).await;
@@ -138,6 +139,15 @@ async fn a_claude_code_session_id_is_kept_on_the_exchange() {
     let res = router
         .post("/v1/messages", &messages_body("claude-haiku-4-5"))
         .header("x-claude-code-session-id", "sess-abc-123")
+        .header("user-agent", "claude-cli/2.1.4 (external, cli)")
+        .header(
+            "anthropic-beta",
+            "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+        )
+        .header(
+            "anthropic-beta",
+            " interleaved-thinking-2025-05-14, context-1m-2025-08-07",
+        )
         .send()
         .await
         .unwrap();
@@ -145,6 +155,19 @@ async fn a_claude_code_session_id_is_kept_on_the_exchange() {
     let _ = res.text().await.unwrap();
     let view = finished(&router, &id).await;
     assert_eq!(view.session.as_deref(), Some("sess-abc-123"));
+    assert_eq!(
+        view.client.as_deref(),
+        Some("claude-cli/2.1.4 (external, cli)")
+    );
+    assert_eq!(
+        view.betas,
+        [
+            "oauth-2025-04-20",
+            "interleaved-thinking-2025-05-14",
+            "context-1m-2025-08-07"
+        ],
+        "every header, each flag once"
+    );
 }
 
 #[tokio::test]
@@ -182,6 +205,15 @@ async fn the_turn_is_kept_on_the_exchange_without_a_body_log() {
     let _ = res.text().await.unwrap();
     let view = finished(&router, &id).await;
     assert_eq!(view.prompt.as_deref(), Some("fix the flaky test"));
+    assert_eq!(
+        (
+            view.params.messages,
+            view.params.max_tokens,
+            view.params.bytes
+        ),
+        (3, Some(16), body.to_string().len() as u64),
+        "{view:?}"
+    );
     assert!(
         view.step
             .as_deref()
@@ -274,6 +306,7 @@ async fn an_openai_stream_reports_the_usage_the_client_received() {
     let view = finished(&router, &id).await;
     assert_eq!(view.kind, Some(BackendKind::OpenAi));
     assert_eq!(view.outcome, Some(Outcome::Complete));
+    assert_eq!(view.stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(
         view.usage,
         Some(TokenUsage {

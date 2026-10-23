@@ -1257,27 +1257,34 @@ async function showRequest(target, id, scroll) {
     const recording = v.recording
       ? h("button", { type: "button", class: "small", onclick: () => go("recordings", v.recording) }, "Open recording")
       : null;
+    const p = v.params;
     rerender(target, panel(`Request ${v.id}`, [recording, close],
+      h("h3", null, "Client"),
       h("dl", { class: "facts" },
         fact("Received", `${fmt.time(v.received_at)} from ${v.peer || "–"}${v.source === "console" ? " (console test)" : ""}`),
         v.session ? fact("Session", sessionFact(v.session)) : null,
+        fact("Client", v.client ? h("span", { class: "wrap-anywhere" }, v.client) : unset()),
+        fact("Betas", v.betas.length ? v.betas.map((flag) => h("div", { class: "mono wrap-anywhere" }, flag)) : unset("none"))),
+      h("h3", null, "Asked"),
+      h("dl", { class: "facts" },
         v.prompt ? fact("Turn", v.prompt) : null,
         v.step ? fact("Step", v.step) : null,
-        fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
+        fact("Request", `${v.method} ${v.path}, ${fmt.bytes(p.bytes)}${v.stream ? ", stream" : ""}`),
         fact("Model", v.requested_model ? `${v.requested_model}${v.model ? ` → ${v.model} (${v.matched})` : " (no route)"}` : "–"),
-        v.effort ? fact("Effort", v.effort) : null,
+        fact("Effort", v.effort || unset()),
+        fact("Thinking", p.thinking ? `${p.thinking}${p.thinking_budget !== null ? `, budget ${fmt.int(p.thinking_budget)}` : ""}` : unset()),
+        fact("Max tokens", p.max_tokens !== null ? fmt.int(p.max_tokens) : unset()),
+        fact("Context", `${fmt.int(p.messages)} message(s) · ${fmt.int(p.tools)} tool(s)${p.mcp_tools ? `, ${fmt.int(p.mcp_tools)} from MCP` : ""} · ${fmt.int(p.system_blocks)} system block(s)`)),
+      h("h3", null, "Answer"),
+      h("dl", { class: "facts" },
         fact("Backend", v.backend ? `${v.backend} (${v.kind}), upstream model ${v.upstream_model}` : "–"),
         fact("Status", v.status === null ? "–" : `${v.status}${v.attempts ? ` after ${v.attempts} attempt(s)` : ""}${v.credential_refreshed ? ", one re-sent with a re-acquired credential" : ""}`),
         fact("Timing", `headers ${fmt.ms(v.latency_ms)}, first byte ${fmt.ms(v.ttfb_ms)}, total ${fmt.ms(v.duration_ms)}`),
-        fact("Body", fmt.bytes(v.bytes)),
-        fact("Tokens", v.usage
-          ? `input ${fmt.int(v.usage.input)}, output ${fmt.int(v.usage.output)}`
-          : "not reported"),
-        v.usage ? fact("Prompt cache", cacheKnown(v.usage)
-          ? `${fmt.pct(v.usage.cache_read / (v.usage.input + v.usage.cache_read + v.usage.cache_creation))} read from cache — ${fmt.int(v.usage.cache_read)} read, ${fmt.int(v.usage.cache_creation)} written, of ${fmt.int(v.usage.input + v.usage.cache_read + v.usage.cache_creation)} prompt tokens`
-          : h("span", { class: "muted" }, "the backend reported no cache counters")) : null,
+        v.stop_reason ? fact("Stop reason", h("span", { class: "mono" }, v.stop_reason)) : null,
+        fact("Tokens", v.usage ? tokenFacts(v.usage) : "not reported"),
         // Measured only on streamed answers that complete.
         v.output_tokens_per_second ? fact("Output speed", fmt.rate(v.output_tokens_per_second)) : null,
+        fact("Body", fmt.bytes(v.bytes)),
         fact("Outcome", outcomeBadge(v))),
       v.error ? [h("h3", null, "Error"), h("pre", null, v.error)] : null,
       v.hints.length ? [h("h3", null, "Hints"), v.hints.map((hint) =>
@@ -1289,6 +1296,21 @@ async function showRequest(target, id, scroll) {
 
 function fact(label, value) {
   return [h("dt", null, label), h("dd", null, value)];
+}
+
+/// A setting the request left out, said so rather than drawn as a dash.
+function unset(text = "not set") {
+  return h("span", { class: "muted" }, text);
+}
+
+/// Prompt and output, then where the prompt came from: the prompt is what a
+/// context window holds, which the uncached input alone does not say.
+function tokenFacts(usage) {
+  const prompt = usage.input + usage.cache_read + usage.cache_creation;
+  return [`prompt ${fmt.int(prompt)}, output ${fmt.int(usage.output)}`,
+    h("div", { class: "sub" }, cacheKnown(usage)
+      ? `${fmt.int(usage.input)} new · ${fmt.int(usage.cache_read)} read from cache${prompt ? ` (${fmt.pct(usage.cache_read / prompt)})` : ""} · ${fmt.int(usage.cache_creation)} written`
+      : "the backend reported no cache counters")];
 }
 
 function prettyJson(text) {
