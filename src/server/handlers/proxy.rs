@@ -118,13 +118,11 @@ async fn handle(
 
     let peek = anthropic::peek(&body)?;
     // Read from the client's body, before any rewrite or translation.
-    let summary = state
-        .body_log
-        .is_some()
-        .then(|| anthropic::summarize(&body));
+    let summary = anthropic::summarize(&body);
     let requested_model = peek.model.expect("peek guarantees a model");
     note(exchange, |e| {
-        e.requested(&requested_model, peek.stream, peek.effort.as_deref())
+        e.requested(&requested_model, peek.stream, peek.effort.as_deref());
+        e.turn(&summary);
     });
     if let Some(session) = parts
         .headers
@@ -239,7 +237,7 @@ async fn handle(
             &requested_model,
             route,
             peek.stream,
-            summary.unwrap_or_default(),
+            summary,
         );
         log.begin(record, &body, started, cut.clone())
     });

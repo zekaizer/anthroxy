@@ -66,6 +66,14 @@ pub struct ExchangeView {
     pub stream: bool,
     /// The `output_config.effort` the client asked for, cut.
     pub effort: Option<String>,
+    /// The prompt of the turn the request belongs to, as
+    /// [`RequestSummary::prompt`](crate::anthropic::RequestSummary) words it.
+    pub prompt: Option<String>,
+    /// What the request sends instead of a prompt, as
+    /// [`RequestSummary::step`](crate::anthropic::RequestSummary) words it.
+    pub step: Option<String>,
+    /// The request carries on the turn of the one before it.
+    pub answers: bool,
     pub status: Option<u16>,
     pub attempts: Option<u32>,
     /// A rejected credential was re-acquired and the request sent again.
@@ -130,6 +138,9 @@ impl Activity {
                 upstream_model: None,
                 stream: false,
                 effort: None,
+                prompt: None,
+                step: None,
+                answers: false,
                 status: None,
                 attempts: None,
                 credential_refreshed: false,

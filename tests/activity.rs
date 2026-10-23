@@ -164,6 +164,38 @@ async fn the_effort_asked_for_is_kept_on_the_exchange_and_in_statistics() {
 }
 
 #[tokio::test]
+async fn the_turn_is_kept_on_the_exchange_without_a_body_log() {
+    let upstream = MockUpstream::start(|_| sse(ANTHROPIC_SSE)).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("fast");
+    body["messages"] = json!([
+        {"role": "user", "content": "fix the flaky test"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "/src/lib.rs"}}
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "fn main() {}"}
+        ]}
+    ]);
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    let id = request_id(&res);
+    let _ = res.text().await.unwrap();
+    let view = finished(&router, &id).await;
+    assert_eq!(view.prompt.as_deref(), Some("fix the flaky test"));
+    assert!(
+        view.step
+            .as_deref()
+            .is_some_and(|step| step.starts_with("returns Read")),
+        "{view:?}"
+    );
+    assert!(view.answers);
+
+    stats_records(&router.stats_dir, 1).await;
+    let text = std::fs::read_to_string(&stats_files(&router.stats_dir)[0]).unwrap();
+    assert!(!text.contains("flaky"), "no prompt in statistics: {text}");
+}
+
+#[tokio::test]
 async fn an_unknown_model_is_tallied_tracked_and_persisted() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
