@@ -116,6 +116,7 @@ async fn a_streamed_exchange_is_tracked_and_persisted_with_its_usage() {
         cache_reported: true,
     });
     assert_eq!(view.usage, usage);
+    assert_eq!(view.stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(view.session, None);
 
     let records = stats_records(&router.stats_dir, 1).await;
@@ -274,6 +275,7 @@ async fn an_openai_stream_reports_the_usage_the_client_received() {
     let view = finished(&router, &id).await;
     assert_eq!(view.kind, Some(BackendKind::OpenAi));
     assert_eq!(view.outcome, Some(Outcome::Complete));
+    assert_eq!(view.stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(
         view.usage,
         Some(TokenUsage {

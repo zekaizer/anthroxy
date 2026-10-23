@@ -45,6 +45,8 @@ pub struct Scan {
     pub usage: Option<TokenUsage>,
     /// An `error` event or error document: `<type>: <message>`.
     pub error: Option<String>,
+    /// Why the model stopped, as the response said it.
+    pub stop_reason: Option<String>,
 }
 
 /// A document larger than this is not kept for scanning.
@@ -54,6 +56,7 @@ pub struct UsageScanner {
     body: Body,
     usage: Option<TokenUsage>,
     error: Option<String>,
+    stop_reason: Option<String>,
 }
 
 enum Body {
@@ -81,6 +84,7 @@ impl UsageScanner {
             },
             usage: None,
             error: None,
+            stop_reason: None,
         }
     }
 
@@ -116,6 +120,7 @@ impl UsageScanner {
                         self.error = error_text(&document);
                     } else {
                         self.overlay(document.get("usage"));
+                        self.stopped(document.get("stop_reason"));
                     }
                 }
             }
@@ -124,13 +129,18 @@ impl UsageScanner {
         Scan {
             usage: self.usage,
             error: self.error,
+            stop_reason: self.stop_reason,
         }
     }
 
-    /// Only frames that can carry usage or an error are parsed.
+    /// Only frames that can carry usage, a stop reason or an error are
+    /// parsed.
     fn frames(&mut self, frames: Vec<Frame>) {
         for frame in frames {
-            if !(frame.data.contains("\"usage\"") || frame.data.contains("\"error\"")) {
+            if !["\"usage\"", "\"error\"", "\"stop_reason\""]
+                .iter()
+                .any(|key| frame.data.contains(key))
+            {
                 continue;
             }
             let Ok(event) = serde_json::from_str::<Value>(&frame.data) else {
@@ -138,10 +148,20 @@ impl UsageScanner {
             };
             match event.get("type").and_then(Value::as_str) {
                 Some("message_start") => self.overlay(event.pointer("/message/usage")),
-                Some("message_delta") => self.overlay(event.get("usage")),
+                Some("message_delta") => {
+                    self.overlay(event.get("usage"));
+                    self.stopped(event.pointer("/delta/stop_reason"));
+                }
                 Some("error") => self.error = error_text(&event),
                 _ => {}
             }
+        }
+    }
+
+    /// A stop reason that is `null` or not a string says nothing.
+    fn stopped(&mut self, reason: Option<&Value>) {
+        if let Some(reason) = reason.and_then(Value::as_str) {
+            self.stop_reason = Some(reason.to_owned());
         }
     }
 
@@ -215,6 +235,31 @@ mod tests {
 
     fn event(name: &str, data: &str) -> String {
         format!("event: {name}\ndata: {data}\n\n")
+    }
+
+    #[test]
+    fn the_stop_reason_is_read_from_a_stream_and_from_a_document() {
+        let stream = [
+            event("message_start", r#"{"type":"message_start","message":{"stop_reason":null,"usage":{"input_tokens":3}}}"#),
+            event("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":9}}"#),
+        ]
+        .concat();
+        assert_eq!(
+            scan(SSE, &[stream.as_bytes()]).stop_reason.as_deref(),
+            Some("tool_use")
+        );
+
+        let document = br#"{"id":"m","type":"message","content":[],"stop_reason":"max_tokens","usage":{"input_tokens":1,"output_tokens":2}}"#;
+        assert_eq!(
+            scan(JSON, &[document]).stop_reason.as_deref(),
+            Some("max_tokens")
+        );
+
+        let unsaid = event(
+            "message_delta",
+            r#"{"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":1}}"#,
+        );
+        assert_eq!(scan(SSE, &[unsaid.as_bytes()]).stop_reason, None);
     }
 
     #[test]

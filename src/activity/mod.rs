@@ -85,6 +85,8 @@ pub struct ExchangeView {
     pub duration_ms: Option<u64>,
     pub bytes: u64,
     pub usage: Option<TokenUsage>,
+    /// Why the model stopped, as the response said it, cut.
+    pub stop_reason: Option<String>,
     /// `None` while in flight.
     pub outcome: Option<Outcome>,
     pub error: Option<String>,
@@ -149,6 +151,7 @@ impl Activity {
                 duration_ms: None,
                 bytes: 0,
                 usage: None,
+                stop_reason: None,
                 outcome: None,
                 error: None,
                 error_body: None,

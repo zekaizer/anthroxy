@@ -174,6 +174,7 @@ impl Exchange {
             v.ttfb_ms = Some(ttfb);
             v.bytes = body.len() as u64;
             v.usage = scan.usage;
+            v.stop_reason = scan.stop_reason.as_deref().map(|reason| cut(reason, 40));
             v.error = scan
                 .error
                 .or_else(|| failed.then(|| cut(&String::from_utf8_lossy(body), 200)));
@@ -270,6 +271,7 @@ impl<S> Tracked<S> {
         };
         exchange.update(|v| {
             v.usage = scan.usage.or(v.usage);
+            v.stop_reason = scan.stop_reason.as_deref().map(|reason| cut(reason, 40));
             if failure.is_some() {
                 v.error = failure.clone();
             }
