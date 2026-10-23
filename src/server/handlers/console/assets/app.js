@@ -403,11 +403,17 @@ const fmt = {
   },
 };
 
+/// The word the outcome badge shows, which the filter matches as well.
+function outcomeLabel(view) {
+  if (!view.outcome) return "in flight";
+  if (view.outcome === "complete") return "complete";
+  if (view.outcome === "client_disconnected") return "client left";
+  return "error";
+}
+
 function outcomeBadge(view) {
-  if (!view.outcome) return badge("in flight", "info");
-  if (view.outcome === "complete") return badge("complete", "ok");
-  if (view.outcome === "client_disconnected") return badge("client left", "warn");
-  return badge("error", "err");
+  const label = outcomeLabel(view);
+  return badge(label, { "in flight": "info", complete: "ok", "client left": "warn" }[label] || "err");
 }
 
 /// An attempt count is a number, not a state. Only an abnormal one is marked.
@@ -911,7 +917,7 @@ function aliasesSnippet(status) {
 // ---------------------------------------------------------------- requests
 
 function requests(view, selected) {
-  const filter = h("input", { type: "text", placeholder: "Filter by prompt, tool, model, effort, backend, id, session or status", value: state.requestsFilter });
+  const filter = h("input", { type: "text", placeholder: "Filter by prompt, tool, model, effort, backend, id, session, status or outcome", value: state.requestsFilter });
   const narrowTo = (session) => {
     filter.value = session;
     state.requestsFilter = session;
@@ -934,10 +940,12 @@ function requests(view, selected) {
     const matches = (v) => {
       if (errorsOnly.checked && v.outcome !== "error") return false;
       if (!needle) return true;
-      return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer, v.session, v.effort, v.prompt, v.step]
+      return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer, v.session, v.effort, v.prompt, v.step,
+        v.source, outcomeLabel(v), v.error]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
     const running = data.in_flight.filter(matches);
+    const filtered = Boolean(needle) || errorsOnly.checked;
     // Nothing in flight is the usual state, and a table header over an empty
     // row is a third of the first screen spent saying so.
     rerender(inFlight, running.length
@@ -954,8 +962,10 @@ function requests(view, selected) {
             h("td", { class: "num" }, since(v.received_at, "ms")),
             h("td", { class: "num" }, v.ttfb_ms === null ? h("span", { class: "muted" }, "waiting") : fmt.ms(v.ttfb_ms)),
             h("td", { class: "num" }, fmt.bytes(v.bytes)))))
-      : h("p", { class: "idle" }, badge("idle", "ok"), " Nothing in flight.",
-        data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null));
+      : data.in_flight.length
+        ? h("p", { class: "idle" }, badge("in flight", "info"), ` ${fmt.int(data.in_flight.length)} in flight, hidden by the filter.`)
+        : h("p", { class: "idle" }, badge("idle", "ok"), " Nothing in flight.",
+          data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null));
 
     const rows = [];
     let day = null;
@@ -1005,10 +1015,12 @@ function requests(view, selected) {
     const more = h("button", { type: "button", class: "small" },
       `Show ${fmt.int(Math.min(LIST_PAGE, hidden))} more of ${fmt.int(hidden)} not shown`);
     more.addEventListener("click", () => { shown += LIST_PAGE; draw(); });
-    rerender(recent, table(
-      ["Time", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
-      rows,
-      { empty: "No finished request since the router started." }),
+    rerender(recent,
+      filtered && data.recent.length ? h("p", { class: "note" }, `${fmt.int(matching.length)} of ${fmt.int(data.recent.length)} finished request(s) match.`) : null,
+      table(
+        ["Time", "Model", "Backend / upstream", "Status", ["First byte", "num"], ["Duration", "num"], ["Tokens in / out, speed", "num"], ["Cache read", "num"], "Outcome"],
+        rows,
+        { empty: filtered ? "No finished request matches." : "No finished request since the router started." }),
       hidden ? h("p", { class: "note" }, more) : null);
   };
 
