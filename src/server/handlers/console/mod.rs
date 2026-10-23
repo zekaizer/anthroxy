@@ -8,6 +8,7 @@ mod probe;
 mod recordings;
 mod reload;
 mod requests;
+mod restart;
 mod smoke;
 mod stats;
 mod status;
@@ -30,6 +31,7 @@ pub use recordings::{
 };
 pub use reload::reload;
 pub use requests::{detail as request, list as requests};
+pub use restart::restart;
 pub use smoke::smoke;
 pub use stats::stats;
 pub use status::status;

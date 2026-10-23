@@ -22,6 +22,7 @@ pub fn build(state: AppState) -> Router {
         .route("/api/stats", get(console::stats))
         .route("/api/env", get(console::env))
         .route("/api/reload", post(console::reload))
+        .route("/api/restart", post(console::restart))
         .route("/api/probe", post(console::probe))
         .route("/api/smoke", post(console::smoke))
         .route(

@@ -786,11 +786,35 @@ function overviewContent(status, reload) {
     }
     await reload();
   });
-  const notice = state.reloadNotice;
-  const reloadResult = !notice ? null
-    : notice.result === "applied"
-      ? banner(`Reloaded: ${notice.backends} backend(s), ${notice.models} model(s).${notice.restart_needed.length ? ` Restart to apply: ${notice.restart_needed.join(", ")}.` : ""}`, "info")
-      : banner(`Not reloaded, the running configuration stays: ${notice.error}`);
+  // The restart reloads the file first, as its gate: a file that does not
+  // load leaves this router running and says why.
+  const pending = lastReload.result === "applied" && lastReload.restart_needed.length;
+  const restartButton = h("button", { type: "button", class: pending ? "primary" : null }, "Restart");
+  const reloadResult = h("div", null, reloadBanner(state.reloadNotice));
+  const say = (notice) => {
+    state.reloadNotice = notice;
+    replace(reloadResult, reloadBanner(notice));
+  };
+  restartButton.addEventListener("click", async () => {
+    if (!confirm("Restart the router? The configuration file is reloaded first, and a file that does not load stops nothing. Requests in flight get up to 10 seconds to finish; Claude Code retries one that is cut.")) return;
+    reloadButton.disabled = restartButton.disabled = true;
+    let answer;
+    try {
+      answer = await api("/api/restart", { method: "POST" });
+    } catch (error) {
+      if (error instanceof SignedOut) return;
+      state.reloadNotice = { result: "refused", error: error.message };
+      await reload();
+      return;
+    }
+    if (answer.listen !== status.listen) {
+      say({ result: "moved", listen: answer.listen });
+      return;
+    }
+    say({ result: "restarting" });
+    say({ result: await restarted(status.started_at) ? "restarted" : "gone" });
+    await reload();
+  });
 
   const reloads = [...status.reloads].reverse().map((event) =>
     h("tr", null,
@@ -850,7 +874,7 @@ function overviewContent(status, reload) {
   return [
     attentionPanel(status.health),
     panel("Router", null, cards),
-    panel("Reloads", reloadButton, reloadResult,
+    panel("Reloads", [reloadButton, restartButton], reloadResult,
       table(["When", "Trigger", "Result", "Detail"], reloads)),
     panel("Backends", null,
       table(["Backend", "URL", "Credential source", "Value", "Freshness", "Recent runs"], backends)),
@@ -883,6 +907,55 @@ function attentionPanel(health) {
         problem.kind === "errors"
           ? h("button", { type: "button", class: "small", onclick: () => { state.errorsOnly = true; go("requests"); } }, "Show the requests")
           : null)));
+}
+
+/// What the last reload or restart the console asked for came to.
+function reloadBanner(notice) {
+  if (!notice) return null;
+  switch (notice.result) {
+    case "applied":
+      return banner(`Reloaded: ${notice.backends} backend(s), ${notice.models} model(s).${notice.restart_needed.length ? ` Restart to apply: ${notice.restart_needed.join(", ")}.` : ""}`, "info");
+    case "refused":
+      return banner(`Not restarted, the router runs on as it was: ${notice.error}`);
+    case "restarting":
+      return banner("Restarting…", "info");
+    case "restarted":
+      return banner("Restarted with the configuration file as it is now.", "info");
+    case "gone":
+      return banner(`The router did not answer within ${RESTART_WAIT_MS / 1000} seconds of the restart. Its log says why: journalctl --user -u anthroxy, or the terminal it runs in.`);
+    case "moved":
+      return banner(["Restarting on ", h("a", { href: movedTo(notice.listen) }, notice.listen), "; this page cannot follow it there."], "info");
+    default:
+      return banner(`Not reloaded, the running configuration stays: ${notice.error}`);
+  }
+}
+
+/// How long the page waits for a restarted router to answer.
+const RESTART_WAIT_MS = 30000;
+
+/// Whether the router answered as a new process, started after `before`,
+/// within [`RESTART_WAIT_MS`]. It answers nothing while it is down.
+async function restarted(before) {
+  const until = Date.now() + RESTART_WAIT_MS;
+  while (Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      const status = await api("/api/status");
+      if (status.started_at !== before) return true;
+    } catch (error) {
+      if (error instanceof SignedOut) throw error;
+    }
+  }
+  return false;
+}
+
+/// The console at `listen`, reached by the host this page was opened on
+/// when the router listens on every interface.
+function movedTo(listen) {
+  const at = listen.lastIndexOf(":");
+  const host = listen.slice(0, at);
+  const any = host === "0.0.0.0" || host === "[::]";
+  return `${location.protocol}//${any ? location.hostname : host}:${listen.slice(at + 1)}/ui/`;
 }
 
 /// A retention as the configuration spells it; "0s" turns pruning off.

@@ -763,6 +763,72 @@ fn a_logging_change_on_reload_says_it_needs_a_restart() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_console_restart_runs_the_router_again_in_the_same_process() {
+    let dir = tempfile::tempdir().unwrap();
+    // A fixed port: the new process binds what the file says.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        with_stats_in(
+            dir.path(),
+            config_with_backend("http://127.0.0.1:1", "")
+                .replace("127.0.0.1:0", &format!("127.0.0.1:{port}")),
+        ),
+    )
+    .unwrap();
+    let mut child = spawnable()
+        .args(["--config", path.to_str().unwrap(), "serve"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let url = wait_for_banner(&mut child).url;
+    let started = |url: &str| {
+        let status = http_send("GET", &format!("{url}/api/status"), Some(TOKEN));
+        let body = &status[status.find("\r\n\r\n").unwrap() + 4..];
+        serde_json::from_str::<serde_json::Value>(body).unwrap()["started_at"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let before = started(&url);
+
+    let answer = http_send("POST", &format!("{url}/api/restart"), Some(TOKEN));
+    assert!(answer.starts_with("HTTP/1.1 202"), "{answer}");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let after = loop {
+        assert!(Instant::now() < deadline, "the router did not come back");
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("the process exited instead: {status}");
+        }
+        if let Ok(stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            drop(stream);
+            let after = started(&url);
+            if after != before {
+                break after;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(after > before, "{before} then {after}");
+
+    // SAFETY: plain libc call on a pid this test owns.
+    unsafe { libc_signal(child.id() as i32, 15) };
+    let status = child.wait().unwrap();
+    assert!(
+        status.success(),
+        "the restarted router stops as usual: {status}"
+    );
+}
+
 /// `anthroxy serve` on an ephemeral port with its output captured.
 fn serve(config: &std::path::Path) -> std::process::Child {
     spawnable()
@@ -816,6 +882,11 @@ fn wait_for_banner(child: &mut std::process::Child) -> Banner {
 
 /// Minimal blocking GET; the test must not depend on tokio.
 fn http_get(url: &str, token: Option<&str>) -> String {
+    http_send("GET", url, token)
+}
+
+/// `method` with no body, the whole response as text.
+fn http_send(method: &str, url: &str, token: Option<&str>) -> String {
     use std::io::Read;
     let without_scheme = url.strip_prefix("http://").unwrap();
     let (host, path) = without_scheme
@@ -828,7 +899,7 @@ fn http_get(url: &str, token: Option<&str>) -> String {
         .unwrap_or_default();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}Connection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut response = String::new();

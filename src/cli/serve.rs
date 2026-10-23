@@ -58,10 +58,46 @@ pub async fn run(cli: &Cli, args: &ServeArgs, style: &Style) -> anyhow::Result<(
     crate::upstream::network::log(&config);
     tracing::info!(%addr, config = %path.display(), "anthroxy listening");
 
-    server.serve(shutdown_signal(), SHUTDOWN_GRACE).await;
+    // Kept for the whole run: a stop signalled while a restart drains wins,
+    // and the process exits instead.
+    let (signalled, stop) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        signalled.send_replace(true);
+    });
+    let restart = state.restart_requested();
+    let mut stopping = stop.clone();
+    let shutdown = async move {
+        tokio::select! {
+            _ = stopping.wait_for(|stop| *stop) => {}
+            () = restart => tracing::info!("restart asked for from the console, stopping first"),
+        }
+    };
+    server.serve(shutdown, SHUTDOWN_GRACE).await;
     reloader.abort();
+    if state.restarting() && !*stop.borrow() {
+        tracing::info!("anthroxy stopped, starting again");
+        return Err(start_again());
+    }
     tracing::info!("anthroxy stopped");
     Ok(())
+}
+
+/// Replaces this process with the command line it was started with, so the
+/// file is read and the address bound as at any start; the pid stays, which
+/// is what a service manager watches. Returns only when that failed.
+#[cfg(unix)]
+fn start_again() -> anyhow::Error {
+    use std::os::unix::process::CommandExt;
+    let mut args = std::env::args_os();
+    let program = args.next().unwrap_or_else(|| "anthroxy".into());
+    let error = std::process::Command::new(&program).args(args).exec();
+    anyhow::Error::new(error).context(format!("restart: cannot run {}", program.display()))
+}
+
+#[cfg(not(unix))]
+fn start_again() -> anyhow::Error {
+    anyhow::anyhow!("a restart needs Unix")
 }
 
 /// Reads the file with this invocation's overrides. The log subscriber is

@@ -903,3 +903,98 @@ async fn health_raises_a_request_that_failed_a_moment_ago() {
     assert_eq!(health["problems"][0]["kind"], "errors");
     assert_eq!(health["problems"][0]["count"], 1);
 }
+
+#[tokio::test]
+async fn a_restart_goes_ahead_only_with_a_file_that_passes_the_gate() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let restart = |router: &TestRouter| {
+        router
+            .http
+            .post(router.url("/api/restart"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .send()
+    };
+    let asked_for = router.reload.restart_requested();
+    let requested = |state: &anthroxy::server::AppState| {
+        tokio::time::timeout(Duration::from_millis(100), state.restart_requested())
+    };
+
+    let res = restart(&router).await.unwrap();
+    assert_eq!(res.status(), 409);
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("without a configuration file"), "{body}");
+
+    let text = Arc::new(Mutex::new("[server]\ntoken = \"\"\n".to_owned()));
+    let source = text.clone();
+    router.reload.set_loader(
+        "test.toml".into(),
+        Arc::new(move || {
+            Ok(Loaded {
+                config: Config::parse(&source.lock().unwrap(), process_env)?,
+                restart_needed: Vec::new(),
+            })
+        }),
+    );
+    let res = restart(&router).await.unwrap();
+    assert_eq!(res.status(), 409);
+    let body: Value = res.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("server.token"),
+        "{body}"
+    );
+
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    *text.lock().unwrap() = config_with_backend(&upstream.url(), "").replace(
+        "listen = \"127.0.0.1:0\"",
+        &format!("listen = \"{}\"", taken.local_addr().unwrap()),
+    );
+    let res = restart(&router).await.unwrap();
+    assert_eq!(res.status(), 409);
+    let body: Value = res.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&taken.local_addr().unwrap().to_string()),
+        "a new address the restart could not bind: {body}"
+    );
+    assert!(
+        requested(&router.reload).await.is_err(),
+        "no restart while the gate refuses"
+    );
+
+    *text.lock().unwrap() = config_with_backend(&upstream.url(), "");
+    let res = restart(&router).await.unwrap();
+    assert_eq!(res.status(), 202);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(
+        (body["trigger"].as_str(), body["result"].as_str()),
+        (Some("restart"), Some("applied"))
+    );
+    assert_eq!(
+        body["listen"], "127.0.0.1:0",
+        "where the restarted router listens"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), asked_for)
+            .await
+            .is_ok(),
+        "the restart was asked for"
+    );
+    let triggers: Vec<String> = api(&router, "/api/status").await["reloads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["trigger"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        triggers,
+        ["startup", "restart", "restart", "restart", "restart"],
+        "every attempt is in the history"
+    );
+}

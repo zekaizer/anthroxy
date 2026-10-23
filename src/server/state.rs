@@ -103,6 +103,8 @@ pub enum ReloadTrigger {
     Startup,
     Signal,
     Console,
+    /// The gate of a restart the console asked for.
+    Restart,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -150,6 +152,8 @@ pub struct AppState {
     /// Held across a reload's load and apply, so two reloads (a SIGHUP and
     /// the console) cannot interleave and leave the older file current.
     reloading: Arc<Mutex<()>>,
+    /// Set once by a restart whose configuration passed its gate.
+    restart: tokio::sync::watch::Sender<bool>,
     /// How long a request body may take to arrive whole.
     pub body_timeout: std::time::Duration,
 }
@@ -175,6 +179,7 @@ impl AppState {
             probed: Arc::new(Mutex::new(HashMap::new())),
             cut: tokio::sync::watch::Sender::new(false),
             reloading: Arc::new(Mutex::new(())),
+            restart: tokio::sync::watch::Sender::new(false),
             body_timeout: super::BODY_TIMEOUT,
         }
     }
@@ -197,6 +202,41 @@ impl AppState {
         let mut cut = self.cut.subscribe();
         async move {
             let _ = cut.wait_for(|cut| *cut).await;
+        }
+    }
+
+    /// Asks for a restart once the file passes the gate: it reloads, and a
+    /// new `server.listen` can be bound. A refused restart leaves the router
+    /// as the reload left it. Blocks like [`reload`](Self::reload); the
+    /// process is restarted by whoever runs [`Server::serve`](super::Server),
+    /// once it returns.
+    pub fn restart(&self) -> Result<ReloadEvent, String> {
+        if !cfg!(unix) {
+            return Err("a restart needs Unix".to_owned());
+        }
+        let event = self.reload(ReloadTrigger::Restart);
+        if let ReloadOutcome::Rejected { error } = &event.outcome {
+            return Err(error.clone());
+        }
+        let listen = self.snapshot().config.server.listen;
+        if listen != self.listen {
+            std::net::TcpListener::bind(listen)
+                .map_err(|error| format!("cannot listen on {listen}: {error}"))?;
+        }
+        self.restart.send_replace(true);
+        Ok(event)
+    }
+
+    /// A restart passed its gate.
+    pub fn restarting(&self) -> bool {
+        *self.restart.borrow()
+    }
+
+    /// Resolves once [`restart`](Self::restart) passed its gate.
+    pub fn restart_requested(&self) -> impl std::future::Future<Output = ()> + Send + use<> {
+        let mut restart = self.restart.subscribe();
+        async move {
+            let _ = restart.wait_for(|restart| *restart).await;
         }
     }
 
