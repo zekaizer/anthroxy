@@ -1290,8 +1290,19 @@ async function showRequest(target, id, scroll) {
       v.hints.length ? [h("h3", null, "Hints"), v.hints.map((hint) =>
         h("div", { class: "hint" }, hint.summary, hint.snippet ? snippet(hint.snippet) : null))] : null,
       v.error_body ? [h("h3", null, "Upstream error body"), h("pre", null, prettyJson(v.error_body))] : null));
-    if (scroll) target.scrollIntoView({ block: "nearest" });
+    if (scroll) reveal(target);
   });
+}
+
+/// Scrolls the page so `target` starts just below the sticky header, unless
+/// it already starts within the window. `scrollIntoView` does not know the
+/// header, and for a panel taller than the window it lines up the bottom.
+function reveal(target) {
+  const header = document.querySelector("header.top").getBoundingClientRect().bottom;
+  const top = target.getBoundingClientRect().top;
+  if (top >= header && top < window.innerHeight) return;
+  const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-4")) || 0;
+  window.scrollTo({ top: window.scrollY + top - header - gap });
 }
 
 function fact(label, value) {

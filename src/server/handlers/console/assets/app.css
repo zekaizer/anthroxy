@@ -270,6 +270,9 @@ h3 { font-size: var(--text-md); margin: var(--space-4) 0 var(--space-2); }
 .master.open { grid-template-columns: minmax(0, 1fr) minmax(0, 26rem); }
 .master > .detail:empty { display: none; }
 .master > .detail > section.panel { margin-bottom: 0; box-shadow: var(--elev-2); }
+/* Beside the list, the detail stays in view under the header wherever the
+   list is scrolled to, and scrolls on its own when it is the taller. */
+.master.open > .detail { position: sticky; top: 5.5rem; max-height: calc(100vh - 5.5rem - var(--space-4)); overflow-y: auto; }
 
 /* What is running, when anything is: one line while the router is idle. */
 .strip { margin-bottom: var(--space-4); }
@@ -621,6 +624,7 @@ img.thumb { display: block; max-width: min(100%, 320px); max-height: 240px; bord
 
 @media (max-width: 1100px) {
   .master.open { grid-template-columns: minmax(0, 1fr); }
+  .master.open > .detail { position: static; max-height: none; overflow-y: visible; }
 }
 
 @media (max-width: 800px) {
