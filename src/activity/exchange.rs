@@ -15,6 +15,9 @@ use crate::config::BackendKind;
 use crate::routing::Match;
 use crate::text::cut;
 
+/// `anthropic-beta` flags kept; a client sends a handful.
+const MAX_BETAS: usize = 32;
+
 /// Runs once with the finished view.
 type OnFinish = Box<dyn FnOnce(&ExchangeView) + Send>;
 
@@ -88,6 +91,33 @@ impl Exchange {
     pub fn asked(&self, mut params: RequestParams) {
         params.thinking = params.thinking.map(|thinking| cut(&thinking, 40));
         self.update(|v| v.params = params);
+    }
+
+    /// Who sent the request, from its headers: the `user-agent` and the
+    /// `anthropic-beta` flags of every such header.
+    pub fn client(&self, headers: &http::HeaderMap) {
+        let agent = headers
+            .get(http::header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .map(|agent| cut(agent, 200));
+        let mut betas: Vec<String> = Vec::new();
+        let flags = headers
+            .get_all("anthropic-beta")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .map(str::trim)
+            .filter(|flag| !flag.is_empty())
+            .map(|flag| cut(flag, 100));
+        for flag in flags {
+            if betas.len() < MAX_BETAS && !betas.contains(&flag) {
+                betas.push(flag);
+            }
+        }
+        self.update(|v| {
+            v.client = agent;
+            v.betas = betas;
+        });
     }
 
     /// Claude Code's session id, as the client sent it.

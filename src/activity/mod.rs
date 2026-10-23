@@ -53,6 +53,10 @@ pub struct ExchangeView {
     pub peer: Option<String>,
     /// Claude Code's `x-claude-code-session-id`, as the client sent it.
     pub session: Option<String>,
+    /// The client's `user-agent`, cut.
+    pub client: Option<String>,
+    /// The `anthropic-beta` flags the client sent, each once and cut.
+    pub betas: Vec<String>,
     pub method: String,
     pub path: String,
     /// What the client named, cut.
@@ -132,6 +136,8 @@ impl Activity {
                 source,
                 peer,
                 session: None,
+                client: None,
+                betas: Vec::new(),
                 method: method.to_owned(),
                 path: path.to_owned(),
                 requested_model: None,

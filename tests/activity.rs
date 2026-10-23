@@ -139,6 +139,15 @@ async fn a_claude_code_session_id_is_kept_on_the_exchange() {
     let res = router
         .post("/v1/messages", &messages_body("claude-haiku-4-5"))
         .header("x-claude-code-session-id", "sess-abc-123")
+        .header("user-agent", "claude-cli/2.1.4 (external, cli)")
+        .header(
+            "anthropic-beta",
+            "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+        )
+        .header(
+            "anthropic-beta",
+            " interleaved-thinking-2025-05-14, context-1m-2025-08-07",
+        )
         .send()
         .await
         .unwrap();
@@ -146,6 +155,19 @@ async fn a_claude_code_session_id_is_kept_on_the_exchange() {
     let _ = res.text().await.unwrap();
     let view = finished(&router, &id).await;
     assert_eq!(view.session.as_deref(), Some("sess-abc-123"));
+    assert_eq!(
+        view.client.as_deref(),
+        Some("claude-cli/2.1.4 (external, cli)")
+    );
+    assert_eq!(
+        view.betas,
+        [
+            "oauth-2025-04-20",
+            "interleaved-thinking-2025-05-14",
+            "context-1m-2025-08-07"
+        ],
+        "every header, each flag once"
+    );
 }
 
 #[tokio::test]
