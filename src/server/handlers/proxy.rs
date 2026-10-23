@@ -123,7 +123,9 @@ async fn handle(
         .is_some()
         .then(|| anthropic::summarize(&body));
     let requested_model = peek.model.expect("peek guarantees a model");
-    note(exchange, |e| e.requested(&requested_model, peek.stream));
+    note(exchange, |e| {
+        e.requested(&requested_model, peek.stream, peek.effort.as_deref())
+    });
     if let Some(session) = parts
         .headers
         .get(SESSION_ID)

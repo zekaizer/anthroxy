@@ -18,7 +18,7 @@ fn begin(activity: &Arc<Activity>, id: &str) -> Exchange {
 }
 
 fn routed(exchange: &Exchange, matched: Match) {
-    exchange.requested("claude-haiku-4-5", true);
+    exchange.requested("claude-haiku-4-5", true, None);
     exchange.routed(
         "claude-haiku-4-5",
         matched,
@@ -163,7 +163,7 @@ fn an_exchange_dropped_before_its_response_is_a_client_that_left() {
 fn router_failures_upstream_errors_and_buffered_bodies() {
     let activity = Activity::new();
     let exchange = begin(&activity, "rtr_404");
-    exchange.requested("ghost", false);
+    exchange.requested("ghost", false, None);
     exchange.unrouted("ghost");
     exchange.fail(404, "model `ghost` is not served".into());
     let view = activity.find("rtr_404").unwrap();

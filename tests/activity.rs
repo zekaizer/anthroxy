@@ -148,6 +148,22 @@ async fn a_claude_code_session_id_is_kept_on_the_exchange() {
 }
 
 #[tokio::test]
+async fn the_effort_asked_for_is_kept_on_the_exchange_and_in_statistics() {
+    let upstream = MockUpstream::start(|_| sse(ANTHROPIC_SSE)).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let mut body = messages_body("fast");
+    body["output_config"] = json!({"effort": "xhigh"});
+    let res = router.post("/v1/messages", &body).send().await.unwrap();
+    let id = request_id(&res);
+    let _ = res.text().await.unwrap();
+    let view = finished(&router, &id).await;
+    assert_eq!(view.effort.as_deref(), Some("xhigh"));
+
+    let records = stats_records(&router.stats_dir, 1).await;
+    assert_eq!(records[0].effort.as_deref(), Some("xhigh"));
+}
+
+#[tokio::test]
 async fn an_unknown_model_is_tallied_tracked_and_persisted() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

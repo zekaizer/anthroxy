@@ -29,6 +29,9 @@ pub struct StatsRecord {
     pub upstream_model: Option<String>,
     #[serde(default)]
     pub stream: bool,
+    /// The `output_config.effort` the client asked for.
+    #[serde(default)]
+    pub effort: Option<String>,
     #[serde(default)]
     pub status: Option<u16>,
     #[serde(default)]
@@ -63,6 +66,7 @@ impl StatsRecord {
             backend: view.backend.clone(),
             upstream_model: view.upstream_model.clone(),
             stream: view.stream,
+            effort: view.effort.clone(),
             status: view.status,
             attempts: view.attempts,
             credential_refreshed: view.credential_refreshed,

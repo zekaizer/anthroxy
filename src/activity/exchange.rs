@@ -67,10 +67,11 @@ impl Exchange {
         self.started.elapsed().as_millis() as u64
     }
 
-    pub fn requested(&self, model: &str, stream: bool) {
+    pub fn requested(&self, model: &str, stream: bool, effort: Option<&str>) {
         self.update(|v| {
             v.requested_model = Some(cut(model, 200));
             v.stream = stream;
+            v.effort = effort.map(|effort| cut(effort, 40));
         });
     }
 

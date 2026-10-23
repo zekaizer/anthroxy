@@ -64,6 +64,8 @@ pub struct ExchangeView {
     pub kind: Option<BackendKind>,
     pub upstream_model: Option<String>,
     pub stream: bool,
+    /// The `output_config.effort` the client asked for, cut.
+    pub effort: Option<String>,
     pub status: Option<u16>,
     pub attempts: Option<u32>,
     /// A rejected credential was re-acquired and the request sent again.
@@ -127,6 +129,7 @@ impl Activity {
                 kind: None,
                 upstream_model: None,
                 stream: false,
+                effort: None,
                 status: None,
                 attempts: None,
                 credential_refreshed: false,
