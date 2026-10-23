@@ -911,7 +911,7 @@ function aliasesSnippet(status) {
 // ---------------------------------------------------------------- requests
 
 function requests(view, selected) {
-  const filter = h("input", { type: "text", placeholder: "Filter by model, backend, id, session or status", value: state.requestsFilter });
+  const filter = h("input", { type: "text", placeholder: "Filter by prompt, tool, model, effort, backend, id, session or status", value: state.requestsFilter });
   const narrowTo = (session) => {
     filter.value = session;
     state.requestsFilter = session;
@@ -934,7 +934,7 @@ function requests(view, selected) {
     const matches = (v) => {
       if (errorsOnly.checked && v.outcome !== "error") return false;
       if (!needle) return true;
-      return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer, v.session]
+      return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer, v.session, v.effort, v.prompt, v.step]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
     const running = data.in_flight.filter(matches);
@@ -961,34 +961,45 @@ function requests(view, selected) {
     let day = null;
     const matching = data.recent.filter(matches);
     let above = null;
-    for (const v of matching.slice(0, shown)) {
+    for (const run of turnRuns(matching.slice(0, shown))) {
+      const head = run[0];
       // A clock alone is ambiguous once the router has run past midnight, and
       // a date on every row is the same date seventeen times.
-      const at = new Date(v.received_at).toDateString();
+      const at = new Date(head.received_at).toDateString();
       if (at !== day) {
         day = at;
         // `above` is left alone: a day bar between two rows of one session is
         // not a break in the session.
-        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 9 }, dayLabel(v.received_at))));
+        rows.push(h("tr", { class: "daybar" }, h("td", { colspan: 9 }, dayLabel(head.received_at))));
       }
-      rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": rowLabel(v) }, () => go("requests", v.id),
-        h("td", railCell(v.session, above && above.session),
-          fmt.clock(v.received_at),
-          h("div", { class: "sub" }, rel(v.received_at), v.session ? [" · ", sessionMark(v.session, narrowTo)] : null)),
-        h("td", { class: "mono model" }, modelCell(v), pathNote(v),
-          v.source === "console" ? h("div", null, kindBadge("console")) : null),
-        h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
-        h("td", null, statusBadge(v.status), v.attempts > 1 ? [" ", attemptsCell(v.attempts)] : null),
-        h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
-        h("td", { class: "num" }, fmt.ms(v.duration_ms)),
-        h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
-          v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
-        h("td", { class: "num" }, v.usage && cacheKnown(v.usage) ? fmt.int(v.usage.cache_read) : "–",
-          cacheShare(v.usage) ? h("div", { class: "sub" }, cacheShare(v.usage)) : null),
-        h("td", null, outcomeBadge(v),
-          v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
-          v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null)));
-      above = v;
+      const barred = hasTurn(head);
+      if (barred) {
+        rows.push(turnBar(run, above && above.session, narrowTo));
+        above = head;
+      }
+      for (const v of run) {
+        const effort = v.effort && (!barred || v.effort !== head.effort) ? h("span", { class: "muted" }, ` · ${v.effort}`) : null;
+        rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": rowLabel(v) }, () => go("requests", v.id),
+          h("td", railCell(v.session, above && above.session),
+            fmt.clock(v.received_at),
+            barred
+              ? turnStep(v)
+              : h("div", { class: "sub" }, rel(v.received_at), v.session ? [" · ", sessionMark(v.session, narrowTo)] : null)),
+          h("td", { class: "mono model" }, modelCell(v, effort), pathNote(v),
+            v.source === "console" ? h("div", null, kindBadge("console")) : null),
+          h("td", { class: "wrap-anywhere" }, v.backend || "–", h("div", { class: "sub mono" }, v.upstream_model || "")),
+          h("td", null, statusBadge(v.status), v.attempts > 1 ? [" ", attemptsCell(v.attempts)] : null),
+          h("td", { class: "num" }, fmt.ms(v.ttfb_ms)),
+          h("td", { class: "num" }, fmt.ms(v.duration_ms)),
+          h("td", { class: "num" }, v.usage ? `${fmt.int(v.usage.input)} / ${fmt.int(v.usage.output)}` : "–",
+            v.output_tokens_per_second ? h("div", { class: "sub" }, fmt.rate(v.output_tokens_per_second)) : null),
+          h("td", { class: "num" }, v.usage && cacheKnown(v.usage) ? fmt.int(v.usage.cache_read) : "–",
+            cacheShare(v.usage) ? h("div", { class: "sub" }, cacheShare(v.usage)) : null),
+          h("td", null, outcomeBadge(v),
+            v.error ? h("div", { class: "sub one-line", title: v.error }, v.error) : null,
+            v.hint_count ? h("div", null, badge(`${v.hint_count} hint`, "warn")) : null)));
+        above = v;
+      }
     }
     const hidden = matching.length - Math.min(shown, matching.length);
     const more = h("button", { type: "button", class: "small" },
@@ -1091,11 +1102,67 @@ function rowLabel(v) {
   return v.session ? `Request ${v.id}, session ${sessionNumber(v.session)}` : `Request ${v.id}`;
 }
 
-function modelCell(v) {
+/// `after` follows the name the client sent, on its line.
+function modelCell(v, after = null) {
   if (!v.requested_model) return "–";
-  if (!v.model) return [v.requested_model, h("div", { class: "sub" }, "no route")];
-  if (v.model === v.requested_model) return v.model;
-  return [v.requested_model, h("div", { class: "sub" }, `→ ${v.model} (${v.matched})`)];
+  if (!v.model) return [v.requested_model, after, h("div", { class: "sub" }, "no route")];
+  if (v.model === v.requested_model) return [v.model, after];
+  return [v.requested_model, after, h("div", { class: "sub" }, `→ ${v.model} (${v.matched})`)];
+}
+
+/// Whether a request says which turn it belongs to: a session or a prompt.
+/// One with neither is a row of its own, as the list drew it before turns.
+function hasTurn(v) {
+  return Boolean(v.session || v.prompt);
+}
+
+/// The list, newest first, cut into runs of adjacent rows of one turn: one
+/// session and prompt, every row below the newest answering the one under
+/// it. A turn another session's requests interleave is drawn as several
+/// runs, each under its own bar. `answers` is the router's, by the rule the
+/// Recordings list groups by.
+function turnRuns(list) {
+  const runs = [];
+  let run = null;
+  for (const v of list) {
+    const newer = run && run[run.length - 1];
+    const carries = newer && hasTurn(v) && hasTurn(newer)
+      && newer.answers && v.session === newer.session && v.prompt === newer.prompt
+      && new Date(v.received_at).toDateString() === new Date(newer.received_at).toDateString();
+    if (carries) run.push(v);
+    else runs.push(run = [v]);
+  }
+  return runs;
+}
+
+/// The row above a run: its session, the prompt of its turn, the effort its
+/// newest request asked for and how many requests the run holds. A turn a
+/// notice opened has no prompt, and the notice stands in for it.
+function turnBar(run, previous, narrowTo) {
+  const head = run[0];
+  const opener = run[run.length - 1];
+  const label = head.prompt
+    ? h("span", { class: "turn-prompt", title: head.prompt }, head.prompt)
+    : h("span", { class: "turn-prompt muted" }, !opener.answers && opener.step ? opener.step : "no prompt of its own");
+  const facts = [
+    head.effort ? `effort ${head.effort}` : null,
+    run.length > 1 ? `${run.length} requests` : null,
+    rel(head.received_at),
+  ].filter(Boolean);
+  return h("tr", { class: "turnbar" },
+    h("td", { ...railCell(head.session, previous), colspan: 9 },
+      h("div", { class: "turn-line" },
+        head.session ? sessionMark(head.session, narrowTo) : null,
+        label,
+        h("span", { class: "sub" }, facts.flatMap((fact, i) => (i ? [" · ", fact] : [fact]))))));
+}
+
+/// What a request in a turn sends, under its time: the tool results it
+/// returns. The request that opens the turn sends what the bar above already
+/// shows, its prompt or the notice that woke the model.
+function turnStep(v) {
+  if (!v.answers || !v.step) return h("div", { class: "sub" }, "opens the turn");
+  return h("div", { class: "sub one-line mono step", title: v.step }, v.step);
 }
 
 async function showRequest(target, id, scroll) {
@@ -1109,8 +1176,11 @@ async function showRequest(target, id, scroll) {
       h("dl", { class: "facts" },
         fact("Received", `${fmt.time(v.received_at)} from ${v.peer || "–"}${v.source === "console" ? " (console test)" : ""}`),
         v.session ? fact("Session", sessionFact(v.session)) : null,
+        v.prompt ? fact("Turn", v.prompt) : null,
+        v.step ? fact("Step", v.step) : null,
         fact("Request", `${v.method} ${v.path}${v.stream ? " (stream)" : ""}`),
         fact("Model", v.requested_model ? `${v.requested_model}${v.model ? ` → ${v.model} (${v.matched})` : " (no route)"}` : "–"),
+        v.effort ? fact("Effort", v.effort) : null,
         fact("Backend", v.backend ? `${v.backend} (${v.kind}), upstream model ${v.upstream_model}` : "–"),
         fact("Status", v.status === null ? "–" : `${v.status}${v.attempts ? ` after ${v.attempts} attempt(s)` : ""}${v.credential_refreshed ? ", one re-sent with a re-acquired credential" : ""}`),
         fact("Timing", `headers ${fmt.ms(v.latency_ms)}, first byte ${fmt.ms(v.ttfb_ms)}, total ${fmt.ms(v.duration_ms)}`),
