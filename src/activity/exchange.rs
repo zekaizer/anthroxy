@@ -10,7 +10,7 @@ use futures_util::Stream;
 use tokio::sync::watch;
 
 use super::{Activity, ERROR_BODY_BYTES, ExchangeView, Hint, Outcome};
-use crate::anthropic::{RequestSummary, UsageScanner};
+use crate::anthropic::{RequestParams, RequestSummary, UsageScanner};
 use crate::config::BackendKind;
 use crate::routing::Match;
 use crate::text::cut;
@@ -82,6 +82,12 @@ impl Exchange {
             v.step = summary.step.clone();
             v.answers = summary.answers;
         });
+    }
+
+    /// What the request asked for besides its content.
+    pub fn asked(&self, mut params: RequestParams) {
+        params.thinking = params.thinking.map(|thinking| cut(&thinking, 40));
+        self.update(|v| v.params = params);
     }
 
     /// Claude Code's session id, as the client sent it.

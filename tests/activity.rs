@@ -183,6 +183,15 @@ async fn the_turn_is_kept_on_the_exchange_without_a_body_log() {
     let _ = res.text().await.unwrap();
     let view = finished(&router, &id).await;
     assert_eq!(view.prompt.as_deref(), Some("fix the flaky test"));
+    assert_eq!(
+        (
+            view.params.messages,
+            view.params.max_tokens,
+            view.params.bytes
+        ),
+        (3, Some(16), body.to_string().len() as u64),
+        "{view:?}"
+    );
     assert!(
         view.step
             .as_deref()

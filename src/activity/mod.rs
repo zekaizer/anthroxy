@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::anthropic::TokenUsage;
+use crate::anthropic::{RequestParams, TokenUsage};
 use crate::config::BackendKind;
 
 pub use exchange::{Exchange, Tracked};
@@ -74,6 +74,8 @@ pub struct ExchangeView {
     pub step: Option<String>,
     /// The request carries on the turn of the one before it.
     pub answers: bool,
+    /// What the request asked for besides its content.
+    pub params: RequestParams,
     pub status: Option<u16>,
     pub attempts: Option<u32>,
     /// A rejected credential was re-acquired and the request sent again.
@@ -143,6 +145,7 @@ impl Activity {
                 prompt: None,
                 step: None,
                 answers: false,
+                params: RequestParams::default(),
                 status: None,
                 attempts: None,
                 credential_refreshed: false,

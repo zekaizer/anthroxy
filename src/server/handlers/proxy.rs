@@ -123,6 +123,7 @@ async fn handle(
     note(exchange, |e| {
         e.requested(&requested_model, peek.stream, peek.effort.as_deref());
         e.turn(&summary);
+        e.asked(anthropic::params(&body));
     });
     if let Some(session) = parts
         .headers

@@ -841,3 +841,52 @@ fn js_strings<'a>(script: &'a str, opening: &str) -> Vec<&'a str> {
     }
     strings
 }
+
+#[test]
+fn params_count_what_a_request_carries_and_read_its_thinking() {
+    let body = br#"{"model":"m","max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":31999},
+        "system":[{"type":"text","text":"a"},{"type":"text","text":"b"}],
+        "tools":[{"name":"Read"},{"name":"mcp__github__search"},{"type":"web_search_20250305","name":"web_search"}],
+        "messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"yo"},{"role":"user","content":"go"}]}"#;
+    assert_eq!(
+        params(body),
+        RequestParams {
+            bytes: body.len() as u64,
+            max_tokens: Some(32000),
+            thinking: Some("enabled".into()),
+            thinking_budget: Some(31999),
+            messages: 3,
+            tools: 3,
+            mcp_tools: 1,
+            system_blocks: 2,
+        }
+    );
+
+    let adaptive = params(
+        br#"{"model":"m","system":"one string","thinking":{"type":"adaptive"},"messages":[]}"#,
+    );
+    assert_eq!(
+        (
+            adaptive.thinking.as_deref(),
+            adaptive.thinking_budget,
+            adaptive.system_blocks
+        ),
+        (Some("adaptive"), None, 1)
+    );
+
+    let odd = params(br#"{"model":"m","max_tokens":"lots","thinking":true,"tools":{},"system":7,"messages":"x"}"#);
+    assert_eq!(
+        odd,
+        RequestParams {
+            bytes: odd.bytes,
+            ..RequestParams::default()
+        }
+    );
+    assert_eq!(
+        params(b"[1]"),
+        RequestParams {
+            bytes: 3,
+            ..RequestParams::default()
+        }
+    );
+}
