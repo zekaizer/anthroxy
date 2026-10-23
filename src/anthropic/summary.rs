@@ -1,11 +1,12 @@
-//! What a Messages request asks, in a line: the body log lists entries by it.
+//! What a Messages request asks, in a line: the body log lists entries by it
+//! and the activity keeps it with each exchange.
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A request as the recordings list names it.
+/// A request as the recordings and requests lists name it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct RequestSummary {
     /// `messages` in the body.

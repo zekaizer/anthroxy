@@ -98,6 +98,22 @@ fn peek_reads_model_and_stream_only() {
 }
 
 #[test]
+fn peek_reads_the_effort_and_lets_a_malformed_one_through() {
+    let p = peek(br#"{"model":"m1","output_config":{"format":null,"effort":"xhigh"}}"#).unwrap();
+    assert_eq!(p.effort.as_deref(), Some("xhigh"));
+
+    for body in [
+        br#"{"model":"m1"}"#.as_slice(),
+        br#"{"model":"m1","output_config":{"effort":3}}"#.as_slice(),
+        br#"{"model":"m1","output_config":"high"}"#.as_slice(),
+        br#"{"model":"m1","output_config":{"effort":"low"},"output_config":{}}"#.as_slice(),
+    ] {
+        let p = peek(body).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(body)));
+        assert_eq!(p.effort, None, "{}", String::from_utf8_lossy(body));
+    }
+}
+
+#[test]
 fn peek_rejects_missing_model_and_non_json() {
     assert!(matches!(
         peek(br#"{"messages":[]}"#),

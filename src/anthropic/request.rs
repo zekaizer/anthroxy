@@ -1,6 +1,6 @@
 //! Inspection and rewriting of a request body on its way to a backend that
-//! speaks the Messages API. Only `model` and `stream` are read; the body is
-//! otherwise opaque except for the rewrites in [`rewrite`].
+//! speaks the Messages API. Only `model`, `stream` and the effort are read;
+//! the body is otherwise opaque except for the rewrites in [`rewrite`].
 
 use std::fmt;
 
@@ -13,6 +13,9 @@ use crate::body_field::{BodyField, set_all};
 pub struct RequestPeek {
     pub model: Option<String>,
     pub stream: bool,
+    /// `output_config.effort` when it is a string; any other shape is left
+    /// for the backend to reject.
+    pub effort: Option<String>,
 }
 
 /// Only an object: `rewrite` edits the body as one, and a derived
@@ -41,6 +44,13 @@ impl<'de> Visitor<'de> for PeekVisitor {
             match key.as_str() {
                 "model" => peek.model = map.next_value()?,
                 "stream" => peek.stream = map.next_value()?,
+                "output_config" => {
+                    let config: serde_json::Value = map.next_value()?;
+                    peek.effort = config
+                        .get("effort")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                }
                 _ => {
                     map.next_value::<IgnoredAny>()?;
                 }
@@ -58,7 +68,8 @@ pub enum PeekError {
     NoModel,
 }
 
-/// Extracts `model` and `stream`. Fails on non-JSON or a missing `model`.
+/// Extracts `model`, `stream` and the effort. Fails on non-JSON or a missing
+/// `model`.
 pub fn peek(body: &[u8]) -> Result<RequestPeek, PeekError> {
     let peek: RequestPeek = serde_json::from_slice(body).map_err(PeekError::NotJson)?;
     if peek.model.as_deref().is_none_or(str::is_empty) {

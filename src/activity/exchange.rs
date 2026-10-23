@@ -10,7 +10,7 @@ use futures_util::Stream;
 use tokio::sync::watch;
 
 use super::{Activity, ERROR_BODY_BYTES, ExchangeView, Hint, Outcome};
-use crate::anthropic::UsageScanner;
+use crate::anthropic::{RequestSummary, UsageScanner};
 use crate::config::BackendKind;
 use crate::routing::Match;
 use crate::text::cut;
@@ -67,10 +67,20 @@ impl Exchange {
         self.started.elapsed().as_millis() as u64
     }
 
-    pub fn requested(&self, model: &str, stream: bool) {
+    pub fn requested(&self, model: &str, stream: bool, effort: Option<&str>) {
         self.update(|v| {
             v.requested_model = Some(cut(model, 200));
             v.stream = stream;
+            v.effort = effort.map(|effort| cut(effort, 40));
+        });
+    }
+
+    /// Where the request sits in its turn, read from the client's body.
+    pub fn turn(&self, summary: &RequestSummary) {
+        self.update(|v| {
+            v.prompt = summary.prompt.clone();
+            v.step = summary.step.clone();
+            v.answers = summary.answers;
         });
     }
 

@@ -277,6 +277,12 @@ h3 { font-size: var(--text-md); margin: var(--space-4) 0 var(--space-2); }
 
 /* The day a run of rows belongs to, said once. */
 tr.daybar td { background: var(--sunken); color: var(--muted); font-size: var(--text-xs); font-weight: 600; padding: var(--space-1) var(--space-2); }
+/* The turn a run of rows belongs to, said once above it. The cell spans the
+   table without widening it: the prompt gives way to the facts after it. */
+tr.turnbar td { white-space: normal; max-width: 0; padding-bottom: var(--space-1); }
+.turn-line { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.turn-prompt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.turn-line > .sub, .turn-line > .session-mark { flex: none; white-space: nowrap; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-2); }
 .card {
@@ -331,6 +337,9 @@ tr.attempt td:first-child { box-shadow: inset 2px 0 var(--line); padding-left: v
 td .sub { color: var(--faint); font-size: var(--text-xs); }
 /* A reason beside its badge: one line, however long the backend made it. */
 td .sub.one-line { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Under a row's time: a tool and a file name fit, and the table still fits a
+   1280px window. */
+td .sub.one-line.step { max-width: 12rem; }
 /* A model id is full of hyphens, so a narrow column would break it into a
    column of syllables; the table scrolls instead. */
 td.model { min-width: 11rem; }

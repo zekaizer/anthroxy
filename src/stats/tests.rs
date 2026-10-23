@@ -20,6 +20,7 @@ fn record(at: &str, model: Option<&str>) -> StatsRecord {
         backend: model.map(|_| "mock".to_owned()),
         upstream_model: model.map(str::to_owned),
         stream: true,
+        effort: Some("high".to_owned()),
         status: Some(200),
         attempts: Some(1),
         credential_refreshed: false,
