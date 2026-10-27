@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use serde_json::{Value, json};
 
-use super::error::ErrorType;
+use super::error::ErrorDetail;
 use super::fragments::{identity, stop_reason_name, usage_json};
 use crate::ir::{Event, Failure, StopReason, Usage};
 
@@ -154,13 +154,7 @@ impl StreamEncoder {
         }
         frame(
             "error",
-            json!({
-                "type": "error",
-                "error": {
-                    "type": ErrorType::from_kind(failure.kind),
-                    "message": failure.message,
-                },
-            }),
+            json!({"type": "error", "error": ErrorDetail::from_failure(failure)}),
             out,
         );
         self.state = State::Closed;
@@ -498,6 +492,20 @@ mod tests {
         let mut out = String::new();
         StreamEncoder::new("m").error(&Failure::new(FailureKind::RateLimit, "slow down"), &mut out);
         assert!(out.contains(r#""type":"rate_limit_error""#), "{out}");
+    }
+
+    #[test]
+    fn a_context_overflow_event_says_prompt_is_too_long() {
+        let mut out = String::new();
+        let failure = Failure::new(FailureKind::ContextExceeded, "8192 tokens at most");
+        StreamEncoder::new("m").error(&failure, &mut out);
+        assert_eq!(
+            out,
+            frame(
+                "error",
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 8192 tokens at most"}}"#
+            )
+        );
     }
 
     #[test]

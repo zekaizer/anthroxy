@@ -13,6 +13,8 @@ pub struct Failure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureKind {
     InvalidRequest,
+    /// The request does not fit the model's context window.
+    ContextExceeded,
     Authentication,
     Permission,
     NotFound,

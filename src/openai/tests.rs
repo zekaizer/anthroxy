@@ -670,6 +670,79 @@ fn vllm_style_error_objects_are_errors() {
     ));
 }
 
+/// LM Studio's answer to a prompt over its context, as an HTTP 400 body.
+const LM_STUDIO_OVERFLOW: &str = r#"{"error":"Engine protocol predict request returned 400: {\"error\":{\"code\":400,\"message\":\"request (60016 tokens) exceeds the available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":60016,\"n_ctx\":8192}}"}"#;
+
+/// The same answer inside an event stream that began with HTTP 200.
+const LM_STUDIO_STREAMED_OVERFLOW: &str = r#"{"error":{"message":"Engine protocol predict request returned 400: {\"error\":{\"code\":400,\"message\":\"request (60016 tokens) exceeds the available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":60016,\"n_ctx\":8192}}"},"message":"Engine protocol predict request returned 400: {\"error\":{\"code\":400,\"message\":\"request (60016 tokens) exceeds the available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":60016,\"n_ctx\":8192}}"}"#;
+
+#[test]
+fn a_context_overflow_is_recognised_by_its_name_or_its_words() {
+    let kind = |status: Option<u16>, raw: &str| decode_error(status, raw.as_bytes()).kind;
+    for name in [
+        "context_length_exceeded",
+        "exceed_context_size_error",
+        "Context_Length_Exceeded",
+    ] {
+        let as_type = json!({"error": {"message": "too big", "type": name}}).to_string();
+        let as_code = json!({"error": {"message": "too big", "code": name}}).to_string();
+        assert_eq!(
+            kind(Some(400), &as_type),
+            FailureKind::ContextExceeded,
+            "{name}"
+        );
+        assert_eq!(kind(None, &as_code), FailureKind::ContextExceeded, "{name}");
+    }
+    for message in [
+        "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens",
+        "request (60016 tokens) exceeds the available context size (8192 tokens)",
+        "The context size has been exceeded.",
+        "Maximum Context Length is 4096",
+    ] {
+        let document = json!({"error": {"message": message, "type": "BadRequestError"}});
+        assert_eq!(
+            kind(Some(400), &document.to_string()),
+            FailureKind::ContextExceeded,
+            "{message}"
+        );
+    }
+    // The body's words are more specific than whatever status carried them.
+    let vllm = r#"{"object":"error","message":"This model's maximum context length is 8192 tokens.","type":"BadRequestError","code":400}"#;
+    assert_eq!(kind(Some(500), vllm), FailureKind::ContextExceeded);
+    assert_eq!(
+        kind(Some(400), r#"{"error": {"message": "bad tool schema"}}"#),
+        FailureKind::InvalidRequest
+    );
+}
+
+#[test]
+fn a_context_overflow_name_is_matched_whatever_its_case_and_separators() {
+    let camel = r#"{"error":{"type":"ContextLengthExceeded","message":"x"}}"#;
+    assert_eq!(
+        decode_error(None, camel.as_bytes()).kind,
+        FailureKind::ContextExceeded
+    );
+}
+
+#[test]
+fn lm_studio_overflows_are_context_overflows_with_its_message() {
+    let detail = serde_json::from_str::<Value>(LM_STUDIO_OVERFLOW).unwrap()["error"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let failure = Failure::new(FailureKind::ContextExceeded, detail);
+    assert_eq!(
+        decode_error(Some(400), LM_STUDIO_OVERFLOW.as_bytes()),
+        failure
+    );
+    assert_eq!(
+        ChunkDecoder::new()
+            .decode(LM_STUDIO_STREAMED_OVERFLOW)
+            .unwrap(),
+        vec![Event::Error(failure)]
+    );
+}
+
 #[test]
 fn a_null_error_field_is_not_an_error() {
     let mut d = ChunkDecoder::new();

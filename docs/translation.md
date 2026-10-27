@@ -131,6 +131,13 @@ is the more honest of the two. The message is the backend's own, with nothing
 in front of it (ADR-0020). A failure inside the stream (connection lost,
 malformed frame, an error frame) is one `error` event carrying the same kind.
 
+A request over the model's context window is its own kind,
+`FailureKind::ContextExceeded`, recognised from names or wording listed in the
+`CONTEXT_EXCEEDED` table of `src/openai/error.rs`, whatever the status. The
+Anthropic codec writes it as `invalid_request_error` with the message
+`prompt is too long: ` and the backend's own words, the wording Claude Code
+compacts on; a new server's wording is one row in that table.
+
 ## What the IR buys
 
 - One-sided changes. Supporting `role: "system"` mid-conversation touched the

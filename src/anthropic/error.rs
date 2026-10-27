@@ -65,7 +65,9 @@ impl ErrorType {
     /// The type an IR failure is reported as.
     pub fn from_kind(kind: FailureKind) -> Self {
         match kind {
-            FailureKind::InvalidRequest => ErrorType::InvalidRequestError,
+            FailureKind::InvalidRequest | FailureKind::ContextExceeded => {
+                ErrorType::InvalidRequestError
+            }
             FailureKind::Authentication => ErrorType::AuthenticationError,
             FailureKind::Permission => ErrorType::PermissionError,
             FailureKind::NotFound => ErrorType::NotFoundError,
@@ -107,6 +109,22 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
+impl ErrorDetail {
+    /// The `error` object of a document and of an `error` event alike. A
+    /// context overflow is worded as the API words it, `prompt is too long: `
+    /// before the origin's message, since that is what a client compacts on.
+    pub fn from_failure(failure: &Failure) -> Self {
+        let message = match failure.kind {
+            FailureKind::ContextExceeded => format!("prompt is too long: {}", failure.message),
+            _ => failure.message.clone(),
+        };
+        Self {
+            kind: ErrorType::from_kind(failure.kind),
+            message,
+        }
+    }
+}
+
 impl ErrorResponse {
     pub fn new(kind: ErrorType, message: impl Into<String>) -> Self {
         Self {
@@ -131,7 +149,11 @@ impl ErrorResponse {
 
 /// An IR failure as the error document the client reads.
 pub fn encode_error(failure: &Failure) -> ErrorResponse {
-    ErrorResponse::new(ErrorType::from_kind(failure.kind), failure.message.clone())
+    ErrorResponse {
+        kind: "error".to_owned(),
+        error: ErrorDetail::from_failure(failure),
+        request_id: None,
+    }
 }
 
 /// An Anthropic error body as an IR failure: the document's own type when it

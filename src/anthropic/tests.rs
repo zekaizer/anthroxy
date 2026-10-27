@@ -30,6 +30,24 @@ fn error_response_serializes_to_anthropic_shape() {
 }
 
 #[test]
+fn a_context_overflow_is_reported_as_prompt_is_too_long() {
+    let failure = crate::ir::Failure::new(
+        crate::ir::FailureKind::ContextExceeded,
+        "request (60016 tokens) exceeds the available context size (8192 tokens)",
+    );
+    assert_eq!(
+        serde_json::to_value(encode_error(&failure)).unwrap(),
+        json!({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "prompt is too long: request (60016 tokens) exceeds the available context size (8192 tokens)"
+            }
+        })
+    );
+}
+
+#[test]
 fn decode_models_reads_anthropic_shape_only() {
     let anthropic = br#"{"data":[{"id":"claude-opus-4-5","type":"model","display_name":"Opus","created_at":"2025-01-01T00:00:00Z"}]}"#;
     let opus = decode_models(anthropic);

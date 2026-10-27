@@ -614,6 +614,71 @@ async fn openai_error_becomes_anthropic_error() {
     assert_eq!(body["error"]["message"], "<html>gateway down</html>");
 }
 
+/// LM Studio's answer to a prompt over its context, as an HTTP 400 body.
+const LM_STUDIO_OVERFLOW: &str = r#"{"error":"Engine protocol predict request returned 400: {\"error\":{\"code\":400,\"message\":\"request (60016 tokens) exceeds the available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":60016,\"n_ctx\":8192}}"}"#;
+
+/// The same answer inside an event stream that began with HTTP 200.
+const LM_STUDIO_STREAMED_OVERFLOW: &str = r#"{"error":{"message":"Engine protocol predict request returned 400: {\"error\":{\"code\":400,\"message\":\"request (60016 tokens) exceeds the available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":60016,\"n_ctx\":8192}}"},"message":"Engine protocol predict request returned 400: {\"error\":{\"code\":400,\"message\":\"request (60016 tokens) exceeds the available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":60016,\"n_ctx\":8192}}"}"#;
+
+/// What Claude Code compacts the conversation on: the backend's own words
+/// after `prompt is too long: `.
+fn compaction_message() -> String {
+    let detail = serde_json::from_str::<Value>(LM_STUDIO_OVERFLOW).unwrap()["error"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    format!("prompt is too long: {detail}")
+}
+
+#[tokio::test]
+async fn a_context_overflow_reaches_the_client_as_prompt_is_too_long() {
+    let upstream = MockUpstream::start(|_| {
+        Response::builder()
+            .status(400)
+            .header("content-type", "application/json")
+            .body(Body::from(LM_STUDIO_OVERFLOW))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["message"], compaction_message());
+}
+
+#[tokio::test]
+async fn a_streamed_context_overflow_is_a_prompt_is_too_long_event() {
+    let upstream = MockUpstream::start(|_| {
+        sse_response(
+            vec![format!(
+                "event: error\ndata: {LM_STUDIO_STREAMED_OVERFLOW}\n\n"
+            )],
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(true))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let text = res.text().await.unwrap();
+    let all = events(&text);
+    assert_eq!(all.len(), 1, "{text}");
+    let (event, data) = &all[0];
+    assert_eq!(event, "error");
+    assert_eq!(data["error"]["type"], "invalid_request_error");
+    assert_eq!(data["error"]["message"], compaction_message());
+}
+
 #[tokio::test]
 async fn non_stream_response_becomes_message_document() {
     let upstream = MockUpstream::start(|_| {
