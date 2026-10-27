@@ -1,7 +1,6 @@
 //! HTTP ingress: authentication, model discovery and the proxy handler.
 
 mod accept;
-mod annotate;
 mod auth;
 mod buffered;
 mod error;
@@ -20,7 +19,6 @@ use tokio::net::TcpListener;
 
 use crate::config::Config;
 
-pub use annotate::backend_prefix;
 pub use auth::ClientToken;
 pub use error::RouterError;
 pub use request_id::RequestId;

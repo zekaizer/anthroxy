@@ -127,9 +127,19 @@ A 4xx/5xx from the backend keeps its status — that is what the transport said
 and what a retry policy reads — so a server that answers `500` with
 `invalid_api_key` reaches the client as HTTP 500 carrying
 `authentication_error`. The type and the status may disagree that way; the type
-is the more honest of the two. The message starts with
-`[backend <name>, HTTP <status>]`. A failure inside the stream (connection lost,
+is the more honest of the two. The message is the backend's own, with nothing
+in front of it (ADR-0020). A failure inside the stream (connection lost,
 malformed frame, an error frame) is one `error` event carrying the same kind.
+
+A request over the model's context window is its own kind,
+`FailureKind::ContextExceeded`, recognised by both codecs from names or wording
+listed in the `CONTEXT_EXCEEDED` table of `src/ir/failure.rs`, whatever the
+status. The Anthropic codec writes it as `invalid_request_error` with the
+message `prompt is too long: ` and the backend's own words, the wording Claude
+Code compacts on; a new server's wording is one row in that table. An
+`anthropic` backend's error document whose message matches the table, such as
+vLLM's Messages endpoint sends, is relayed with only that start added
+(`anthropic::reword_error`).
 
 ## What the IR buys
 

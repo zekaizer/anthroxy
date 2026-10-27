@@ -171,6 +171,8 @@ fn decoders_survive_arbitrary_documents() {
         let _ = anthropic::params(bytes);
         let _ = anthropic::decode(bytes);
         let _ = anthropic::decode_models(bytes);
+        let _ = anthropic::decode_error(Some(400), bytes);
+        let _ = anthropic::reword_error(bytes);
         let _ = openai::decode_response(bytes);
         let _ = openai::decode_models(bytes);
         let _ = openai::decode_error(Some(500), bytes);

@@ -2,7 +2,9 @@
 
 ## Status
 
-accepted
+accepted; the prefix on relayed upstream error messages, the `request_id`
+fill and the consequence that Claude Code does not pattern-match on upstream
+messages superseded by ADR-0020
 
 ## Context
 

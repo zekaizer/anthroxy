@@ -62,6 +62,12 @@ one value, so it belongs at the smallest window among them; a session mixing a
 Appending `[1m]` to a model name claims a 1M window instead, which is right only
 for a model that truly has one.
 
+A gauge above the model's real window ends in the backend refusing the
+request, and Claude Code compacts the conversation when that 400 says
+`prompt is too long`. The Anthropic API says so itself; the router words that
+way an `openai` backend's overflow and an `anthropic` one's worded otherwise,
+such as vLLM's ([translation](translation.md#errors)).
+
 ## MCP tools: sent up front, or loaded on demand
 
 Claude Code defers MCP tool definitions — sending a small `ToolSearch` tool and

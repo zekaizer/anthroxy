@@ -17,7 +17,7 @@ mod usage;
 mod tests;
 
 pub use decode::{DecodeError, decode};
-pub use error::{ErrorResponse, ErrorType, decode_error, encode_error};
+pub use error::{ErrorResponse, ErrorType, decode_error, encode_error, reword_error};
 pub use message::encode as encode_message;
 pub use models::{ModelList, ModelObject, decode_models, encode_model, encode_models};
 pub use params::{RequestParams, params};

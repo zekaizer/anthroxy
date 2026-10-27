@@ -1,7 +1,7 @@
 //! What an error body from an OpenAI-compatible server says, as an IR
 //! failure.
 
-use crate::ir::{Failure, FailureKind};
+use crate::ir::{Failure, FailureKind, says_context_exceeded};
 
 use super::common::{error_document, error_names, parse_object};
 
@@ -9,33 +9,46 @@ use super::common::{error_document, error_names, parse_object};
 pub const MAX_RAW_MESSAGE: usize = 200;
 
 /// The failure an error body stands for. `status` is the HTTP status it
-/// arrived with, absent inside an event stream. The status decides the kind
-/// where it says something; where it does not, the names the document uses
-/// do.
+/// arrived with, absent inside an event stream. A context overflow named
+/// anywhere in the body is that kind whatever the status; otherwise the
+/// status decides where it says something, and the names the document uses
+/// do where it does not.
 pub fn decode(status: Option<u16>, raw: &[u8]) -> Failure {
-    let kind = status.map(FailureKind::from_status);
-    if let Ok(fields) = parse_object(raw)
-        && let Some(message) = error_document(&fields)
+    let fields = parse_object(raw).ok();
+    let (message, names) = match fields
+        .as_ref()
+        .and_then(|fields| Some((error_document(fields)?, fields)))
     {
-        let named = error_names(&fields).find_map(named_kind);
-        let kind = match kind {
-            Some(kind) if !kind.is_unspecific() => kind,
-            _ => named.unwrap_or(FailureKind::Upstream),
-        };
-        return Failure::new(kind, message);
-    }
-    let message: String = String::from_utf8_lossy(raw)
-        .trim()
-        .chars()
-        .take(MAX_RAW_MESSAGE)
-        .collect();
-    Failure::new(kind.unwrap_or(FailureKind::Upstream), message)
+        Some((message, fields)) => (message, error_names(fields).collect()),
+        None => (
+            String::from_utf8_lossy(raw)
+                .trim()
+                .chars()
+                .take(MAX_RAW_MESSAGE)
+                .collect(),
+            Vec::new(),
+        ),
+    };
+    let overflow = names
+        .iter()
+        .copied()
+        .chain([message.as_str()])
+        .any(says_context_exceeded);
+    let kind = match status.map(FailureKind::from_status) {
+        _ if overflow => FailureKind::ContextExceeded,
+        Some(kind) if !kind.is_unspecific() => kind,
+        _ => names
+            .into_iter()
+            .find_map(named_kind)
+            .unwrap_or(FailureKind::Upstream),
+    };
+    Failure::new(kind, message)
 }
 
 /// The kind an OpenAI-compatible `error.type` or `error.code` stands for.
 /// Servers spell these loosely — `invalid_request_error`, `BadRequestError`,
-/// `context_length_exceeded` — so separators are dropped and a name is
-/// matched by what it contains.
+/// `rate_limit_exceeded` — so separators are dropped and a name is matched by
+/// what it contains.
 fn named_kind(name: &str) -> Option<FailureKind> {
     let name: String = name
         .chars()
@@ -55,7 +68,7 @@ fn named_kind(name: &str) -> Option<FailureKind> {
         Some(FailureKind::NotFound)
     } else if has("toolarge") || has("toolong") {
         Some(FailureKind::TooLarge)
-    } else if has("invalid") || has("badrequest") || has("contextlength") {
+    } else if has("invalid") || has("badrequest") {
         Some(FailureKind::InvalidRequest)
     } else {
         None

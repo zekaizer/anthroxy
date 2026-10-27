@@ -29,11 +29,17 @@ rewrite, 404 for an unknown model (listing the configured ones), 408 for a
 body that has not arrived whole two minutes after its head, 413 over
 `server.max_body_bytes`, 502 when a backend is unreachable, redirects (the
 router will not follow one, and neither should Claude Code), or its credential
-cannot be obtained. Backend errors are relayed with their status; if the body is
-an Anthropic error, its message is prefixed with
-`[backend <name>, HTTP <status>]`. An `openai` backend's error body is always
-converted to an Anthropic error document (type from the status, same prefix); a
-failure in the middle of its stream is one `error` event.
+cannot be obtained. Backend errors are relayed with their status, and an
+Anthropic backend's body byte-for-byte: Claude Code recovers from some
+rejections by matching the backend's wording. The one change is to a context
+overflow worded the backend's own way, as vLLM's Messages endpoint does: its
+message gains the `prompt is too long: ` start Claude Code compacts on, and the
+rest of the document stays as sent. A `passthrough` backend's body is never
+touched. An `openai` backend's error body is always converted to an Anthropic
+error document carrying the backend's own message (type from the status); a
+failure in the middle of its stream is one `error` event. A backend's response
+headers, `retry-after` and `x-should-retry` included, are relayed for every
+backend kind; only hop-by-hop headers and `content-length` are dropped.
 
 Also see [Configuration](configuration.md) for `server.token` and
 `server.max_body_bytes`, and [The web console](console.md) for the `/api/*`
