@@ -529,7 +529,8 @@ async function guarded(target, load) {
 
 /// `load` as a poll: once something has been read, a later failure says above
 /// it how old the reading is instead of taking it away. A refresh that missed
-/// is not a reason to empty the page a reader is looking at.
+/// is not a reason to empty the page a reader is looking at. Until the first
+/// answer an empty `target` says it is reading, which an empty router is not.
 ///
 /// A call while a load is still waiting runs once more after it instead of
 /// beside it, so a slow router is never sent a second poll and answers cannot
@@ -546,6 +547,10 @@ function polled(target, load) {
   let generation = 0;
   const once = async () => {
     const at = generation;
+    if (fresh === null) {
+      target.setAttribute("aria-busy", "true");
+      if (!target.hasChildNodes()) replace(target, h("p", { class: "muted" }, "Reading from the router…"));
+    }
     try {
       await load();
       if (at !== generation) return;
@@ -564,6 +569,8 @@ function polled(target, load) {
       }
       replace(notice, "Showing the last reading from ", rel(new Date(fresh).toISOString()),
         `. The router did not answer the refresh: ${error.message}`);
+    } finally {
+      if (at === generation) target.removeAttribute("aria-busy");
     }
   };
   const refresh = () => {
