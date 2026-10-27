@@ -5,9 +5,10 @@ on the router are settled inside Claude Code, from the model name and
 `ANTHROPIC_BASE_URL` alone, before a request exists. This page records those
 decisions, so that a surprise here is not chased through `src/`.
 
-Everything below was read out of the Claude Code 2.1.278 bundle; the two
-measured claims say so. Claude Code changes often — treat a detail that no
-longer matches as out of date, not as a bug in the router.
+Everything below was read out of the Claude Code 2.1.278 bundle, except where a
+claim says it was measured, and on which version. Claude Code changes often —
+treat a detail that no longer matches as out of date, not as a bug in the
+router.
 
 ## Discovery: which models reach the `/model` picker
 
@@ -50,16 +51,33 @@ as well as served, a model needs an `id` or `aliases` entry carrying `claude` or
 
 For a model it does not recognise, Claude Code assumes 200k and says so
 ("default for an unrecognized model" in `/context`). A larger window served in
-`GET /v1/models` does not change it; the field never left discovery.
+`GET /v1/models` does not change it; the field never left discovery. Claude Code
+has no per-model window setting anywhere else either: a `modelPicker` row takes
+only `model`, `label`, `description` and `behavesAs`, and `behavesAs` or
+`modelOverrides` makes an id borrow a known Claude model's window and
+capabilities wholesale.
 
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS` is the one lever, and it applies **only to
-models whose id is not a Claude model id** — measured: with it set to 500000, an
-unknown model's gauge read 500k while `claude-opus-5` and `claude-sonnet-4-6`
-stayed at 200k in the same setting. Every unknown model in a session shares that
-one value, so it belongs at the smallest window among them; a session mixing a
-32k local model with a 500k hosted one has to pick the 32k.
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` overrides the assumed window, and whether it
+applies depends on the id. An id that starts with `claude-`, in any casing, and
+carries no suffix Claude Code strips (such as `@YYYYMMDD`) is treated like a
+Claude model name: the variable applies to it only together with
+`DISABLE_COMPACT`, which turns off all compaction. Measured on Claude Code
+2.1.311 with the variable at 32768, reading `modelUsage.<id>.contextWindow` from
+`claude -p --output-format json`:
 
-Appending `[1m]` to a model name claims a 1M window instead, which is right only
+| Model id | Window |
+| --- | --- |
+| `claude-local` | 200000 (variable ignored) |
+| `claude-local` with `DISABLE_COMPACT=1` | 32768 |
+| `local-claude`, `anthropic-local`, `qwen3-coder` | 32768 |
+| `claude-local[1m]` | 1000000 |
+
+So a model that is not Claude should not get an id starting with `claude-`;
+`local-claude` passes the picker filter just as well. An earlier measurement on
+2.1.278 agrees: with the variable at 500000, an unknown model's gauge read 500k
+while `claude-opus-5` and `claude-sonnet-4-6` stayed at 200k.
+
+Appending `[1m]` to a model name claims exactly 1M instead, which is right only
 for a model that truly has one.
 
 A gauge above the model's real window ends in the backend refusing the
@@ -67,6 +85,16 @@ request, and Claude Code compacts the conversation when that 400 says
 `prompt is too long`. The Anthropic API says so itself; the router words that
 way an `openai` backend's overflow and an `anthropic` one's worded otherwise,
 such as vLLM's ([translation](translation.md#errors)).
+
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` is one value for every id it applies to, so a
+session mixing a 32k local model with a 500k hosted one would have to pick the
+32k. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1` (Claude Code
+2.1.223 and later) is the way each backend gets its own limit: for an id Claude
+Code does not recognise it skips proactive compaction and compacts only after
+the backend rejects the conversation with a too-long error it recognises, and
+the router's wording above makes every backend's overflow such an error. The
+cost is one rejected request before each such compaction. This is Claude Code's
+documented behaviour, not measured here.
 
 ## MCP tools: sent up front, or loaded on demand
 
@@ -103,10 +131,10 @@ Two model families are excluded whatever the setting: `claude-3-5-haiku` and
   `thinking`, `adaptive_thinking`, `interleaved_thinking`,
   `mid_conversation_system`, `temperature`, `effort`, `max_effort` and
   `xhigh_effort`.
-- `ANTHROPIC_DEFAULT_SONNET_MODEL`, `_OPUS_`, `_HAIKU_` and
-  `ANTHROPIC_SMALL_FAST_MODEL` name the models Claude Code reaches for on its
-  own, for session titles and small tasks. Setting them is the alternative to
-  giving a model those names as `aliases`.
+- `ANTHROPIC_DEFAULT_SONNET_MODEL`, `_OPUS_` and `_HAIKU_` name the models
+  Claude Code reaches for on its own, for session titles and small tasks
+  (`ANTHROPIC_SMALL_FAST_MODEL` is the deprecated name of the Haiku one).
+  Setting them is the alternative to giving a model those names as `aliases`.
 - `DISABLE_PROMPT_CACHING` for a backend that rejects `cache_control`,
   `DISABLE_INTERLEAVED_THINKING` for one that rejects that beta.
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` stops telemetry and other traffic
