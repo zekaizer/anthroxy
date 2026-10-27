@@ -529,12 +529,19 @@ function clearToken() {
 async function api(path, { method = "GET", body, raw = false } = {}) {
   const headers = { authorization: `Bearer ${state.token}` };
   if (body !== undefined) headers["content-type"] = "application/json";
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store",
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch {
+    // fetch rejects with the browser's own words, "Failed to fetch" in one
+    // and "NetworkError…" in another, only when nothing answered at all.
+    throw new Error("the router did not answer");
+  }
   if (res.status === 401) {
     signOut("The router did not accept the token.");
     throw new SignedOut();
@@ -616,7 +623,7 @@ function polled(target, load) {
         target.parentNode.insertBefore(notice, target);
       }
       replace(notice, "Showing the last reading from ", rel(new Date(fresh).toISOString()),
-        `. The router did not answer the refresh: ${error.message}`);
+        `. The refresh failed: ${error.message}`);
     } finally {
       if (at === generation) target.removeAttribute("aria-busy");
     }
@@ -721,8 +728,8 @@ function renderSignIn(message) {
       saveToken(token, remember.checked);
       state.token = token;
       renderShell();
-    } catch (error) {
-      status.textContent = `Cannot reach the router: ${error.message}`;
+    } catch {
+      status.textContent = "The router did not answer.";
     } finally {
       submit.disabled = false;
     }
@@ -733,6 +740,7 @@ function renderSignIn(message) {
 
 const header = {
   meta: null,
+  pill: null,
   nav: null,
 };
 
@@ -773,8 +781,9 @@ async function refreshHeader() {
     const status = await api("/api/status");
     state.status = status;
     noteServerTime(status.now);
+    header.pill = healthPill(status.health);
     replace(header.meta,
-      healthPill(status.health),
+      header.pill,
       // Every tab refreshes itself; this says whether what is on screen is
       // still being fed, which nothing did.
       h("span", null, "read ", rel(new Date(serverNow()).toISOString())),
@@ -782,7 +791,13 @@ async function refreshHeader() {
       h("span", null, "up ", since(status.started_at, "uptime")),
       h("span", null, status.listen));
   } catch (error) {
-    if (!(error instanceof SignedOut)) replace(header.meta, h("span", { class: "error-text" }, `offline: ${error.message}`));
+    if (error instanceof SignedOut) return;
+    // What was read last stays, its age still counting; only the pill says
+    // the router stopped answering.
+    const pill = badge("unreachable", "err");
+    if (header.pill && header.meta.contains(header.pill)) header.pill.replaceWith(pill);
+    else header.meta.prepend(pill);
+    header.pill = pill;
   }
 }
 
