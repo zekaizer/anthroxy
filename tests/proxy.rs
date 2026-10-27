@@ -26,6 +26,27 @@ async fn health_needs_no_auth() {
 }
 
 #[tokio::test]
+async fn claude_codes_connection_warming_probe_is_answered_without_auth() {
+    let upstream = MockUpstream::start(echo).await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let res = router
+        .http
+        .head(router.url("/api/hello"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res.bytes().await.unwrap().is_empty());
+    let res = router
+        .http
+        .get(router.url("/api/hello"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404, "only the HEAD Claude Code sends");
+}
+
+#[tokio::test]
 async fn rejects_missing_or_wrong_client_token() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

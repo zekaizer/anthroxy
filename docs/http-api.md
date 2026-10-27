@@ -7,8 +7,9 @@ or debug a response by hand.
 | Route | Auth | Behaviour |
 | --- | --- | --- |
 | `GET /healthz` | no | `{"status":"ok"}` |
+| `HEAD /api/hello` | no | 200, empty. Claude Code's connection-warming probe at startup. |
 | `GET /`, `GET /ui/` | no | The web console page (no data; the page asks for the token). |
-| `/api/*` | yes | The console's data and actions; see [The web console](console.md). |
+| `/api/*`, except `HEAD /api/hello` | yes | The console's data and actions; see [The web console](console.md). |
 | `GET /v1/models`, `GET /v1/models/{id}` | yes | The configured models, Anthropic list format. |
 | `POST /v1/messages`, `POST /v1/messages/count_tokens` | yes | Routed by the body's `model`; path and query forwarded unchanged. On an `openai` backend, `/v1/messages` is translated and sent to `/v1/chat/completions`; `count_tokens` is 404. |
 

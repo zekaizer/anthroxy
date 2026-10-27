@@ -5,7 +5,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{Method, Uri};
 use axum::middleware;
 use axum::response::Response;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, head, post};
 
 use super::handlers::{console, health, models, proxy};
 use super::{AppState, RequestId, RouterError, auth, request_id, shutdown};
@@ -46,6 +46,7 @@ pub fn build(state: AppState) -> Router {
 
     Router::new()
         .route("/healthz", get(health::healthz))
+        .route("/api/hello", head(health::hello))
         .route("/", get(console::root))
         .route("/ui", get(console::root))
         .route("/ui/", get(console::index))
