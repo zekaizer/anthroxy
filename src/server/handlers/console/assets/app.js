@@ -594,7 +594,10 @@ async function guarded(target, load) {
 /// `reset()` forgets the last reading, for a change that makes the next load
 /// answer a different question: what was read before is no longer something
 /// to fall back on, and a read still waiting is not waited for.
-function polled(target, load) {
+///
+/// The notice goes above `before`, which is `target` unless more of the page
+/// than `target` shows the same reading.
+function polled(target, load, before = target) {
   let fresh = null;
   let notice = null;
   let running = null;
@@ -620,7 +623,7 @@ function polled(target, load) {
       }
       if (!notice) {
         notice = h("div", { class: "banner warn", role: "status" });
-        target.parentNode.insertBefore(notice, target);
+        before.parentNode.insertBefore(notice, before);
       }
       replace(notice, "Showing the last reading from ", rel(new Date(fresh).toISOString()),
         `. The refresh failed: ${error.message}`);
@@ -1294,7 +1297,7 @@ function requests(view, selected) {
     else replace(detail);
   };
 
-  const refresh = polled(recent, load);
+  const refresh = polled(recent, load, inFlight);
   refresh();
   every(2000, refresh);
   open(selected);
