@@ -534,19 +534,26 @@ async function guarded(target, load) {
 /// A call while a load is still waiting runs once more after it instead of
 /// beside it, so a slow router is never sent a second poll and answers cannot
 /// arrive out of order.
+///
+/// `reset()` forgets the last reading, for a change that makes the next load
+/// answer a different question: what was read before is no longer something
+/// to fall back on, and a read still waiting is not waited for.
 function polled(target, load) {
   let fresh = null;
   let notice = null;
   let running = null;
   let again = false;
+  let generation = 0;
   const once = async () => {
+    const at = generation;
     try {
       await load();
+      if (at !== generation) return;
       fresh = serverNow();
       notice?.remove();
       notice = null;
     } catch (error) {
-      if (error instanceof SignedOut) return;
+      if (error instanceof SignedOut || at !== generation) return;
       if (fresh === null) {
         replace(target, banner(`Could not load: ${error.message}`));
         return;
@@ -559,20 +566,32 @@ function polled(target, load) {
         `. The router did not answer the refresh: ${error.message}`);
     }
   };
-  return () => {
+  const refresh = () => {
     if (running) {
       again = true;
       return running;
     }
-    running = (async () => {
+    const at = generation;
+    const chain = (async () => {
       do {
         again = false;
         await once();
-      } while (again);
-      running = null;
+      } while (again && at === generation);
+      if (running === chain) running = null;
     })();
-    return running;
+    running = chain;
+    return chain;
   };
+  refresh.reset = () => {
+    generation++;
+    fresh = null;
+    notice?.remove();
+    notice = null;
+    // The read still out is dropped when it lands; the new question is asked now.
+    running = null;
+    return refresh();
+  };
+  return refresh;
 }
 
 function every(ms, task) {
@@ -1365,17 +1384,20 @@ function stats(view) {
     h("button", {
       type: "button",
       "aria-pressed": state.statsRange === id ? "true" : "false",
-      onclick: () => { state.statsRange = id; drawRanges(); refresh(); },
+      onclick: () => { state.statsRange = id; drawRanges(); refresh.reset(); },
     }, label)));
   let drawn = null;
   const load = async () => {
+    const range = state.statsRange;
     let data;
     try {
-      data = await api(`/api/stats?range=${state.statsRange}`);
+      data = await api(`/api/stats?range=${range}`);
     } catch (error) {
       drawn = null;
       throw error;
     }
+    // Asked before the range changed: the load the change queued draws it.
+    if (range !== state.statsRange) return;
     const signature = JSON.stringify({ ...data, report: data.report && { ...data.report, since: null } });
     if (signature === drawn) return;
     drawn = signature;
