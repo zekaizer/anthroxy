@@ -586,7 +586,7 @@ async fn openai_error_becomes_anthropic_error() {
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "authentication_error");
-    assert_eq!(body["error"]["message"], "[backend mock, HTTP 401] bad key");
+    assert_eq!(body["error"]["message"], "bad key");
     assert_eq!(body["request_id"], request_id);
 
     let upstream = MockUpstream::start(|_| {
@@ -611,10 +611,7 @@ async fn openai_error_becomes_anthropic_error() {
     );
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"]["type"], "api_error");
-    assert_eq!(
-        body["error"]["message"],
-        "[backend mock, HTTP 503] <html>gateway down</html>"
-    );
+    assert_eq!(body["error"]["message"], "<html>gateway down</html>");
 }
 
 #[tokio::test]

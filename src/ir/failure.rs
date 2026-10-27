@@ -1,7 +1,7 @@
 //! A failure on its way between wire formats. Names no wire format.
 
 /// What a backend refused, or what went wrong reading its answer. `message`
-/// is the origin's own words; the router prefixes it where it is encoded.
+/// is the origin's own words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
     pub kind: FailureKind,

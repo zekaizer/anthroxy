@@ -3,7 +3,9 @@
 ## Status
 
 accepted; the clause that a body without the text `"thinking"` is not parsed
-superseded by ADR-0013; "no `ping`" superseded by ADR-0014
+superseded by ADR-0013; "no `ping`" superseded by ADR-0014; the
+`[backend <name>, HTTP <status>]` prefix on error messages superseded by
+ADR-0020
 
 Supersedes the body relay rules of ADR-0003 ("bodies are streamed chunk by
 chunk, no SSE parsing", "nothing else in the body is read") for backends with

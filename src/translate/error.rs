@@ -15,15 +15,9 @@ pub fn failure(kind: BackendKind, status: Option<u16>, raw: &[u8]) -> Failure {
 }
 
 /// An OpenAI backend's error response as the Anthropic error document the
-/// client sees: decoded into an IR failure, encoded back out with the
-/// backend named.
-pub fn upstream_error(
-    status: StatusCode,
-    raw: &[u8],
-    backend: &str,
-    request_id: &str,
-) -> ErrorResponse {
+/// client sees: decoded into an IR failure, encoded back out in the
+/// backend's own words (ADR-0020).
+pub fn upstream_error(status: StatusCode, raw: &[u8], request_id: &str) -> ErrorResponse {
     let failure = failure(BackendKind::OpenAi, Some(status.as_u16()), raw);
-    anthropic::encode_error(&failure, &crate::server::backend_prefix(backend, status))
-        .with_request_id(request_id)
+    anthropic::encode_error(&failure).with_request_id(request_id)
 }

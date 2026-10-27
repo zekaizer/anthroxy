@@ -127,8 +127,8 @@ A 4xx/5xx from the backend keeps its status — that is what the transport said
 and what a retry policy reads — so a server that answers `500` with
 `invalid_api_key` reaches the client as HTTP 500 carrying
 `authentication_error`. The type and the status may disagree that way; the type
-is the more honest of the two. The message starts with
-`[backend <name>, HTTP <status>]`. A failure inside the stream (connection lost,
+is the more honest of the two. The message is the backend's own, with nothing
+in front of it (ADR-0020). A failure inside the stream (connection lost,
 malformed frame, an error frame) is one `error` event carrying the same kind.
 
 ## What the IR buys

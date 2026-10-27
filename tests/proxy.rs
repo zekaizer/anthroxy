@@ -1271,12 +1271,16 @@ async fn static_credential_is_not_retried_on_401() {
 }
 
 #[tokio::test]
-async fn upstream_error_body_is_annotated_with_backend() {
+async fn upstream_error_body_is_relayed_unchanged() {
+    // Claude Code drops `output_config.effort` and retries only when the
+    // message starts with these words.
+    const BODY: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `effort` for the `output_config` parameter"}}"#;
     let upstream = MockUpstream::start(|_| {
-        json_response(
-            429,
-            json!({"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}),
-        )
+        Response::builder()
+            .status(400)
+            .header("content-type", "application/json")
+            .body(Body::from(BODY))
+            .unwrap()
     })
     .await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
@@ -1285,19 +1289,11 @@ async fn upstream_error_body_is_annotated_with_backend() {
         .send()
         .await
         .unwrap();
-    assert_eq!(res.status(), 429);
+    assert_eq!(res.status(), 400);
+    assert_eq!(res.headers()["content-type"], "application/json");
     assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
-    let body: Value = res.json().await.unwrap();
-    assert_eq!(body["error"]["type"], "rate_limit_error");
-    let message = body["error"]["message"].as_str().unwrap();
-    assert!(
-        message.contains("mock") && message.contains("429") && message.contains("slow down"),
-        "{message}"
-    );
-    assert!(
-        body["request_id"].is_string(),
-        "router adds its request id when upstream has none"
-    );
+    assert!(res.headers().contains_key("x-request-id"));
+    assert_eq!(res.text().await.unwrap(), BODY);
 }
 
 #[tokio::test]
@@ -1357,8 +1353,8 @@ async fn upstream_error_body_that_breaks_off_is_a_502() {
     );
 }
 
-/// Error bodies are read whole to be annotated; one that never ends must not
-/// grow the router's memory until the read timeout.
+/// Error bodies are read whole; one that never ends must not grow the
+/// router's memory until the read timeout.
 #[tokio::test]
 async fn an_upstream_error_body_without_end_is_cut_off_with_a_502() {
     let upstream = MockUpstream::start(|_| {

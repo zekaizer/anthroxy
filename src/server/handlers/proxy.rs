@@ -23,7 +23,6 @@ use crate::config::BackendKind;
 use crate::config::view::REDACTED;
 use crate::observability::{Recorder, RequestRecord};
 use crate::routing::Routed;
-use crate::server::annotate::annotate_upstream_error;
 use crate::server::buffered::read_all;
 use crate::server::handlers::openai;
 use crate::server::ping::{PING_INTERVAL, Pings};
@@ -317,7 +316,8 @@ async fn handle(
         .map(str::to_owned);
 
     let body = if status.is_client_error() || status.is_server_error() {
-        // ADR-0005: error bodies are buffered so they can be annotated.
+        // Error bodies are small and buffered: hints are read from them, and
+        // an `openai` one is rewritten as an Anthropic document.
         let raw = read_all(upstream, &backend.name, recorder).await?;
         tracing::warn!(
             status = status.as_u16(),
@@ -343,16 +343,9 @@ async fn handle(
             )
         });
         let (bytes, content_type) = match backend.kind {
-            BackendKind::Passthrough => (raw, content_type),
-            BackendKind::Anthropic => {
-                match annotate_upstream_error(&raw, &backend.name, status, request_id.as_str()) {
-                    Some(annotated) => (Bytes::from(annotated), content_type),
-                    None => (raw, content_type),
-                }
-            }
+            BackendKind::Passthrough | BackendKind::Anthropic => (raw, content_type),
             BackendKind::OpenAi => {
-                let document =
-                    translate::upstream_error(status, &raw, &backend.name, request_id.as_str());
+                let document = translate::upstream_error(status, &raw, request_id.as_str());
                 headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
                 (
                     Bytes::from(

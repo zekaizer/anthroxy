@@ -207,24 +207,19 @@ fn upstream_errors_take_their_type_from_the_status() {
     let doc = upstream_error(
         StatusCode::UNAUTHORIZED,
         br#"{"error": {"message": "bad key", "type": "invalid_request_error"}}"#,
-        "mock",
         "rtr_1",
     );
     assert_eq!(doc.error.kind, ErrorType::AuthenticationError);
-    assert_eq!(doc.error.message, "[backend mock, HTTP 401] bad key");
+    assert_eq!(doc.error.message, "bad key");
     assert_eq!(doc.request_id.as_deref(), Some("rtr_1"));
     let html = upstream_error(
         StatusCode::SERVICE_UNAVAILABLE,
         b"<html>gateway</html>",
-        "mock",
         "rtr_2",
     );
     assert_eq!(doc.kind, "error");
     assert_eq!(html.error.kind, ErrorType::ApiError);
-    assert_eq!(
-        html.error.message,
-        "[backend mock, HTTP 503] <html>gateway</html>"
-    );
+    assert_eq!(html.error.message, "<html>gateway</html>");
 }
 
 #[tokio::test]

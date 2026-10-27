@@ -129,13 +129,9 @@ impl ErrorResponse {
     }
 }
 
-/// An IR failure as the error document the client reads. `prefix` names
-/// where it came from; the API has no field for that.
-pub fn encode_error(failure: &Failure, prefix: &str) -> ErrorResponse {
-    ErrorResponse::new(
-        ErrorType::from_kind(failure.kind),
-        format!("{prefix}{}", failure.message),
-    )
+/// An IR failure as the error document the client reads.
+pub fn encode_error(failure: &Failure) -> ErrorResponse {
+    ErrorResponse::new(ErrorType::from_kind(failure.kind), failure.message.clone())
 }
 
 /// An Anthropic error body as an IR failure: the document's own type when it
