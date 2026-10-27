@@ -44,6 +44,10 @@ pub fn vars(config: &Config, base_url: &str) -> Vec<(&'static str, String)> {
         vars.push(("ANTHROPIC_AUTH_TOKEN", config.server.token.clone()));
     }
     vars.push(("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1".to_owned()));
+    vars.push((
+        "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT",
+        "1".to_owned(),
+    ));
     vars.push(("ANTHROPIC_MODEL", default_model));
     vars
 }
@@ -135,6 +139,28 @@ mod tests {
         assert!(
             out.contains("export ANTHROPIC_MODEL='m2'\n"),
             "default model wins"
+        );
+    }
+
+    #[test]
+    fn every_format_turns_off_the_unknown_model_window() {
+        let config = config("0.0.0.0:8787");
+        let sh = render_for(&config, None, EnvFormat::Sh);
+        assert!(
+            sh.contains("export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT='1'\n"),
+            "{sh}"
+        );
+        let powershell = render_for(&config, None, EnvFormat::Powershell);
+        assert!(
+            powershell
+                .contains("$env:CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT = '1'\n"),
+            "{powershell}"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&render_for(&config, None, EnvFormat::Json)).unwrap();
+        assert_eq!(
+            json["env"]["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"],
+            "1"
         );
     }
 

@@ -415,6 +415,9 @@ fn env_prints_shell_exports_and_json() {
         .stdout(predicate::str::contains(
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         ))
+        .stdout(predicate::str::contains(
+            "export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT='1'",
+        ))
         .stdout(predicate::str::contains("export ANTHROPIC_MODEL='fast'"));
     bin()
         .args(["--config", path, "env", "--format", "json"])
