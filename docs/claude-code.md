@@ -93,8 +93,17 @@ session mixing a 32k local model with a 500k hosted one would have to pick the
 Code does not recognise it skips proactive compaction and compacts only after
 the backend rejects the conversation with a too-long error it recognises, and
 the router's wording above makes every backend's overflow such an error. The
-cost is one rejected request before each such compaction. This is Claude Code's
-documented behaviour, not measured here.
+cost is one rejected request before each such compaction. Measured on Claude
+Code 2.1.311 with the variable set, against an `anthropic` backend refusing
+with vLLM's wording any request over a fixed size, compaction requests
+included: after the refusal Claude Code sent a compaction request; when that
+was refused too, it sent it again with about half the input, and the turn then
+succeeded. Through a router from before this wording, the same refusal was
+retried unchanged and the turn failed. The variable does not change the window
+Claude Code assumes, measured on the same version: `local-claude` stayed at
+200000 with it, so `/context` and a status line's percentage are still of 200k
+unless `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set as well. `anthroxy env` sets the
+variable: it changes nothing for an id Claude Code recognises.
 
 ## MCP tools: sent up front, or loaded on demand
 

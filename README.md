@@ -107,6 +107,7 @@ Then, in the shell that runs Claude Code:
 export ANTHROPIC_BASE_URL='http://localhost:8787'
 export ANTHROPIC_AUTH_TOKEN='<token from the config>'
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1'
+export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT='1'
 export ENABLE_TOOL_SEARCH='auto'          # keep MCP tools out of the context
 export ANTHROPIC_MODEL='local-claude'     # the model Claude Code starts with
 claude
@@ -118,10 +119,12 @@ claude
 Two surprises are worth knowing before the first session: **a model id that
 contains neither `claude` nor `anthropic` never reaches the `/model` picker**,
 and **Claude Code assumes a 200k context window for any model it does not
-recognise**. `CLAUDE_CODE_MAX_CONTEXT_TOKENS` corrects that, but not for an id
-starting with `claude-`, which is why the example says `local-claude`. Both are
-decided inside Claude Code, not by the router — [What Claude Code
-decides](docs/claude-code.md) explains them and the rest.
+recognise**. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`, which
+`anthroxy env` sets, makes it compact once the backend refuses the conversation
+as too long instead. `CLAUDE_CODE_MAX_CONTEXT_TOKENS` corrects the assumed
+window, but not for an id starting with `claude-`, which is why the example says
+`local-claude`. Both are decided inside Claude Code, not by the router — [What
+Claude Code decides](docs/claude-code.md) explains them and the rest.
 
 ## Watching it run
 
