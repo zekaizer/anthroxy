@@ -177,6 +177,7 @@ function recordings(view, opened) {
     });
     const tr = openRow({
       class: `clickable ${e.name === opened ? "selected" : ""}`,
+      "data-key": e.name,
       "aria-label": e.session
         ? `Recording ${e.request_id}, session ${sessionNumber(e.session)}`
         : `Recording ${e.request_id}`,
@@ -223,7 +224,7 @@ function recordings(view, opened) {
       const turn = turns.get(e.name);
       return [e.name, { ...turn, repeatsPrompt: turn.starts || !shownNames.has(turn.head) }];
     }));
-    const more = h("button", { type: "button", class: "small" });
+    const more = h("button", { type: "button", class: "small", "data-key": "more" });
     const moreLine = h("p", { class: "note" }, more);
     // A group is one row with its attempts; both counts are in groups, so
     // "50 more" adds 50 rows.
@@ -243,7 +244,7 @@ function recordings(view, opened) {
     label();
     // The rows can be fewer than the recordings twice over, so both say so.
     const folded = entries.length - grouped.length;
-    replace(list,
+    rerender(list,
       h("p", { class: "note" }, `${fmt.int(data.total)} recording(s) in `, h("code", null, data.dir), `, ${kept(data.retention)}. They hold whole conversations.`,
         data.total > data.entries.length ? ` The newest ${fmt.int(data.entries.length)} are listed.` : "",
         needle ? ` ${fmt.int(entries.length)} match(es) the filter.` : "",

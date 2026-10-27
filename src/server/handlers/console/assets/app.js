@@ -77,13 +77,17 @@ function replace(el, ...children) {
 }
 
 /// Replaces `el`'s content, keeping what the reader did to it: which
-/// `<details>` are open and how far tables and code blocks are scrolled.
-/// Elements are matched by their panel and their order within it.
+/// `<details>` are open, how far tables and code blocks are scrolled, where
+/// the focus is and where on screen the row they were reading sits.
+/// Elements are matched by their panel and their order within it, rows by
+/// their `data-key`.
 function rerender(el, ...children) {
   const saved = new Map();
   walkViewState(el, (key, node, kind) => {
     saved.set(key, kind === "open" ? node.open : [node.scrollLeft, node.scrollTop]);
   });
+  const focus = focusPlace(el);
+  const anchor = anchorRow(el);
   replace(el, ...children);
   walkViewState(el, (key, node, kind) => {
     if (!saved.has(key)) return;
@@ -91,6 +95,48 @@ function rerender(el, ...children) {
     if (kind === "open") node.open = value;
     else [node.scrollLeft, node.scrollTop] = value;
   });
+  if (focus) restoreFocus(el, focus);
+  const row = anchor && keyed(el, anchor.key);
+  if (row) window.scrollBy(0, row.getBoundingClientRect().top - anchor.top);
+}
+
+const FOCUSABLE = "a[href], button, input, select, textarea, summary, [tabindex]";
+
+function keyed(el, key) {
+  return el.querySelector(`[data-key="${CSS.escape(key)}"]`);
+}
+
+/// Where the focus is inside `el`: the keyed row around it, and its place
+/// among that row's controls (-1 for the row itself). Focus outside a keyed
+/// row is not kept: a place counted across all of `el` names another control
+/// once rows are added above it.
+function focusPlace(el) {
+  const active = document.activeElement;
+  const row = active && active.closest("[data-key]");
+  if (!row || !el.contains(row)) return null;
+  return {
+    key: row.dataset.key,
+    index: active === row ? -1 : [...row.querySelectorAll(FOCUSABLE)].indexOf(active),
+  };
+}
+
+function restoreFocus(el, { key, index }) {
+  const row = keyed(el, key);
+  const node = row && (index < 0 ? row : row.querySelectorAll(FOCUSABLE)[index]);
+  node?.focus({ preventScroll: true });
+}
+
+/// The first keyed row on screen, for a reader scrolled down the page: rows a
+/// redraw adds above it would otherwise move it from under the pointer. At
+/// the top of the page the reader sees new rows arrive instead.
+function anchorRow(el) {
+  if (window.scrollY === 0) return null;
+  for (const row of el.querySelectorAll("[data-key]")) {
+    // A hidden row measures at the top of the viewport, wherever it sits.
+    const { top, height } = row.getBoundingClientRect();
+    if (height && top >= 0) return { key: row.dataset.key, top };
+  }
+  return null;
 }
 
 function walkViewState(el, visit) {
@@ -1075,7 +1121,7 @@ function requests(view, selected) {
       ? table(
         ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
         running.map((v, i) =>
-          openRow({ class: "clickable", "aria-label": rowLabel(v) }, () => go("requests", v.id),
+          openRow({ class: "clickable", "data-key": v.id, "aria-label": rowLabel(v) }, () => go("requests", v.id),
             h("td", railCell(v.session, running[i - 1] && running[i - 1].session),
               fmt.clock(v.received_at),
               h("div", { class: "sub mono" }, v.id, v.session ? [" · ", sessionMark(v.session, narrowTo)] : null)),
@@ -1112,7 +1158,7 @@ function requests(view, selected) {
       }
       for (const v of run) {
         const effort = v.effort && (!barred || v.effort !== head.effort) ? h("span", { class: "muted" }, ` · ${v.effort}`) : null;
-        rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": rowLabel(v) }, () => go("requests", v.id),
+        rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "data-key": v.id, "aria-label": rowLabel(v) }, () => go("requests", v.id),
           h("td", railCell(v.session, above && above.session),
             fmt.clock(v.received_at),
             barred
@@ -1135,7 +1181,7 @@ function requests(view, selected) {
       }
     }
     const hidden = matching.length - Math.min(shown, matching.length);
-    const more = h("button", { type: "button", class: "small" },
+    const more = h("button", { type: "button", class: "small", "data-key": "more" },
       `Show ${fmt.int(Math.min(LIST_PAGE, hidden))} more of ${fmt.int(hidden)} not shown`);
     more.addEventListener("click", () => { shown += LIST_PAGE; draw(); });
     rerender(recent,
@@ -1284,7 +1330,8 @@ function turnBar(run, previous, narrowTo) {
     run.length > 1 ? `${run.length} requests` : null,
     rel(head.received_at),
   ].filter(Boolean);
-  return h("tr", { class: "turnbar" },
+  // Keyed by the request that opened the turn, which the run keeps as it grows.
+  return h("tr", { class: "turnbar", "data-key": `turn:${opener.id}` },
     h("td", { ...railCell(head.session, previous), colspan: 9 },
       h("div", { class: "turn-line" },
         head.session ? sessionMark(head.session, narrowTo) : null,
