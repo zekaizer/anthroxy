@@ -368,8 +368,11 @@ const fmt = {
   ms: (ms) => {
     if (ms === null || ms === undefined) return "–";
     if (ms < 1000) return `${ms} ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
-    return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+    // A unit is chosen by the value as it prints, so rounding never shows "10.00 s" or "1m 60s".
+    if (ms < 9995) return `${(ms / 1000).toFixed(2)} s`;
+    if (ms < 59950) return `${(ms / 1000).toFixed(1)} s`;
+    const s = Math.round(ms / 1000);
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
   },
   seconds: (s) => {
     if (s === null || s === undefined) return "–";
@@ -395,9 +398,10 @@ const fmt = {
     const abs = Math.abs(diff);
     // Inside the clocks' own disagreement, so neither "0s ago" nor "in 0s".
     if (abs < 1.5) return "just now";
-    const text = abs < 60 ? `${Math.round(abs)}s`
-      : abs < 3600 ? `${Math.round(abs / 60)}m`
-      : abs < 86400 ? `${(abs / 3600).toFixed(1)}h`
+    const s = Math.round(abs), m = Math.round(abs / 60), hr = (abs / 3600).toFixed(1);
+    const text = s < 60 ? `${s}s`
+      : m < 60 ? `${m}m`
+      : hr < 24 ? `${hr}h`
       : `${(abs / 86400).toFixed(1)}d`;
     return diff >= 0 ? `in ${text}` : `${text} ago`;
   },
