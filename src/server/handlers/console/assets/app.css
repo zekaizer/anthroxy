@@ -41,6 +41,8 @@
   --accent: #2f6fdb;
   --accent-soft: #e6eefc;
   --accent-line: #b8cdf2;
+  /* Text and marks drawn on an --accent fill. */
+  --on-accent: #ffffff;
   --ok: #1f8a4c;
   --ok-soft: #e3f4ea;
   --ok-line: #b5e0c6;
@@ -76,6 +78,7 @@
     --accent: #6b9cf2;
     --accent-soft: #1c2b45;
     --accent-line: #31496f;
+    --on-accent: #0f1218;
     --ok: #4cc17f;
     --ok-soft: #14301f;
     --ok-line: #265f3d;
@@ -121,7 +124,7 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: 0.55; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 /* Danger keeps the palette but never the primary fill. */
 button.danger { color: var(--err); border-color: var(--err-line); }
 button.small { height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--text-xs); }
@@ -166,7 +169,7 @@ input[type="checkbox"]::before {
   width: 10px;
   height: 10px;
   clip-path: polygon(14% 45%, 0 60%, 40% 100%, 100% 22%, 84% 8%, 38% 68%);
-  background: #fff;
+  background: var(--on-accent);
   transform: scale(0);
 }
 input[type="checkbox"]:disabled { opacity: 0.55; cursor: default; }
@@ -496,8 +499,8 @@ button.badge:hover:not(:disabled) { border-color: currentColor; }
 .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; height: var(--control-h); }
 .segmented button { border: none; border-radius: 0; border-right: 1px solid var(--line); height: 100%; color: var(--muted); }
 .segmented button:last-child { border-right: none; }
-.segmented button:hover:not(:disabled) { border-color: var(--line); background: var(--surface-hover); }
-.segmented button[aria-pressed="true"] { background: var(--accent); color: #fff; font-weight: 600; }
+.segmented button:not([aria-pressed="true"]):hover:not(:disabled) { border-color: var(--line); background: var(--surface-hover); }
+.segmented button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 
 dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-3); margin: var(--space-1) 0 var(--space-2); font-size: var(--text-sm); }
 dl.facts dt { color: var(--muted); }
