@@ -1168,8 +1168,10 @@ function requests(view, selected) {
             h("td", { class: "num" }, fmt.bytes(v.bytes)))))
       : data.in_flight.length
         ? h("p", { class: "idle" }, badge("in flight", "info"), ` ${fmt.int(data.in_flight.length)} in flight, hidden by the filter.`)
-        : h("p", { class: "idle" }, badge("idle", "ok"), " Nothing in flight.",
-          data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null));
+        : h("p", { class: "idle" }, badge("idle", "ok"),
+          // One flex item, or the gap splits the sentence around its age.
+          h("span", null, "Nothing in flight.",
+            data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null)));
   };
 
   const drawList = () => {
