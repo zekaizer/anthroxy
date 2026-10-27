@@ -563,13 +563,15 @@ async function api(path, { method = "GET", body, raw = false } = {}) {
   return data;
 }
 
-/// Runs `load`, showing its failure in `target` instead of throwing.
+/// Runs `load`, showing its failure in `target` instead of throwing, and
+/// returns that failure, or null when it loaded.
 async function guarded(target, load) {
   try {
     await load();
+    return null;
   } catch (error) {
-    if (error instanceof SignedOut) return;
-    replace(target, banner(`Could not load: ${error.message}`));
+    if (!(error instanceof SignedOut)) replace(target, banner(`Could not load: ${error.message}`));
+    return error;
   }
 }
 
@@ -1115,18 +1117,21 @@ function requests(view, selected) {
   /// not fold back what the reader asked to see.
   let shown = LIST_PAGE;
 
-  const draw = () => {
-    if (!data) return;
+  /// What the filter and "Errors only" let through.
+  const matcher = () => {
     const needle = filter.value.trim().toLowerCase();
-    const matches = (v) => {
+    return (v) => {
       if (errorsOnly.checked && v.outcome !== "error") return false;
       if (!needle) return true;
       return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer, v.session, v.effort, v.prompt, v.step,
         v.source, outcomeLabel(v), v.error]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
-    const running = data.in_flight.filter(matches);
-    const filtered = Boolean(needle) || errorsOnly.checked;
+  };
+
+  const drawFlight = () => {
+    if (!data) return;
+    const running = data.in_flight.filter(matcher());
     // Nothing in flight is the usual state, and a table header over an empty
     // row is a third of the first screen spent saying so.
     rerender(inFlight, running.length
@@ -1147,7 +1152,12 @@ function requests(view, selected) {
         ? h("p", { class: "idle" }, badge("in flight", "info"), ` ${fmt.int(data.in_flight.length)} in flight, hidden by the filter.`)
         : h("p", { class: "idle" }, badge("idle", "ok"), " Nothing in flight.",
           data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null));
+  };
 
+  const drawList = () => {
+    if (!data) return;
+    const matches = matcher();
+    const filtered = Boolean(filter.value.trim()) || errorsOnly.checked;
     const rows = [];
     let day = null;
     const matching = data.recent.filter(matches);
@@ -1205,29 +1215,48 @@ function requests(view, selected) {
       hidden ? h("p", { class: "note" }, more) : null);
   };
 
-  let drawn = null;
+  const draw = () => {
+    drawFlight();
+    drawList();
+  };
+
+  /// Whether the open request's last read failed for a reason another read
+  /// can mend; one the router no longer holds (404) is not asked for again.
+  let detailMissed = false;
+  const readDetail = async (id, scroll) => {
+    const error = await showRequest(detail, id, scroll);
+    if (id === selected) detailMissed = Boolean(error) && error.status !== 404;
+  };
+
+  // Elapsed times tick in the page; only real changes redraw. A stream in
+  // flight changes its bytes on every poll, which redraws its strip and not
+  // the finished list beside it.
+  let drawnFlight = null;
+  let drawnRecent = null;
   const load = async () => {
     let fresh;
     try {
       fresh = await api("/api/requests");
     } catch (error) {
-      drawn = null;
+      drawnFlight = drawnRecent = null;
       throw error;
     }
     noteServerTime(fresh.now);
-    // Elapsed times tick in the page; only real changes redraw.
-    const signature = JSON.stringify({
-      in_flight: fresh.in_flight.map(({ elapsed_ms, ...rest }) => rest),
-      recent: fresh.recent,
-    });
+    const flight = JSON.stringify(fresh.in_flight.map(({ elapsed_ms, ...rest }) => rest));
+    const recentNow = JSON.stringify(fresh.recent);
     // An exchange still running keeps changing, so its detail is read again
-    // with the list rather than frozen at the moment it was opened.
-    if (selected && data && data.in_flight.some((v) => v.id === selected)) showRequest(detail, selected, false);
-    if (signature === drawn) return;
-    drawn = signature;
-    data = fresh;
-    draw();
-    if (selected) showRequest(detail, selected, false);
+    // with the list until the read that sees how it ended; a finished one
+    // does not change again, and is read again only after a read that failed.
+    if (selected && (detailMissed || (data && data.in_flight.some((v) => v.id === selected)))) readDetail(selected, false);
+    if (recentNow !== drawnRecent) {
+      data = fresh;
+      draw();
+    } else if (flight !== drawnFlight) {
+      data = fresh;
+      drawFlight();
+    }
+    drawnFlight = flight;
+    drawnRecent = recentNow;
   };
   filter.addEventListener("input", () => { state.requestsFilter = filter.value; shown = LIST_PAGE; draw(); });
   errorsOnly.addEventListener("change", () => { state.errorsOnly = errorsOnly.checked; shown = LIST_PAGE; draw(); });
@@ -1246,7 +1275,7 @@ function requests(view, selected) {
     selected = id;
     draw();
     master.classList.toggle("open", Boolean(id));
-    if (id) showRequest(detail, id, true);
+    if (id) readDetail(id, true);
     else replace(detail);
   };
 
@@ -1360,7 +1389,7 @@ function turnStep(v) {
 }
 
 async function showRequest(target, id, scroll) {
-  await guarded(target, async () => {
+  return guarded(target, async () => {
     const v = await api(`/api/requests/${encodeURIComponent(id)}`);
     const close = h("button", { type: "button", class: "small", onclick: () => go("requests") }, "Close");
     const recording = v.recording
