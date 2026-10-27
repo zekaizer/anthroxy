@@ -72,6 +72,19 @@ fn a_backends_own_overflow_wording_is_reworded_as_prompt_is_too_long() {
 }
 
 #[test]
+fn litellms_overflow_is_reworded_as_prompt_is_too_long() {
+    let litellm = r#"{"type":"error","error":{"type":"invalid_request_error","message":"litellm.ContextWindowExceededError: litellm.BadRequestError: HostedVLLMException - input too big"}}"#;
+    let message = reword_error(litellm.as_bytes())
+        .map(|raw| serde_json::from_slice::<Value>(&raw).unwrap()["error"]["message"].clone());
+    assert_eq!(
+        message,
+        Some(json!(
+            "prompt is too long: litellm.ContextWindowExceededError: litellm.BadRequestError: HostedVLLMException - input too big"
+        ))
+    );
+}
+
+#[test]
 fn other_error_documents_and_bodies_are_not_reworded() {
     for raw in [
         r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#,

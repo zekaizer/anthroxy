@@ -56,6 +56,7 @@ const CONTEXT_EXCEEDED: &[&str] = &[
     "exceeds the available context size",
     "maximum context length",
     "context size has been exceeded",
+    "context window exceeded",
 ];
 
 /// Whether `text`, an error's name or message, says the request exceeded the

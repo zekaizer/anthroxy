@@ -698,6 +698,8 @@ fn a_context_overflow_is_recognised_by_its_name_or_its_words() {
         "request (60016 tokens) exceeds the available context size (8192 tokens)",
         "The context size has been exceeded.",
         "Maximum Context Length is 4096",
+        "litellm.ContextWindowExceededError: litellm.BadRequestError: HostedVLLMException - input too big",
+        "litellm.ContextWindowExceededError: litellm._pre_call_checks: Context Window exceeded for given call. No models have context window large enough for this call.",
     ] {
         let document = json!({"error": {"message": message, "type": "BadRequestError"}});
         assert_eq!(
