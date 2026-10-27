@@ -23,7 +23,8 @@ change with the theme.
 Colour comes in named roles, never as a literal: surfaces (`--bg`, `--surface`,
 `--surface-hover`, `--sunken`), text (`--text`, `--muted`, `--faint`), lines
 (`--line`, `--line-strong`), and four judgement families each with a foreground,
-a soft fill and a line — `--accent`, `--ok`, `--warn`, `--err`. Charts draw from
+a soft fill and a line — `--accent`, `--ok`, `--warn`, `--err` — with
+`--on-accent` for text and marks drawn on an `--accent` fill. Charts draw from
 `--series-1…3` and `--critical`, which were validated as a set against
 `--surface`.
 
