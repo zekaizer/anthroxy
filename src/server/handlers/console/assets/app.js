@@ -647,11 +647,23 @@ function polled(target, load) {
   return refresh;
 }
 
-function every(ms, task) {
+/// Runs `task` every `ms` while the page is shown. A tick waits while the
+/// reader has text selected in the view: a redraw would take the selection
+/// away, and the first tick after it is released catches up. `hold: false`
+/// is for the header and the ticking ages, which go on saying how old the
+/// reading is meanwhile.
+function every(ms, task, { hold = true } = {}) {
   const id = setInterval(() => {
-    if (!document.hidden) task();
+    if (!document.hidden && !(hold && selecting())) task();
   }, ms);
   state.timers.push(id);
+}
+
+function selecting() {
+  const selection = document.getSelection();
+  const view = document.getElementById("view");
+  return Boolean(view && selection && !selection.isCollapsed && selection.rangeCount
+    && view.contains(selection.getRangeAt(0).commonAncestorContainer));
 }
 
 function clearTimers() {
@@ -825,8 +837,8 @@ function route() {
   clearTimers();
   document.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
   state.reloadNotice = null;
-  every(10000, refreshHeader);
-  every(1000, tick);
+  every(10000, refreshHeader, { hold: false });
+  every(1000, tick, { hold: false });
   view.replaceChildren();
   const views = { overview, requests, stats, tools, recordings };
   const retarget = views[state.tab](view, state.arg);
