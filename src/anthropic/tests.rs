@@ -47,6 +47,62 @@ fn a_context_overflow_is_reported_as_prompt_is_too_long() {
     );
 }
 
+/// vLLM's Messages endpoint refusing a prompt over the context window, as an
+/// HTTP 400 body.
+const VLLM_OVERFLOW: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens. However, your prompt contains 9000 input tokens, which exceeds this limit even without any output tokens. Please reduce the length of the input prompt."}}"#;
+
+#[test]
+fn a_backends_own_overflow_wording_is_reworded_as_prompt_is_too_long() {
+    let reworded = reword_error(VLLM_OVERFLOW.as_bytes()).expect("reworded");
+    let mut expected: Value = serde_json::from_str(VLLM_OVERFLOW).unwrap();
+    let message = expected["error"]["message"].as_str().unwrap().to_owned();
+    expected["error"]["message"] = Value::String(format!("prompt is too long: {message}"));
+    assert_eq!(
+        String::from_utf8(reworded).unwrap(),
+        serde_json::to_string(&expected).unwrap()
+    );
+
+    let with_more = r#"{"type":"error","error":{"param":"messages","type":"BadRequestError","message":"maximum context length is 8192"},"request_id":"req_up"}"#;
+    let reworded: Value =
+        serde_json::from_slice(&reword_error(with_more.as_bytes()).unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_string(&reworded).unwrap(),
+        r#"{"type":"error","error":{"param":"messages","type":"BadRequestError","message":"prompt is too long: maximum context length is 8192"},"request_id":"req_up"}"#
+    );
+}
+
+#[test]
+fn other_error_documents_and_bodies_are_not_reworded() {
+    for raw in [
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#,
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: This model's maximum context length is 8192 tokens."}}"#,
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `effort` for the `output_config` parameter"}}"#,
+        r#"{"type":"message","error":{"type":"invalid_request_error","message":"maximum context length is 8192"}}"#,
+        r#"{"object":"error","message":"This model's maximum context length is 8192 tokens.","type":"BadRequestError"}"#,
+        "maximum context length is 8192",
+    ] {
+        assert_eq!(reword_error(raw.as_bytes()), None, "{raw}");
+    }
+}
+
+#[test]
+fn a_context_overflow_is_decoded_from_its_wording_and_not_from_the_apis_own() {
+    assert_eq!(
+        decode_error(Some(400), VLLM_OVERFLOW.as_bytes()).kind,
+        crate::ir::FailureKind::ContextExceeded
+    );
+    let named = r#"{"type":"error","error":{"type":"ContextLengthExceeded","message":"x"}}"#;
+    assert_eq!(
+        decode_error(None, named.as_bytes()).kind,
+        crate::ir::FailureKind::ContextExceeded
+    );
+    let anthropic = r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#;
+    assert_eq!(
+        decode_error(Some(400), anthropic.as_bytes()).kind,
+        crate::ir::FailureKind::InvalidRequest
+    );
+}
+
 #[test]
 fn decode_models_reads_anthropic_shape_only() {
     let anthropic = br#"{"data":[{"id":"claude-opus-4-5","type":"model","display_name":"Opus","created_at":"2025-01-01T00:00:00Z"}]}"#;

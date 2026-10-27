@@ -1,7 +1,8 @@
 use http::StatusCode;
 use serde::Serialize;
+use serde_json::Value;
 
-use crate::ir::{Failure, FailureKind};
+use crate::ir::{Failure, FailureKind, says_context_exceeded};
 
 /// `error.type` values defined by the Anthropic API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -109,13 +110,21 @@ pub struct ErrorDetail {
     pub message: String,
 }
 
+/// How the API starts the message of a request over the context window;
+/// Claude Code compacts the conversation on it.
+const PROMPT_TOO_LONG: &str = "prompt is too long: ";
+
+fn prompt_too_long(message: &str) -> String {
+    format!("{PROMPT_TOO_LONG}{message}")
+}
+
 impl ErrorDetail {
     /// The `error` object of a document and of an `error` event alike. A
     /// context overflow is worded as the API words it, `prompt is too long: `
     /// before the origin's message, since that is what a client compacts on.
     pub fn from_failure(failure: &Failure) -> Self {
         let message = match failure.kind {
-            FailureKind::ContextExceeded => format!("prompt is too long: {}", failure.message),
+            FailureKind::ContextExceeded => prompt_too_long(&failure.message),
             _ => failure.message.clone(),
         };
         Self {
@@ -156,34 +165,55 @@ pub fn encode_error(failure: &Failure) -> ErrorResponse {
     }
 }
 
-/// An Anthropic error body as an IR failure: the document's own type when it
-/// names one the API defines, the status otherwise. `status` is absent when
-/// the body did not arrive with one.
+/// An Anthropic error body as an IR failure: a context overflow when its type
+/// or message says so, otherwise the document's own type when it names one
+/// the API defines, the status otherwise. `status` is absent when the body
+/// did not arrive with one.
 pub fn decode_error(status: Option<u16>, raw: &[u8]) -> Failure {
-    let document: Option<serde_json::Value> = serde_json::from_slice(raw).ok();
+    let document: Option<Value> = serde_json::from_slice(raw).ok();
     let error = document.as_ref().and_then(|d| d.get("error"));
-    let named = error
-        .and_then(|e| e.get("type"))
-        .and_then(|t| t.as_str())
-        .and_then(ErrorType::from_name)
-        .map(ErrorType::kind);
-    let kind = named
-        .or_else(|| status.map(FailureKind::from_status))
-        .unwrap_or(FailureKind::Upstream);
-    let message = error
-        .and_then(|e| e.get("message"))
-        .and_then(|m| m.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            String::from_utf8_lossy(raw)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(MAX_DETAIL)
-                .collect()
-        });
+    let name = error.and_then(|e| e.get("type")).and_then(Value::as_str);
+    let text = error.and_then(|e| e.get("message")).and_then(Value::as_str);
+    let overflow = name.into_iter().chain(text).any(says_context_exceeded);
+    let named = name.and_then(ErrorType::from_name).map(ErrorType::kind);
+    let kind = match named.or_else(|| status.map(FailureKind::from_status)) {
+        _ if overflow => FailureKind::ContextExceeded,
+        Some(kind) => kind,
+        None => FailureKind::Upstream,
+    };
+    let message = text.map(str::to_owned).unwrap_or_else(|| {
+        String::from_utf8_lossy(raw)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(MAX_DETAIL)
+            .collect()
+    });
     Failure::new(kind, message)
+}
+
+/// An Anthropic error document from a backend, with a context overflow the
+/// backend worded its own way reworded as the API words it. Only
+/// `error.message` changes; every other field, and the order of all of them,
+/// comes back as the backend sent it. `None` when `raw` is not an error
+/// document, or its message is not such an overflow, and is relayed as is.
+pub fn reword_error(raw: &[u8]) -> Option<Vec<u8>> {
+    let mut document: Value = serde_json::from_slice(raw).ok()?;
+    let object = document.as_object_mut()?;
+    if object.get("type").and_then(Value::as_str) != Some("error") {
+        return None;
+    }
+    let message = object
+        .get_mut("error")?
+        .as_object_mut()?
+        .get_mut("message")?;
+    let text = message.as_str()?;
+    if text.starts_with(PROMPT_TOO_LONG) || !says_context_exceeded(text) {
+        return None;
+    }
+    *message = Value::String(prompt_too_long(text));
+    serde_json::to_vec(&document).ok()
 }
 
 /// Characters of a body that is not an error document reported as the detail.

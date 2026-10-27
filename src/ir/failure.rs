@@ -47,6 +47,34 @@ impl FailureKind {
     }
 }
 
+/// Text that marks a request over the model's context window in an error's
+/// names or its message, one entry per way a server words it. Matched with
+/// case and everything but ASCII letters and digits ignored, on both sides.
+const CONTEXT_EXCEEDED: &[&str] = &[
+    "context_length_exceeded",
+    "exceed_context_size",
+    "exceeds the available context size",
+    "maximum context length",
+    "context size has been exceeded",
+];
+
+/// Whether `text`, an error's name or message, says the request exceeded the
+/// model's context window.
+pub fn says_context_exceeded(text: &str) -> bool {
+    let text = squashed(text);
+    CONTEXT_EXCEEDED
+        .iter()
+        .any(|needle| text.contains(&squashed(needle)))
+}
+
+/// `text` lowercased, with only its ASCII letters and digits kept.
+fn squashed(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 /// Longest message kept; a backend's error text is cut here, so no
 /// exchange record or error document carries more.
 pub const MAX_MESSAGE_CHARS: usize = 4096;

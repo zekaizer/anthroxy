@@ -1296,6 +1296,78 @@ async fn upstream_error_body_is_relayed_unchanged() {
     assert_eq!(res.text().await.unwrap(), BODY);
 }
 
+/// vLLM's Messages endpoint refusing a prompt over the context window.
+const VLLM_OVERFLOW: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens. However, your prompt contains 9000 input tokens, which exceeds this limit even without any output tokens. Please reduce the length of the input prompt."}}"#;
+
+#[tokio::test]
+async fn a_backends_context_overflow_reaches_the_client_as_prompt_is_too_long() {
+    let upstream = MockUpstream::start(|_| {
+        Response::builder()
+            .status(400)
+            .header("content-type", "application/json")
+            .body(Body::from(VLLM_OVERFLOW))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    assert_eq!(res.headers()["content-type"], "application/json");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("prompt is too long: This model's maximum context length"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_passthrough_backends_error_body_is_relayed_byte_for_byte() {
+    let upstream = MockUpstream::start(|req| {
+        if req.path_and_query.starts_with("/v1/models") {
+            json_response(
+                200,
+                json!({
+                    "data": [{
+                        "id": "claude-opus-4-5",
+                        "type": "model",
+                        "display_name": "Opus",
+                        "created_at": "2024-01-01T00:00:00Z"
+                    }],
+                    "has_more": false
+                }),
+            )
+        } else {
+            Response::builder()
+                .status(400)
+                .header("content-type", "application/json")
+                .body(Body::from(VLLM_OVERFLOW))
+                .unwrap()
+        }
+    })
+    .await;
+    let router = TestRouter::start(&passthrough_and_local(&upstream.url())).await;
+    let res = router
+        .http
+        .post(router.url("/v1/messages"))
+        .header("authorization", "Bearer sk-ant-oat01-test")
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .body(messages_body("claude-opus-4-5").to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    assert!(res.headers().get("x-anthroxy-backend").is_none());
+    assert_eq!(res.text().await.unwrap(), VLLM_OVERFLOW);
+}
+
 #[tokio::test]
 async fn non_json_upstream_error_passes_through_verbatim() {
     let upstream = MockUpstream::start(|_| {

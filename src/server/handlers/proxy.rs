@@ -317,7 +317,8 @@ async fn handle(
 
     let body = if status.is_client_error() || status.is_server_error() {
         // Error bodies are small and buffered: hints are read from them, and
-        // an `openai` one is rewritten as an Anthropic document.
+        // an `openai` one is rewritten as an Anthropic document, and an
+        // `anthropic` one's context overflow reworded (ADR-0020).
         let raw = read_all(upstream, &backend.name, recorder).await?;
         tracing::warn!(
             status = status.as_u16(),
@@ -343,7 +344,11 @@ async fn handle(
             )
         });
         let (bytes, content_type) = match backend.kind {
-            BackendKind::Passthrough | BackendKind::Anthropic => (raw, content_type),
+            BackendKind::Passthrough => (raw, content_type),
+            BackendKind::Anthropic => match anthropic::reword_error(&raw) {
+                Some(reworded) => (Bytes::from(reworded), content_type),
+                None => (raw, content_type),
+            },
             BackendKind::OpenAi => {
                 let document = translate::upstream_error(status, &raw, request_id.as_str());
                 headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));

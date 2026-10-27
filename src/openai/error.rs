@@ -1,23 +1,12 @@
 //! What an error body from an OpenAI-compatible server says, as an IR
 //! failure.
 
-use crate::ir::{Failure, FailureKind};
+use crate::ir::{Failure, FailureKind, says_context_exceeded};
 
 use super::common::{error_document, error_names, parse_object};
 
 /// Characters of a non-JSON body reported to the client.
 pub const MAX_RAW_MESSAGE: usize = 200;
-
-/// Text that marks a request over the model's context window in an error's
-/// names or its message, one entry per way a server words it. Matched with
-/// case and everything but ASCII letters and digits ignored, on both sides.
-const CONTEXT_EXCEEDED: &[&str] = &[
-    "context_length_exceeded",
-    "exceed_context_size",
-    "exceeds the available context size",
-    "maximum context length",
-    "context size has been exceeded",
-];
 
 /// The failure an error body stands for. `status` is the HTTP status it
 /// arrived with, absent inside an event stream. A context overflow named
@@ -54,21 +43,6 @@ pub fn decode(status: Option<u16>, raw: &[u8]) -> Failure {
             .unwrap_or(FailureKind::Upstream),
     };
     Failure::new(kind, message)
-}
-
-fn says_context_exceeded(text: &str) -> bool {
-    let text = squashed(text);
-    CONTEXT_EXCEEDED
-        .iter()
-        .any(|needle| text.contains(&squashed(needle)))
-}
-
-/// `text` lowercased, with only its ASCII letters and digits kept.
-fn squashed(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
 }
 
 /// The kind an OpenAI-compatible `error.type` or `error.code` stands for.
