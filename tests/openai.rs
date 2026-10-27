@@ -614,6 +614,34 @@ async fn openai_error_becomes_anthropic_error() {
     assert_eq!(body["error"]["message"], "<html>gateway down</html>");
 }
 
+#[tokio::test]
+async fn a_rate_limit_keeps_the_backends_retry_headers() {
+    let upstream = MockUpstream::start(|_| {
+        Response::builder()
+            .status(429)
+            .header("content-type", "application/json")
+            .header("retry-after", "7")
+            .header("x-should-retry", "true")
+            .body(Body::from(
+                r#"{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}"#,
+            ))
+            .unwrap()
+    })
+    .await;
+    let router = TestRouter::start(&config_with_openai_backend(&upstream.url(), "")).await;
+    let res = router
+        .post("/v1/messages", &claude_code_request(false))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 429);
+    assert_eq!(res.headers()["retry-after"], "7");
+    assert_eq!(res.headers()["x-should-retry"], "true");
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "rate_limit_error");
+    assert_eq!(body["error"]["message"], "Rate limit reached");
+}
+
 /// LM Studio's answer to a prompt over its context, as an HTTP 400 body.
 const LM_STUDIO_OVERFLOW: &str = r#"{"error":"Engine protocol predict request returned 400: {\"error\":{\"code\":400,\"message\":\"request (60016 tokens) exceeds the available context size (8192 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":60016,\"n_ctx\":8192}}"}"#;
 

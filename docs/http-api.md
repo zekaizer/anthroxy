@@ -34,7 +34,9 @@ Anthropic backend's body byte-for-byte: Claude Code recovers from some
 rejections by matching the backend's wording. An `openai` backend's error body
 is always converted to an Anthropic error document carrying the backend's own
 message (type from the status); a failure in the middle of its stream is one
-`error` event.
+`error` event. A backend's response headers, `retry-after` and `x-should-retry`
+included, are relayed for every backend kind; only hop-by-hop headers and
+`content-length` are dropped.
 
 Also see [Configuration](configuration.md) for `server.token` and
 `server.max_body_bytes`, and [The web console](console.md) for the `/api/*`
