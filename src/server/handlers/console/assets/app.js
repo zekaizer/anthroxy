@@ -530,10 +530,16 @@ async function guarded(target, load) {
 /// `load` as a poll: once something has been read, a later failure says above
 /// it how old the reading is instead of taking it away. A refresh that missed
 /// is not a reason to empty the page a reader is looking at.
+///
+/// A call while a load is still waiting runs once more after it instead of
+/// beside it, so a slow router is never sent a second poll and answers cannot
+/// arrive out of order.
 function polled(target, load) {
   let fresh = null;
   let notice = null;
-  return async () => {
+  let running = null;
+  let again = false;
+  const once = async () => {
     try {
       await load();
       fresh = serverNow();
@@ -552,6 +558,20 @@ function polled(target, load) {
       replace(notice, "Showing the last reading from ", rel(new Date(fresh).toISOString()),
         `. The router did not answer the refresh: ${error.message}`);
     }
+  };
+  return () => {
+    if (running) {
+      again = true;
+      return running;
+    }
+    running = (async () => {
+      do {
+        again = false;
+        await once();
+      } while (again);
+      running = null;
+    })();
+    return running;
   };
 }
 
