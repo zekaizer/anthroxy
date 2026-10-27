@@ -77,13 +77,17 @@ function replace(el, ...children) {
 }
 
 /// Replaces `el`'s content, keeping what the reader did to it: which
-/// `<details>` are open and how far tables and code blocks are scrolled.
-/// Elements are matched by their panel and their order within it.
+/// `<details>` are open, how far tables and code blocks are scrolled, where
+/// the focus is and where on screen the row they were reading sits.
+/// Elements are matched by their panel and their order within it, rows by
+/// their `data-key`.
 function rerender(el, ...children) {
   const saved = new Map();
   walkViewState(el, (key, node, kind) => {
     saved.set(key, kind === "open" ? node.open : [node.scrollLeft, node.scrollTop]);
   });
+  const focus = focusPlace(el);
+  const anchor = anchorRow(el);
   replace(el, ...children);
   walkViewState(el, (key, node, kind) => {
     if (!saved.has(key)) return;
@@ -91,6 +95,48 @@ function rerender(el, ...children) {
     if (kind === "open") node.open = value;
     else [node.scrollLeft, node.scrollTop] = value;
   });
+  if (focus) restoreFocus(el, focus);
+  const row = anchor && keyed(el, anchor.key);
+  if (row) window.scrollBy(0, row.getBoundingClientRect().top - anchor.top);
+}
+
+const FOCUSABLE = "a[href], button, input, select, textarea, summary, [tabindex]";
+
+function keyed(el, key) {
+  return el.querySelector(`[data-key="${CSS.escape(key)}"]`);
+}
+
+/// Where the focus is inside `el`: the keyed row around it, and its place
+/// among that row's controls (-1 for the row itself). Focus outside a keyed
+/// row is not kept: a place counted across all of `el` names another control
+/// once rows are added above it.
+function focusPlace(el) {
+  const active = document.activeElement;
+  const row = active && active.closest("[data-key]");
+  if (!row || !el.contains(row)) return null;
+  return {
+    key: row.dataset.key,
+    index: active === row ? -1 : [...row.querySelectorAll(FOCUSABLE)].indexOf(active),
+  };
+}
+
+function restoreFocus(el, { key, index }) {
+  const row = keyed(el, key);
+  const node = row && (index < 0 ? row : row.querySelectorAll(FOCUSABLE)[index]);
+  node?.focus({ preventScroll: true });
+}
+
+/// The first keyed row on screen, for a reader scrolled down the page: rows a
+/// redraw adds above it would otherwise move it from under the pointer. At
+/// the top of the page the reader sees new rows arrive instead.
+function anchorRow(el) {
+  if (window.scrollY === 0) return null;
+  for (const row of el.querySelectorAll("[data-key]")) {
+    // A hidden row measures at the top of the viewport, wherever it sits.
+    const { top, height } = row.getBoundingClientRect();
+    if (height && top >= 0) return { key: row.dataset.key, top };
+  }
+  return null;
 }
 
 function walkViewState(el, visit) {
@@ -483,12 +529,19 @@ function clearToken() {
 async function api(path, { method = "GET", body, raw = false } = {}) {
   const headers = { authorization: `Bearer ${state.token}` };
   if (body !== undefined) headers["content-type"] = "application/json";
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store",
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch {
+    // fetch rejects with the browser's own words, "Failed to fetch" in one
+    // and "NetworkError…" in another, only when nothing answered at all.
+    throw new Error("the router did not answer");
+  }
   if (res.status === 401) {
     signOut("The router did not accept the token.");
     throw new SignedOut();
@@ -517,49 +570,112 @@ async function api(path, { method = "GET", body, raw = false } = {}) {
   return data;
 }
 
-/// Runs `load`, showing its failure in `target` instead of throwing.
+/// Runs `load`, showing its failure in `target` instead of throwing, and
+/// returns that failure, or null when it loaded.
 async function guarded(target, load) {
   try {
     await load();
+    return null;
   } catch (error) {
-    if (error instanceof SignedOut) return;
-    replace(target, banner(`Could not load: ${error.message}`));
+    if (!(error instanceof SignedOut)) replace(target, banner(`Could not load: ${error.message}`));
+    return error;
   }
 }
 
 /// `load` as a poll: once something has been read, a later failure says above
 /// it how old the reading is instead of taking it away. A refresh that missed
-/// is not a reason to empty the page a reader is looking at.
-function polled(target, load) {
+/// is not a reason to empty the page a reader is looking at. Until the first
+/// answer an empty `target` says it is reading, which an empty router is not.
+///
+/// A call while a load is still waiting runs once more after it instead of
+/// beside it, so a slow router is never sent a second poll and answers cannot
+/// arrive out of order.
+///
+/// `reset()` forgets the last reading, for a change that makes the next load
+/// answer a different question: what was read before is no longer something
+/// to fall back on, and a read still waiting is not waited for.
+///
+/// The notice goes above `before`, which is `target` unless more of the page
+/// than `target` shows the same reading.
+function polled(target, load, before = target) {
   let fresh = null;
   let notice = null;
-  return async () => {
+  let running = null;
+  let again = false;
+  let generation = 0;
+  const once = async () => {
+    const at = generation;
+    if (fresh === null) {
+      target.setAttribute("aria-busy", "true");
+      if (!target.hasChildNodes()) replace(target, h("p", { class: "muted" }, "Reading from the router…"));
+    }
     try {
       await load();
+      if (at !== generation) return;
       fresh = serverNow();
       notice?.remove();
       notice = null;
     } catch (error) {
-      if (error instanceof SignedOut) return;
+      if (error instanceof SignedOut || at !== generation) return;
       if (fresh === null) {
         replace(target, banner(`Could not load: ${error.message}`));
         return;
       }
       if (!notice) {
         notice = h("div", { class: "banner warn", role: "status" });
-        target.parentNode.insertBefore(notice, target);
+        before.parentNode.insertBefore(notice, before);
       }
       replace(notice, "Showing the last reading from ", rel(new Date(fresh).toISOString()),
-        `. The router did not answer the refresh: ${error.message}`);
+        `. The refresh failed: ${error.message}`);
+    } finally {
+      if (at === generation) target.removeAttribute("aria-busy");
     }
   };
+  const refresh = () => {
+    if (running) {
+      again = true;
+      return running;
+    }
+    const at = generation;
+    const chain = (async () => {
+      do {
+        again = false;
+        await once();
+      } while (again && at === generation);
+      if (running === chain) running = null;
+    })();
+    running = chain;
+    return chain;
+  };
+  refresh.reset = () => {
+    generation++;
+    fresh = null;
+    notice?.remove();
+    notice = null;
+    // The read still out is dropped when it lands; the new question is asked now.
+    running = null;
+    return refresh();
+  };
+  return refresh;
 }
 
-function every(ms, task) {
+/// Runs `task` every `ms` while the page is shown. A tick waits while the
+/// reader has text selected in the view: a redraw would take the selection
+/// away, and the first tick after it is released catches up. `hold: false`
+/// is for the header and the ticking ages, which go on saying how old the
+/// reading is meanwhile.
+function every(ms, task, { hold = true } = {}) {
   const id = setInterval(() => {
-    if (!document.hidden) task();
+    if (!document.hidden && !(hold && selecting())) task();
   }, ms);
   state.timers.push(id);
+}
+
+function selecting() {
+  const selection = document.getSelection();
+  const view = document.getElementById("view");
+  return Boolean(view && selection && !selection.isCollapsed && selection.rangeCount
+    && view.contains(selection.getRangeAt(0).commonAncestorContainer));
 }
 
 function clearTimers() {
@@ -615,8 +731,8 @@ function renderSignIn(message) {
       saveToken(token, remember.checked);
       state.token = token;
       renderShell();
-    } catch (error) {
-      status.textContent = `Cannot reach the router: ${error.message}`;
+    } catch {
+      status.textContent = "The router did not answer.";
     } finally {
       submit.disabled = false;
     }
@@ -627,6 +743,7 @@ function renderSignIn(message) {
 
 const header = {
   meta: null,
+  pill: null,
   nav: null,
 };
 
@@ -667,8 +784,9 @@ async function refreshHeader() {
     const status = await api("/api/status");
     state.status = status;
     noteServerTime(status.now);
+    header.pill = healthPill(status.health);
     replace(header.meta,
-      healthPill(status.health),
+      header.pill,
       // Every tab refreshes itself; this says whether what is on screen is
       // still being fed, which nothing did.
       h("span", null, "read ", rel(new Date(serverNow()).toISOString())),
@@ -676,7 +794,13 @@ async function refreshHeader() {
       h("span", null, "up ", since(status.started_at, "uptime")),
       h("span", null, status.listen));
   } catch (error) {
-    if (!(error instanceof SignedOut)) replace(header.meta, h("span", { class: "error-text" }, `offline: ${error.message}`));
+    if (error instanceof SignedOut) return;
+    // What was read last stays, its age still counting; only the pill says
+    // the router stopped answering.
+    const pill = badge("unreachable", "err");
+    if (header.pill && header.meta.contains(header.pill)) header.pill.replaceWith(pill);
+    else header.meta.prepend(pill);
+    header.pill = pill;
   }
 }
 
@@ -733,8 +857,8 @@ function route() {
   clearTimers();
   document.querySelectorAll(".chart .plot").forEach((plot) => chartObserver.unobserve(plot));
   state.reloadNotice = null;
-  every(10000, refreshHeader);
-  every(1000, tick);
+  every(10000, refreshHeader, { hold: false });
+  every(1000, tick, { hold: false });
   view.replaceChildren();
   const views = { overview, requests, stats, tools, recordings };
   const retarget = views[state.tab](view, state.arg);
@@ -1011,25 +1135,28 @@ function requests(view, selected) {
   /// not fold back what the reader asked to see.
   let shown = LIST_PAGE;
 
-  const draw = () => {
-    if (!data) return;
+  /// What the filter and "Errors only" let through.
+  const matcher = () => {
     const needle = filter.value.trim().toLowerCase();
-    const matches = (v) => {
+    return (v) => {
       if (errorsOnly.checked && v.outcome !== "error") return false;
       if (!needle) return true;
       return [v.id, v.requested_model, v.model, v.backend, v.upstream_model, v.status, v.peer, v.session, v.effort, v.prompt, v.step,
         v.source, outcomeLabel(v), v.error]
         .some((field) => field !== null && field !== undefined && String(field).toLowerCase().includes(needle));
     };
-    const running = data.in_flight.filter(matches);
-    const filtered = Boolean(needle) || errorsOnly.checked;
+  };
+
+  const drawFlight = () => {
+    if (!data) return;
+    const running = data.in_flight.filter(matcher());
     // Nothing in flight is the usual state, and a table header over an empty
     // row is a third of the first screen spent saying so.
     rerender(inFlight, running.length
       ? table(
         ["Started", "Model", "Backend / upstream", "Status", "Elapsed", "First byte", ["Bytes", "num"]],
         running.map((v, i) =>
-          openRow({ class: "clickable", "aria-label": rowLabel(v) }, () => go("requests", v.id),
+          openRow({ class: "clickable", "data-key": v.id, "aria-label": rowLabel(v) }, () => go("requests", v.id),
             h("td", railCell(v.session, running[i - 1] && running[i - 1].session),
               fmt.clock(v.received_at),
               h("div", { class: "sub mono" }, v.id, v.session ? [" · ", sessionMark(v.session, narrowTo)] : null)),
@@ -1041,9 +1168,16 @@ function requests(view, selected) {
             h("td", { class: "num" }, fmt.bytes(v.bytes)))))
       : data.in_flight.length
         ? h("p", { class: "idle" }, badge("in flight", "info"), ` ${fmt.int(data.in_flight.length)} in flight, hidden by the filter.`)
-        : h("p", { class: "idle" }, badge("idle", "ok"), " Nothing in flight.",
-          data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null));
+        : h("p", { class: "idle" }, badge("idle", "ok"),
+          // One flex item, or the gap splits the sentence around its age.
+          h("span", null, "Nothing in flight.",
+            data.recent.length ? [" The last request finished ", rel(data.recent[0].received_at), "."] : null)));
+  };
 
+  const drawList = () => {
+    if (!data) return;
+    const matches = matcher();
+    const filtered = Boolean(filter.value.trim()) || errorsOnly.checked;
     const rows = [];
     let day = null;
     const matching = data.recent.filter(matches);
@@ -1066,7 +1200,7 @@ function requests(view, selected) {
       }
       for (const v of run) {
         const effort = v.effort && (!barred || v.effort !== head.effort) ? h("span", { class: "muted" }, ` · ${v.effort}`) : null;
-        rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "aria-label": rowLabel(v) }, () => go("requests", v.id),
+        rows.push(openRow({ class: `clickable ${v.id === selected ? "selected" : ""}`, "data-key": v.id, "aria-label": rowLabel(v) }, () => go("requests", v.id),
           h("td", railCell(v.session, above && above.session),
             fmt.clock(v.received_at),
             barred
@@ -1089,7 +1223,7 @@ function requests(view, selected) {
       }
     }
     const hidden = matching.length - Math.min(shown, matching.length);
-    const more = h("button", { type: "button", class: "small" },
+    const more = h("button", { type: "button", class: "small", "data-key": "more" },
       `Show ${fmt.int(Math.min(LIST_PAGE, hidden))} more of ${fmt.int(hidden)} not shown`);
     more.addEventListener("click", () => { shown += LIST_PAGE; draw(); });
     rerender(recent,
@@ -1101,29 +1235,48 @@ function requests(view, selected) {
       hidden ? h("p", { class: "note" }, more) : null);
   };
 
-  let drawn = null;
+  const draw = () => {
+    drawFlight();
+    drawList();
+  };
+
+  /// Whether the open request's last read failed for a reason another read
+  /// can mend; one the router no longer holds (404) is not asked for again.
+  let detailMissed = false;
+  const readDetail = async (id, scroll) => {
+    const error = await showRequest(detail, id, scroll);
+    if (id === selected) detailMissed = Boolean(error) && error.status !== 404;
+  };
+
+  // Elapsed times tick in the page; only real changes redraw. A stream in
+  // flight changes its bytes on every poll, which redraws its strip and not
+  // the finished list beside it.
+  let drawnFlight = null;
+  let drawnRecent = null;
   const load = async () => {
     let fresh;
     try {
       fresh = await api("/api/requests");
     } catch (error) {
-      drawn = null;
+      drawnFlight = drawnRecent = null;
       throw error;
     }
     noteServerTime(fresh.now);
-    // Elapsed times tick in the page; only real changes redraw.
-    const signature = JSON.stringify({
-      in_flight: fresh.in_flight.map(({ elapsed_ms, ...rest }) => rest),
-      recent: fresh.recent,
-    });
+    const flight = JSON.stringify(fresh.in_flight.map(({ elapsed_ms, ...rest }) => rest));
+    const recentNow = JSON.stringify(fresh.recent);
     // An exchange still running keeps changing, so its detail is read again
-    // with the list rather than frozen at the moment it was opened.
-    if (selected && data && data.in_flight.some((v) => v.id === selected)) showRequest(detail, selected, false);
-    if (signature === drawn) return;
-    drawn = signature;
-    data = fresh;
-    draw();
-    if (selected) showRequest(detail, selected, false);
+    // with the list until the read that sees how it ended; a finished one
+    // does not change again, and is read again only after a read that failed.
+    if (selected && (detailMissed || (data && data.in_flight.some((v) => v.id === selected)))) readDetail(selected, false);
+    if (recentNow !== drawnRecent) {
+      data = fresh;
+      draw();
+    } else if (flight !== drawnFlight) {
+      data = fresh;
+      drawFlight();
+    }
+    drawnFlight = flight;
+    drawnRecent = recentNow;
   };
   filter.addEventListener("input", () => { state.requestsFilter = filter.value; shown = LIST_PAGE; draw(); });
   errorsOnly.addEventListener("change", () => { state.errorsOnly = errorsOnly.checked; shown = LIST_PAGE; draw(); });
@@ -1142,11 +1295,11 @@ function requests(view, selected) {
     selected = id;
     draw();
     master.classList.toggle("open", Boolean(id));
-    if (id) showRequest(detail, id, true);
+    if (id) readDetail(id, true);
     else replace(detail);
   };
 
-  const refresh = polled(recent, load);
+  const refresh = polled(recent, load, inFlight);
   refresh();
   every(2000, refresh);
   open(selected);
@@ -1238,7 +1391,8 @@ function turnBar(run, previous, narrowTo) {
     run.length > 1 ? `${run.length} requests` : null,
     rel(head.received_at),
   ].filter(Boolean);
-  return h("tr", { class: "turnbar" },
+  // Keyed by the request that opened the turn, which the run keeps as it grows.
+  return h("tr", { class: "turnbar", "data-key": `turn:${opener.id}` },
     h("td", { ...railCell(head.session, previous), colspan: 9 },
       h("div", { class: "turn-line" },
         head.session ? sessionMark(head.session, narrowTo) : null,
@@ -1255,7 +1409,7 @@ function turnStep(v) {
 }
 
 async function showRequest(target, id, scroll) {
-  await guarded(target, async () => {
+  return guarded(target, async () => {
     const v = await api(`/api/requests/${encodeURIComponent(id)}`);
     const close = h("button", { type: "button", class: "small", onclick: () => go("requests") }, "Close");
     const recording = v.recording
@@ -1345,17 +1499,20 @@ function stats(view) {
     h("button", {
       type: "button",
       "aria-pressed": state.statsRange === id ? "true" : "false",
-      onclick: () => { state.statsRange = id; drawRanges(); refresh(); },
+      onclick: () => { state.statsRange = id; drawRanges(); refresh.reset(); },
     }, label)));
   let drawn = null;
   const load = async () => {
+    const range = state.statsRange;
     let data;
     try {
-      data = await api(`/api/stats?range=${state.statsRange}`);
+      data = await api(`/api/stats?range=${range}`);
     } catch (error) {
       drawn = null;
       throw error;
     }
+    // Asked before the range changed: the load the change queued draws it.
+    if (range !== state.statsRange) return;
     const signature = JSON.stringify({ ...data, report: data.report && { ...data.report, since: null } });
     if (signature === drawn) return;
     drawn = signature;
