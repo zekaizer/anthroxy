@@ -53,7 +53,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
             "{} {}",
             style.warn_mark(),
             style.warn(&format!(
-                "mode {mode:o}: the router token and any static credential in this file are readable by other users; `chmod 600 {}`",
+                "mode {mode:o}: any router token or static credential in this file is readable by other users; `chmod 600 {}`",
                 display_path(&path)
             ))
         );

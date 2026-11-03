@@ -235,7 +235,7 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
 - HTTPS backends are verified against the Mozilla roots built into the binary
   plus the OS certificate store (`update-ca-certificates` on Ubuntu, the
   keychain on macOS). `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the OS store when
-  set; under systemd they go in the unit as `Environment=`.
+  set; under systemd they go in the `env` file.
   `upstream.ca_certificate` adds every certificate in a PEM file on top, for a
   private CA that should travel with the configuration file; a file that cannot
   be read or holds no certificate fails `check` and `serve`. There is no way to
@@ -281,8 +281,10 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   or the console's Reload button): models, backends, credentials, token, body
   capture and upstream settings swap atomically; in-flight requests finish on
   the old configuration. `server.listen` and the log level and format need a
-  restart instead, and a reload that changes one of them says so. A file that
-  fails to load leaves the running configuration untouched and logs the error.
+  restart instead, and a reload that changes one of them says so. So does a new
+  value in a variable or the `env` file, without being reported: a process keeps
+  the environment it started with. A file that fails to load leaves the running
+  configuration untouched and logs the error.
 
 ## What Claude Code decides for itself
 

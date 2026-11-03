@@ -47,7 +47,7 @@ pub fn process_env(name: &str) -> Option<String> {
 }
 
 /// The mode of `path` when it lets anyone but its owner near it. The file
-/// carries `server.token` and any `static` backend credential, so the mode a
+/// can carry `server.token` and any `static` backend credential, so the mode a
 /// stock umask leaves on a hand-written file hands both to every local
 /// account. `None` when the file is the owner's alone, cannot be read, or the
 /// platform has no such modes.

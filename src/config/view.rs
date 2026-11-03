@@ -9,9 +9,9 @@ use super::{CommandOutput, Config, CredentialConfig, CredentialHeader, LogFormat
 
 pub const REDACTED: &str = "<redacted>";
 
-/// `server.token`, `static` credential values, every forced header value and
-/// the userinfo of a proxy URL are redacted; the rest is shown as loaded,
-/// `${ENV}` expanded.
+/// A literal `server.token`, `static` credential values, every forced header
+/// value and the userinfo of a proxy URL are redacted; the rest is shown as
+/// loaded, `${ENV}` expanded.
 pub fn masked(config: &Config) -> Value {
     let backends: Map<String, Value> = config
         .backends

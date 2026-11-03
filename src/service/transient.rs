@@ -51,7 +51,7 @@ fn env_file_property(env_file: &Path) -> String {
     format!("--property=EnvironmentFile=-{}", env_file.display())
 }
 
-/// The environment a user unit starts with.
+/// The environment a user unit reading `env_file` starts with.
 pub async fn environment(
     env_file: &Path,
     timeout: Duration,
