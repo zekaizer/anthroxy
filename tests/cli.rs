@@ -365,6 +365,30 @@ fn a_token_variable_is_needed_only_by_what_uses_the_token() {
         .stderr(predicate::str::contains("1 problem(s)"));
 }
 
+#[cfg(unix)]
+#[test]
+fn check_warns_about_an_env_file_others_can_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = env_token_config(dir.path());
+    let env_file = dir.path().join("env");
+    std::fs::write(&env_file, "ANTHROXY_TEST_TOKEN=t\n").unwrap();
+    let check = || {
+        let mut command = bin();
+        command
+            .args(["--config", path.to_str().unwrap(), "check", "--no-probe"])
+            .env("ANTHROXY_TEST_TOKEN", "t");
+        command.assert().success()
+    };
+
+    std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    check().stdout(predicate::str::contains("chmod 600").and(predicate::str::contains("/env")));
+    std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    check().stdout(predicate::str::contains("chmod 600").not());
+}
+
 #[test]
 fn a_token_variable_reaches_the_client_without_its_whitespace() {
     let dir = tempfile::tempdir().unwrap();

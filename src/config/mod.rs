@@ -64,6 +64,11 @@ pub fn open_to_other_accounts(_: &Path) -> Option<u32> {
     None
 }
 
+/// The variables the service starts with: `env` beside the configuration file.
+pub fn env_file(config: &Path) -> PathBuf {
+    config.with_file_name("env")
+}
+
 /// Default configuration path: `$XDG_CONFIG_HOME/anthroxy/config.toml`.
 pub fn default_path() -> PathBuf {
     dirs::config_dir()

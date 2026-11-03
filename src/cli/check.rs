@@ -59,6 +59,18 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         );
     }
 
+    let env_file = config::env_file(&path);
+    if let Some(mode) = config::open_to_other_accounts(&env_file) {
+        println!(
+            "{} {}",
+            style.warn_mark(),
+            style.warn(&format!(
+                "mode {mode:o}: the variables in this file are readable by other users; `chmod 600 {}`",
+                display_path(&env_file)
+            ))
+        );
+    }
+
     let mut problems = 0usize;
     if let Err(error) = config.server.token.resolve() {
         println!("{} server.token: {error}", style.err_mark());

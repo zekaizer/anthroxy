@@ -33,8 +33,9 @@ networking is set to `mirrored`.
   prints values unmasked instead of `sk-a…9999 (108 chars)`. A command that
   works in your shell but not as a service is an environment difference: on
   Linux, `--as-service` runs it a second time in a transient unit under the
-  systemd user manager — the environment `anthroxy.service` starts with — and
-  prints the delta (`PATH` in full, other variables by name). Typical causes:
+  systemd user manager with the `env` file beside the configuration — what
+  `anthroxy.service` starts with, apart from any drop-in on it — and prints the
+  delta (`PATH` in full, other variables by name). Typical causes:
   the interpreter is `dash`, not your login shell; `PATH` has none of the
   directories your profile adds; a keychain or agent socket
   (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`) is absent.

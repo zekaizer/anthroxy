@@ -4,12 +4,13 @@
 //! command that works in a shell usually stops working.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use clap::Args;
 
-use super::{Cli, Style};
-use crate::config::env;
+use super::{Cli, Style, display_path};
+use crate::config::{self, env};
 use crate::config::{
     BackendConfig, CommandOutput, Config, CredentialConfig, CredentialHeader, EnvSecretError,
 };
@@ -47,15 +48,22 @@ pub async fn run(cli: &Cli, args: &CredentialArgs, style: &Style) -> anyhow::Res
     cli.init_tracing(None, "warn")?;
     let config = cli.load_config()?;
     let selected = select(&config, &args.backends)?;
+    let env_file = config::env_file(&std::path::absolute(cli.config_path())?);
     let service = if args.as_service {
-        Some(transient::environment(ENVIRONMENT_TIMEOUT).await?)
+        Some(Service {
+            variables: transient::environment(&env_file, ENVIRONMENT_TIMEOUT).await?,
+            env_file: &env_file,
+        })
     } else {
         None
     };
     if service.is_some() {
         println!(
             "{}",
-            style.dim("service: systemd-run --user, the environment anthroxy.service starts with")
+            style.dim(&format!(
+                "service: systemd-run --user with {}, what anthroxy.service starts with apart from any drop-in",
+                display_path(&env_file)
+            ))
         );
     }
 
@@ -72,7 +80,7 @@ pub async fn run(cli: &Cli, args: &CredentialArgs, style: &Style) -> anyhow::Res
 
     if let Some(service) = &service {
         println!();
-        let delta = Delta::between(&transient::process_environment(), service);
+        let delta = Delta::between(&transient::process_environment(), &service.variables);
         print!("{}", render_delta(&delta, style, args.reveal));
     }
 
@@ -121,10 +129,16 @@ fn select<'a>(
         .collect()
 }
 
+/// The environment `--as-service` compares with this process's.
+struct Service<'a> {
+    variables: BTreeMap<String, String>,
+    env_file: &'a Path,
+}
+
 /// One attempt per environment, in the order they are reported.
 async fn attempts(
     config: &CredentialConfig,
-    service: Option<&BTreeMap<String, String>>,
+    service: Option<&Service<'_>>,
     reveal: bool,
 ) -> Vec<Attempt> {
     match config {
@@ -151,8 +165,9 @@ async fn attempts(
             };
             let mut attempts = vec![ran("shell", here, reading)];
             if let Some(service) = service {
-                let there = match env::expand(command, &|name| service.get(name).cloned()) {
-                    Ok(command) => transient::shell(&command, *timeout)
+                let there = match env::expand(command, &|name| service.variables.get(name).cloned())
+                {
+                    Ok(command) => transient::shell(&command, service.env_file, *timeout)
                         .await
                         .map_err(|e| e.to_string()),
                     Err(error) => Err(error.to_string()),
@@ -165,7 +180,7 @@ async fn attempts(
             let read = |label, raw| variable(label, name, header, raw, reveal);
             let mut attempts = vec![read("shell", std::env::var(name).ok())];
             if let Some(service) = service {
-                attempts.push(read("service", service.get(name).cloned()));
+                attempts.push(read("service", service.variables.get(name).cloned()));
             }
             attempts
         }

@@ -37,7 +37,7 @@ retry_on_status = []             # e.g. [502, 503]
 
 [backends.vllm]
 url = "http://10.0.0.5:8000"
-credential = { kind = "static", value = "${VLLM_API_KEY}", header = "bearer" }
+credential = { kind = "env", name = "VLLM_API_KEY", header = "bearer" }
 drop_fields = ["context_management"]        # body fields this backend rejects as unknown
 
 [backends.claude]
@@ -53,7 +53,7 @@ credential = { kind = "command", command = "some-cli token --json | jq '{token: 
 [backends.inhouse]                           # a server that speaks OpenAI Chat Completions
 kind = "openai"
 url = "https://llm.example.corp"
-credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
+credential = { kind = "env", name = "INHOUSE_API_KEY" }
 # set_fields = { "chat_template_kwargs.enable_thinking" = false }   # body fields this backend is given
 
 [backends.grok]                              # xAI Chat Completions + OAuth helper
@@ -89,6 +89,11 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   resolves them each time it runs, so a secret it names never sits in the
   loaded configuration, the console or `check` output (that every variable
   exists is still checked at load).
+- The service reads variables from `env` beside the configuration file
+  (`~/.config/anthroxy/env`): `NAME=value` lines, no `export`, mode 600. `check`
+  warns when other accounts can read it. A shell does not read it, so
+  `set -a; . ~/.config/anthroxy/env; set +a` before a command that needs one. A
+  unit installed before this file existed needs `anthroxy service install` again.
 - `server.token` is the value itself or `{ kind = "env", name = "VAR" }`. The
   variable is read when the router starts or reloads and by `anthroxy env`, with
   surrounding whitespace dropped; `check` reports one that is unset or empty and
