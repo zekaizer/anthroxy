@@ -194,6 +194,11 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   `x_api_key` (`x-api-key: <token>`), or any header as `{ name = "api-key" }` /
   `{ name = "authorization", scheme = "Token" }`; a `scheme` is written before
   the token with one space.
+- An `env` credential reads its variable when the router starts or reloads and
+  drops surrounding whitespace; one that is unset, empty or not valid in a
+  header fails `check`, `serve` and the reload. A running process keeps the
+  environment it started with, so a new value takes a restart. A key that
+  changes without one belongs in a `command` that reads a file.
 - A `command` credential runs through `sh -c`. With `output = "text"` (default)
   trimmed stdout is the token; with `output = "json"` stdout is
   `{"token": "...", "expires_at": ...}`, where the optional `expires_at` is an

@@ -10,9 +10,11 @@ use clap::Args;
 
 use super::{Cli, Style};
 use crate::config::env;
-use crate::config::{BackendConfig, CommandOutput, Config, CredentialConfig};
+use crate::config::{
+    BackendConfig, CommandOutput, Config, CredentialConfig, CredentialHeader, EnvSecretError,
+};
 use crate::credential::exec::{self, Run};
-use crate::credential::{CommandCredential, CredentialSource, mask};
+use crate::credential::{CommandCredential, Credential, CredentialError, CredentialSource, mask};
 use crate::service::transient::{self, Delta};
 
 /// Reading the environment of a transient unit must not hang the report.
@@ -159,10 +161,11 @@ async fn attempts(
             }
             attempts
         }
-        CredentialConfig::Env { name, .. } => {
-            let mut attempts = vec![variable("shell", std::env::var(name).ok(), reveal)];
+        CredentialConfig::Env { name, header } => {
+            let read = |label, raw| variable(label, name, header, raw, reveal);
+            let mut attempts = vec![read("shell", std::env::var(name).ok())];
             if let Some(service) = service {
-                attempts.push(variable("service", service.get(name).cloned(), reveal));
+                attempts.push(read("service", service.get(name).cloned()));
             }
             attempts
         }
@@ -273,19 +276,36 @@ fn capped(text: &str) -> String {
     format!("{}… ({} more bytes)", &text[..end], text.len() - end)
 }
 
-/// An `env` credential: the variable as that environment has it.
-fn variable(label: &'static str, value: Option<String>, reveal: bool) -> Attempt {
-    match value {
-        Some(value) => Attempt {
+/// An `env` credential: the variable as that environment has it, judged as
+/// the router judges it.
+fn variable(
+    label: &'static str,
+    name: &str,
+    header: &CredentialHeader,
+    raw: Option<String>,
+    reveal: bool,
+) -> Attempt {
+    let read = env::secret(name, raw)
+        .map_err(CredentialError::from)
+        .and_then(|value| {
+            Credential::new(header.clone(), value.as_str())?;
+            Ok(value)
+        });
+    match read {
+        Ok(value) => Attempt {
             label,
             ok: true,
             headline: "set".to_owned(),
             details: vec![("value", show(&value, reveal))],
         },
-        None => Attempt {
+        Err(error) => Attempt {
             label,
             ok: false,
-            headline: "not set".to_owned(),
+            headline: match error {
+                CredentialError::Env(EnvSecretError::Missing(_)) => "not set".to_owned(),
+                CredentialError::Env(EnvSecretError::Empty(_)) => "empty".to_owned(),
+                other => other.to_string(),
+            },
             details: Vec::new(),
         },
     }
@@ -522,15 +542,29 @@ mod tests {
 
     #[test]
     fn an_env_credential_reports_whether_the_variable_is_set() {
-        let set = variable("service", Some("key-123456789012".to_owned()), false);
+        let bearer = CredentialHeader::bearer();
+        let set = variable(
+            "service",
+            "K",
+            &bearer,
+            Some(" key-123456789012\n".to_owned()),
+            false,
+        );
         assert!(set.ok);
         assert_eq!(set.headline, "set");
         assert_eq!(set.details, [("value", "key-…9012 (16 chars)".to_owned())]);
 
-        let unset = variable("service", None, false);
+        let unset = variable("service", "K", &bearer, None, false);
         assert!(!unset.ok);
         assert_eq!(unset.headline, "not set");
         assert!(unset.details.is_empty());
+
+        let empty = variable("service", "K", &bearer, Some(String::new()), false);
+        assert!(!empty.ok);
+        assert_eq!(empty.headline, "empty");
+
+        let unsafe_value = variable("service", "K", &bearer, Some("a\nb".to_owned()), false);
+        assert!(!unsafe_value.ok, "the router would refuse this value");
     }
 
     #[test]

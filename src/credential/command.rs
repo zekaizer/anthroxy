@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use super::{Credential, CredentialError, CredentialSource, CredentialStatus, RefreshRecord, exec};
-use crate::config::{CommandOutput, CredentialHeader};
+use crate::config::{CommandOutput, CredentialHeader, EnvSecretError};
 
 /// Runs kept for status output.
 pub const REFRESH_HISTORY: usize = 20;
@@ -143,8 +143,8 @@ impl CommandCredential {
         // the console and `check` show the reference, never the secret.
         let command = crate::config::env::expand(&self.command, &|name| std::env::var(name).ok())
             .map_err(|error| match error {
-            crate::config::ConfigError::MissingEnv(name) => CredentialError::MissingEnv(name),
-            other => CredentialError::MissingEnv(other.to_string()),
+            crate::config::ConfigError::MissingEnv(name) => EnvSecretError::Missing(name),
+            other => EnvSecretError::Missing(other.to_string()),
         })?;
         let run = exec::run(&command, self.timeout).await?;
         let output = exec::interpret(&run, self.output)?;

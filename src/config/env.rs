@@ -3,6 +3,26 @@
 
 use super::ConfigError;
 
+/// Why an environment variable cannot serve as a secret.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EnvSecretError {
+    #[error("environment variable `{0}` is not set")]
+    Missing(String),
+    #[error("environment variable `{0}` is empty")]
+    Empty(String),
+}
+
+/// The secret in `raw`, the value of the variable `name`. Surrounding
+/// whitespace is dropped: a line ending from a file would otherwise reach a
+/// header or a token comparison.
+pub fn secret(name: &str, raw: Option<String>) -> Result<String, EnvSecretError> {
+    let raw = raw.ok_or_else(|| EnvSecretError::Missing(name.to_owned()))?;
+    match raw.trim() {
+        "" => Err(EnvSecretError::Empty(name.to_owned())),
+        value => Ok(value.to_owned()),
+    }
+}
+
 /// Expands every string value in `value`, recursively, except a
 /// `credential.command`: that one is expanded when it runs, so a secret it
 /// references never sits in the loaded configuration.
@@ -69,4 +89,26 @@ pub fn expand(text: &str, lookup: &impl Fn(&str) -> Option<String>) -> Result<St
     }
     out.push_str(rest);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_loses_surrounding_whitespace() {
+        assert_eq!(secret("K", Some(" sk-1\r\n".to_owned())).unwrap(), "sk-1");
+    }
+
+    #[test]
+    fn a_secret_must_exist_and_hold_something() {
+        assert_eq!(
+            secret("K", None),
+            Err(EnvSecretError::Missing("K".to_owned()))
+        );
+        assert_eq!(
+            secret("K", Some(" \n".to_owned())),
+            Err(EnvSecretError::Empty("K".to_owned()))
+        );
+    }
 }
