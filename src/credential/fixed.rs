@@ -2,6 +2,7 @@ use async_trait::async_trait;
 
 use super::{Credential, CredentialError, CredentialSource, CredentialStatus};
 use crate::config::CredentialHeader;
+use crate::config::env::secret;
 
 /// A credential fixed for the life of the process, or none at all.
 #[derive(Debug)]
@@ -28,8 +29,7 @@ impl FixedCredential {
 
     /// Reads `name` from the process environment once, at construction.
     pub fn from_env(header: CredentialHeader, name: &str) -> Result<Self, CredentialError> {
-        let value =
-            std::env::var(name).map_err(|_| CredentialError::MissingEnv(name.to_owned()))?;
+        let value = secret(name, std::env::var(name).ok())?;
         Ok(Self {
             credential: Some(Credential::new(header, value)?),
             env_name: Some(name.to_owned()),

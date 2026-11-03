@@ -38,6 +38,7 @@ impl Snapshot {
         // Routing and credentials first: a rejected configuration leaves no
         // directory behind.
         let registry = Registry::from_config(config)?;
+        let client_token = ClientToken::new(&config.server.token.resolve()?);
         let upstream = UpstreamClient::from_config(&config.upstream, &config.backends)?;
         let body_log = match &config.logging.body_dir {
             Some(dir) => Some(BodyLog::open(dir, config.logging.body_retention).map_err(
@@ -69,7 +70,7 @@ impl Snapshot {
             registry,
             live,
             upstream,
-            client_token: ClientToken::new(&config.server.token),
+            client_token,
             max_body_bytes: config.server.max_body_bytes,
             body_log,
             stats,

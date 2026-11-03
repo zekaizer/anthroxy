@@ -5,10 +5,10 @@ reaches it — the Windows host included, when the router runs in WSL2. Nothing
 needs installing.
 
 `http://<router>/` redirects to `/ui/`, a page embedded in the binary. It signs
-in with `server.token` (kept in the tab, or in the browser when "Remember" is
-ticked) and sends it as a header on every call; there is no cookie. Anyone
-holding the token can use everything on the page, including reloading the router
-and deleting recordings.
+in with `server.token`, or the variable's value when the file names one (kept in
+the tab, or in the browser when "Remember" is ticked) and sends it as a header
+on every call; there is no cookie. Anyone holding the token can use everything
+on the page, including reloading the router and deleting recordings.
 
 | Tab | What it shows and does |
 | --- | --- |

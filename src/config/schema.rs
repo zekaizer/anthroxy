@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use super::byte_size;
 use super::credential_header::CredentialHeader;
+use super::token::TokenConfig;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,7 +39,7 @@ pub struct ServerConfig {
     #[serde(default = "ServerConfig::default_listen")]
     pub listen: SocketAddr,
     /// Static token the console presents, and `/v1` when [`V1Auth::Token`].
-    pub token: String,
+    pub token: TokenConfig,
     /// How `/v1/*` authenticates. The console always uses `token`.
     #[serde(default)]
     pub v1_auth: V1Auth,

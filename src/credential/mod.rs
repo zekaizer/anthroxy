@@ -15,7 +15,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use http::header::{HeaderName, HeaderValue};
 
-use crate::config::{CredentialConfig, CredentialHeader};
+use crate::config::{CredentialConfig, CredentialHeader, EnvSecretError};
 
 pub use command::CommandCredential;
 pub use fixed::FixedCredential;
@@ -94,8 +94,8 @@ pub fn mask(secret: &str) -> String {
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CredentialError {
-    #[error("environment variable `{0}` is not set")]
-    MissingEnv(String),
+    #[error(transparent)]
+    Env(#[from] EnvSecretError),
     #[error("credential contains characters not allowed in an HTTP header")]
     NotHeaderSafe,
     #[error("cannot start credential command: {0}")]

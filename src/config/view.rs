@@ -5,13 +5,13 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::{CommandOutput, Config, CredentialConfig, CredentialHeader, LogFormat};
+use super::{CommandOutput, Config, CredentialConfig, CredentialHeader, LogFormat, TokenConfig};
 
 pub const REDACTED: &str = "<redacted>";
 
-/// `server.token`, `static` credential values, every forced header value and
-/// the userinfo of a proxy URL are redacted; the rest is shown as loaded,
-/// `${ENV}` expanded.
+/// A literal `server.token`, `static` credential values, every forced header
+/// value and the userinfo of a proxy URL are redacted; the rest is shown as
+/// loaded, `${ENV}` expanded.
 pub fn masked(config: &Config) -> Value {
     let backends: Map<String, Value> = config
         .backends
@@ -58,7 +58,10 @@ pub fn masked(config: &Config) -> Value {
     json!({
         "server": {
             "listen": config.server.listen.to_string(),
-            "token": REDACTED,
+            "token": match &config.server.token {
+                TokenConfig::Literal(_) => json!(REDACTED),
+                TokenConfig::Env { name } => json!({"kind": "env", "name": name}),
+            },
             "v1_auth": match config.server.v1_auth {
                 super::V1Auth::Token => "token",
                 super::V1Auth::None => "none",

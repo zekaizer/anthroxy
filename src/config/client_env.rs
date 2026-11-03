@@ -3,7 +3,7 @@
 
 use std::net::Ipv6Addr;
 
-use super::Config;
+use super::{Config, EnvSecretError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum EnvFormat {
@@ -31,8 +31,12 @@ pub fn base_url(config: &Config, host: &str) -> String {
     format!("http://{host}:{}", config.server.listen.port())
 }
 
-/// The variables, in output order.
-pub fn vars(config: &Config, base_url: &str) -> Vec<(&'static str, String)> {
+/// The variables, in output order. Fails only when `/v1` needs a token that
+/// is in a variable it cannot read.
+pub fn vars(
+    config: &Config,
+    base_url: &str,
+) -> Result<Vec<(&'static str, String)>, EnvSecretError> {
     let default_model = config
         .routing
         .default_model
@@ -41,7 +45,7 @@ pub fn vars(config: &Config, base_url: &str) -> Vec<(&'static str, String)> {
         .unwrap_or_default();
     let mut vars = vec![("ANTHROPIC_BASE_URL", base_url.to_owned())];
     if config.server.v1_auth != super::V1Auth::None {
-        vars.push(("ANTHROPIC_AUTH_TOKEN", config.server.token.clone()));
+        vars.push(("ANTHROPIC_AUTH_TOKEN", config.server.token.resolve()?));
     }
     vars.push(("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1".to_owned()));
     vars.push((
@@ -49,7 +53,7 @@ pub fn vars(config: &Config, base_url: &str) -> Vec<(&'static str, String)> {
         "1".to_owned(),
     ));
     vars.push(("ANTHROPIC_MODEL", default_model));
-    vars
+    Ok(vars)
 }
 
 /// `wsl_localhost` adds the note that the Windows host needs the
@@ -124,7 +128,11 @@ mod tests {
 
     fn render_for(config: &Config, explicit: Option<&str>, format: EnvFormat) -> String {
         let host = host(config, explicit);
-        render(&vars(config, &base_url(config, &host)), format, false)
+        render(
+            &vars(config, &base_url(config, &host)).unwrap(),
+            format,
+            false,
+        )
     }
 
     #[test]
@@ -195,7 +203,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&echoed.stdout),
-            config.server.token,
+            config.server.token.resolve().unwrap(),
             "{line}"
         );
 
@@ -241,7 +249,7 @@ mod tests {
     #[test]
     fn the_windows_host_note_is_for_the_shell_only() {
         let config = config("0.0.0.0:8787");
-        let vars = vars(&config, "http://localhost:8787");
+        let vars = vars(&config, "http://localhost:8787").unwrap();
         assert!(render(&vars, EnvFormat::Sh, true).contains("From the Windows host"));
         assert!(!render(&vars, EnvFormat::Sh, false).contains("From the Windows host"));
         assert!(!render(&vars, EnvFormat::Powershell, true).contains("From the Windows host"));

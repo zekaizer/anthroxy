@@ -58,6 +58,39 @@ fn debug_and_mask_never_reveal_the_secret() {
 }
 
 #[tokio::test]
+async fn env_source_sends_the_value_without_surrounding_whitespace() {
+    let name = "ANTHROXY_TEST_CRED_PADDED";
+    // SAFETY: test-local variable, no other thread reads it concurrently.
+    unsafe { std::env::set_var(name, " from-environment\r\n") };
+    let source = build(&CredentialConfig::Env {
+        name: name.into(),
+        header: CredentialHeader::bearer(),
+    })
+    .unwrap();
+    assert_eq!(
+        source.credential().await.unwrap(),
+        Some(bearer("from-environment"))
+    );
+}
+
+#[test]
+fn env_source_refuses_an_empty_value() {
+    let name = "ANTHROXY_TEST_CRED_EMPTY";
+    // SAFETY: test-local variable, no other thread reads it concurrently.
+    unsafe { std::env::set_var(name, "") };
+    let err = build(&CredentialConfig::Env {
+        name: name.into(),
+        header: CredentialHeader::bearer(),
+    })
+    .err()
+    .unwrap();
+    assert!(
+        matches!(err, CredentialError::Env(EnvSecretError::Empty(_))),
+        "{err}"
+    );
+}
+
+#[tokio::test]
 async fn fixed_none_and_static() {
     let none = build(&CredentialConfig::None).unwrap();
     assert_eq!(none.credential().await.unwrap(), None);
@@ -101,7 +134,10 @@ async fn env_is_resolved_at_build_time() {
     })
     .err()
     .unwrap();
-    assert!(matches!(err, CredentialError::MissingEnv(_)), "{err}");
+    assert!(
+        matches!(err, CredentialError::Env(EnvSecretError::Missing(_))),
+        "{err}"
+    );
 }
 
 #[test]
@@ -302,7 +338,10 @@ async fn command_env_references_are_expanded_when_run() {
         Duration::from_secs(5),
     );
     let err = missing.credential().await.err().unwrap();
-    assert!(matches!(err, CredentialError::MissingEnv(_)), "{err}");
+    assert!(
+        matches!(err, CredentialError::Env(EnvSecretError::Missing(_))),
+        "{err}"
+    );
 }
 
 #[tokio::test]

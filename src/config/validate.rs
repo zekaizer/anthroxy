@@ -7,7 +7,7 @@ use super::set_fields;
 use super::view::redacted_url;
 use super::{
     BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, Template,
-    TemplateError, V1Auth, origin,
+    TemplateError, TokenConfig, V1Auth, origin,
 };
 use crate::openai::SystemPlacement;
 use crate::text::short;
@@ -15,8 +15,14 @@ use crate::text::short;
 pub fn validate(config: &Config) -> Result<(), ConfigError> {
     let mut problems = Vec::new();
 
-    if config.server.token.trim().is_empty() {
-        problems.push("server.token must not be empty".to_owned());
+    match &config.server.token {
+        TokenConfig::Literal(value) if value.trim().is_empty() => {
+            problems.push("server.token must not be empty".to_owned());
+        }
+        TokenConfig::Env { name } if name.trim().is_empty() => {
+            problems.push("server.token.name must not be empty".to_owned());
+        }
+        _ => {}
     }
     if config.server.v1_auth == V1Auth::None && !config.server.listen.ip().is_loopback() {
         problems.push(

@@ -157,6 +157,9 @@ anthroxy service status      # ✓/✗ per check; exit 1 if anything is wrong
 journalctl --user -u anthroxy -f
 ```
 
+The service reads the variables your configuration names from `env` beside it,
+not from your shell profile.
+
 On WSL2 this needs systemd enabled in the distribution, and
 `%USERPROFILE%\.wslconfig` with `[wsl2] vmIdleTimeout=-1` so Windows does not
 shut the VM down. See [Running and debugging](docs/operating.md), which also

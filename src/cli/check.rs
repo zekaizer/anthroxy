@@ -53,10 +53,28 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
             "{} {}",
             style.warn_mark(),
             style.warn(&format!(
-                "mode {mode:o}: the router token and any static credential in this file are readable by other users; `chmod 600 {}`",
+                "mode {mode:o}: any router token or static credential in this file is readable by other users; `chmod 600 {}`",
                 display_path(&path)
             ))
         );
+    }
+
+    let env_file = config::env_file(&path);
+    if let Some(mode) = config::open_to_other_accounts(&env_file) {
+        println!(
+            "{} {}",
+            style.warn_mark(),
+            style.warn(&format!(
+                "mode {mode:o}: the variables in this file are readable by other users; `chmod 600 {}`",
+                display_path(&env_file)
+            ))
+        );
+    }
+
+    let mut problems = 0usize;
+    if let Err(error) = config.server.token.resolve() {
+        println!("{} server.token: {error}", style.err_mark());
+        problems += 1;
     }
 
     let registry = match Registry::from_config(&config) {
@@ -75,7 +93,6 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
     };
 
-    let mut problems = 0usize;
     let mut listed: std::collections::HashMap<String, Vec<String>> = Default::default();
     println!();
     println!("{}", style.bold("Backends"));
@@ -134,8 +151,8 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         );
         Ok(())
     } else {
-        println!("{} {problems} backend problem(s) above.", style.err_mark());
-        anyhow::bail!("{problems} backend problem(s)")
+        println!("{} {problems} problem(s) above.", style.err_mark());
+        anyhow::bail!("{problems} problem(s)")
     }
 }
 

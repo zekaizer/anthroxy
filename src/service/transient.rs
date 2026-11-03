@@ -1,7 +1,9 @@
 //! What the service sees: a command run in a transient unit under the systemd
-//! user manager, which starts it with the environment `anthroxy.service` gets.
+//! user manager with the env file `anthroxy.service` reads. A drop-in on that
+//! unit does not reach a transient one.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::systemd::{ServiceError, command_line};
@@ -12,7 +14,7 @@ const PROGRAM: &str = "systemd-run";
 
 /// `--pipe` keeps the output out of the journal and off the terminal;
 /// `--collect` drops the unit even when it fails.
-const ARGS: [&str; 6] = ["--user", "--pipe", "--wait", "--collect", "--quiet", "--"];
+const ARGS: [&str; 5] = ["--user", "--pipe", "--wait", "--collect", "--quiet"];
 
 /// Variables that differ per process or per invocation and never explain a
 /// credential command's failure.
@@ -30,26 +32,35 @@ const NOISE: [&str; 9] = [
 
 /// Runs `sh -c command` as a user unit does. `Err` only when the transient
 /// unit could not be started or did not finish within `timeout`.
-pub async fn shell(command: &str, timeout: Duration) -> Result<Run, ServiceError> {
-    run(&["/bin/sh", "-c", command], timeout).await
+pub async fn shell(command: &str, env_file: &Path, timeout: Duration) -> Result<Run, ServiceError> {
+    run(&["/bin/sh", "-c", command], env_file, timeout).await
 }
 
 /// The whole invocation. systemd-run needs an absolute program, so the command
 /// travels as an argument of `/bin/sh`, the interpreter the router itself uses.
-fn argv<'a>(program: &[&'a str]) -> Vec<&'a str> {
+fn argv<'a>(property: &'a str, program: &[&'a str]) -> Vec<&'a str> {
     ARGS.iter()
         .copied()
+        .chain([property, "--"])
         .chain(program.iter().copied())
         .collect()
 }
 
-/// The environment a user unit starts with.
-pub async fn environment(timeout: Duration) -> Result<BTreeMap<String, String>, ServiceError> {
+/// The `-` lets a unit start without the file, as `anthroxy.service` does.
+fn env_file_property(env_file: &Path) -> String {
+    format!("--property=EnvironmentFile=-{}", env_file.display())
+}
+
+/// The environment a user unit reading `env_file` starts with.
+pub async fn environment(
+    env_file: &Path,
+    timeout: Duration,
+) -> Result<BTreeMap<String, String>, ServiceError> {
     let argv = ["/usr/bin/env", "-0"];
-    let run = run(&argv, timeout).await?;
+    let run = run(&argv, env_file, timeout).await?;
     if !run.success {
         return Err(ServiceError::Command {
-            command: line(&argv),
+            command: line(env_file, &argv),
             detail: first_line(&run.stderr).to_owned(),
         });
     }
@@ -58,24 +69,25 @@ pub async fn environment(timeout: Duration) -> Result<BTreeMap<String, String>, 
 
 /// Starts one transient unit and waits for it. `Err` means no unit ran: the
 /// manager is out of reach, or it did not finish within `timeout`.
-async fn run(command: &[&str], timeout: Duration) -> Result<Run, ServiceError> {
+async fn run(command: &[&str], env_file: &Path, timeout: Duration) -> Result<Run, ServiceError> {
     if !cfg!(target_os = "linux") {
         return Err(ServiceError::Unsupported);
     }
     let failed = |detail: String| ServiceError::Command {
-        command: line(command),
+        command: line(env_file, command),
         detail,
     };
     let started = Instant::now();
-    let output = process::run(PROGRAM, &argv(command), timeout)
+    let property = env_file_property(env_file);
+    let output = process::run(PROGRAM, &argv(&property, command), timeout)
         .await
         .map_err(|e| failed(e.to_string()))?;
     Ok(Run::new(&output, started.elapsed()))
 }
 
 /// The invocation as run, for an error a user has to act on.
-fn line(command: &[&str]) -> String {
-    command_line(PROGRAM, &argv(command))
+fn line(env_file: &Path, command: &[&str]) -> String {
+    command_line(PROGRAM, &argv(&env_file_property(env_file), command))
 }
 
 fn first_line(text: &str) -> &str {
@@ -158,12 +170,17 @@ mod tests {
     #[test]
     fn the_unit_runs_the_command_the_way_the_router_would() {
         assert_eq!(
-            line(&["/bin/sh", "-c", "cat ~/.token"]),
-            "systemd-run --user --pipe --wait --collect --quiet -- /bin/sh -c cat ~/.token",
+            line(Path::new("/c/env"), &["/bin/sh", "-c", "cat ~/.token"]),
+            "systemd-run --user --pipe --wait --collect --quiet --property=EnvironmentFile=-/c/env -- /bin/sh -c cat ~/.token",
             "no flag may go missing: --pipe keeps the secret off the journal"
         );
-        assert_eq!(argv(&["/usr/bin/env", "-0"]).last(), Some(&"-0"));
-        assert_eq!(argv(&[])[ARGS.len() - 1], "--", "the command follows `--`");
+        let property = env_file_property(Path::new("/c/env"));
+        assert_eq!(argv(&property, &["/usr/bin/env", "-0"]).last(), Some(&"-0"));
+        assert_eq!(
+            argv(&property, &[]).last(),
+            Some(&"--"),
+            "the command follows `--`"
+        );
     }
 
     #[test]

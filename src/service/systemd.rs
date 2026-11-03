@@ -23,11 +23,17 @@ pub fn render_unit(exe: &Path, config: &Path) -> String {
          RestartSec=2\n\
          # Log lines already carry timestamps and levels.\n\
          Environment=RUST_LOG_STYLE=never\n\
+         # Variables a configuration names; the file need not exist.\n\
+         EnvironmentFile=-{env_file}\n\
          \n\
          [Install]\n\
          WantedBy=default.target\n",
         exe = shell_quote(exe),
         config = shell_quote(config),
+        env_file = crate::config::env_file(config)
+            .display()
+            .to_string()
+            .replace('%', "%%"),
     )
 }
 
@@ -245,6 +251,19 @@ mod tests {
         );
         assert!(unit.contains("WantedBy=default.target"));
         assert!(unit.starts_with("[Unit]\n"));
+        assert!(
+            unit.contains("EnvironmentFile=-/home/u/.config/anthroxy/env\n"),
+            "{unit}"
+        );
+    }
+
+    #[test]
+    fn the_env_file_path_is_taken_whole_with_no_specifier_expanded() {
+        let unit = render_unit(Path::new("/a"), Path::new("/opt/my 100%d/c.toml"));
+        assert!(
+            unit.contains("EnvironmentFile=-/opt/my 100%%d/env\n"),
+            "{unit}"
+        );
     }
 
     #[test]

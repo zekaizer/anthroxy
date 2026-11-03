@@ -16,6 +16,7 @@ mod schema;
 mod set_fields;
 pub mod snippet;
 mod template;
+mod token;
 mod validate;
 pub mod view;
 
@@ -26,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 pub use credential_header::{CredentialHeader, X_API_KEY};
 pub use drop_headers::{CLAUDE_CODE_PRESET, DropHeaders, HeaderPattern, PatternError};
+pub use env::EnvSecretError;
 pub use error::ConfigError;
 pub use origin::origin;
 pub use schema::{
@@ -34,6 +36,7 @@ pub use schema::{
 };
 pub use set_fields::{FieldError, SetFields};
 pub use template::{Template, TemplateError};
+pub use token::TokenConfig;
 
 /// Environment variable naming the configuration file.
 pub const CONFIG_ENV: &str = "ANTHROXY_CONFIG";
@@ -44,7 +47,7 @@ pub fn process_env(name: &str) -> Option<String> {
 }
 
 /// The mode of `path` when it lets anyone but its owner near it. The file
-/// carries `server.token` and any `static` backend credential, so the mode a
+/// can carry `server.token` and any `static` backend credential, so the mode a
 /// stock umask leaves on a hand-written file hands both to every local
 /// account. `None` when the file is the owner's alone, cannot be read, or the
 /// platform has no such modes.
@@ -59,6 +62,11 @@ pub fn open_to_other_accounts(path: &Path) -> Option<u32> {
 #[cfg(not(unix))]
 pub fn open_to_other_accounts(_: &Path) -> Option<u32> {
     None
+}
+
+/// The variables the service starts with: `env` beside the configuration file.
+pub fn env_file(config: &Path) -> PathBuf {
+    config.with_file_name("env")
 }
 
 /// Default configuration path: `$XDG_CONFIG_HOME/anthroxy/config.toml`.

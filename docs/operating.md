@@ -17,6 +17,13 @@ Requirements: systemd enabled in the distribution (`[boot] systemd=true` in
 `/etc/wsl.conf`, default on recent Ubuntu). WSL still shuts the VM down when
 idle unless `%USERPROFILE%\.wslconfig` sets `[wsl2] vmIdleTimeout=-1`.
 
+The service does not see what your shell profile exports. Variables the
+configuration names go in `env` beside it (`~/.config/anthroxy/env`,
+`NAME=value` lines, mode 600); the unit reads that file when it exists, and a
+new value takes `systemctl --user restart anthroxy`. A unit installed before
+this file existed needs `anthroxy service install` again. See
+[Configuration](configuration.md#values-and-files).
+
 From Claude Code on the Windows host, use the distribution's address
 (`hostname -I` inside WSL) in `ANTHROPIC_BASE_URL`, or `localhost` when WSL
 networking is set to `mirrored`.
@@ -33,9 +40,11 @@ networking is set to `mirrored`.
   prints values unmasked instead of `sk-a…9999 (108 chars)`. A command that
   works in your shell but not as a service is an environment difference: on
   Linux, `--as-service` runs it a second time in a transient unit under the
-  systemd user manager — the environment `anthroxy.service` starts with — and
-  prints the delta (`PATH` in full, other variables by name). Typical causes:
-  the interpreter is `dash`, not your login shell; `PATH` has none of the
+  systemd user manager with the `env` file beside the configuration — what
+  `anthroxy.service` starts with, apart from any drop-in on it — and prints the
+  delta (`PATH` in full, other variables by name). Typical causes:
+  a variable that is only in your profile, not in the `env` file; the
+  interpreter is `dash`, not your login shell; `PATH` has none of the
   directories your profile adds; a keychain or agent socket
   (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`) is absent.
 - **Body capture.** Set `logging.body_dir` or pass `--body-dir DIR` to `serve`.

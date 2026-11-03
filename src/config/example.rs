@@ -9,14 +9,16 @@ pub const EXAMPLE: &str = r##"# anthroxy configuration
 # `${NAME}` is replaced with the environment variable NAME when the file is
 # loaded. Write `$${NAME}` to keep a literal `${NAME}` for a shell command. A
 # credential `command` is the exception: its `${NAME}` is resolved each time
-# it runs, so the secret never sits in the loaded configuration.
+# it runs, so the secret never sits in the loaded configuration. It does reach
+# the `sh -c` argument, visible in `ps`: read a secret as `$NAME` there instead.
 
 [server]
 # Listen on every interface so Claude Code on the Windows host can reach a
 # router running inside WSL2. Use "127.0.0.1:8787" to stay local.
 listen = "0.0.0.0:8787"
 # The one token Claude Code presents (as ANTHROPIC_AUTH_TOKEN). Generated at
-# init; replace it with anything you like.
+# init; replace it with anything you like, or keep it out of this file with
+# token = { kind = "env", name = "ANTHROXY_TOKEN" }.
 token = "__TOKEN__"
 # How /v1 authenticates. "token" (default) requires this value as x-api-key
 # or Authorization: Bearer. "none" is unauthenticated /v1 and requires a
@@ -83,7 +85,8 @@ url = "http://127.0.0.1:1234"
 # credential kinds:
 #   { kind = "none" }                                   (default)
 #   { kind = "static",  value = "sk-...", header = "x_api_key" }
-#   { kind = "env",     name = "VLLM_API_KEY" }
+#   { kind = "env",     name = "VLLM_API_KEY" }     (the service reads `env`
+#                                                    beside this file)
 #   { kind = "command", command = "cat ~/.token", refresh = "5m", timeout = "10s" }
 # `header` is "bearer" (Authorization: Bearer ...), "x_api_key", or any header
 # as { name = "api-key" } / { name = "authorization", scheme = "Token" }.
@@ -93,7 +96,7 @@ credential = { kind = "none" }
 
 # [backends.vllm]
 # url = "http://10.0.0.5:8000"
-# credential = { kind = "static", value = "${VLLM_API_KEY}" }
+# credential = { kind = "env", name = "VLLM_API_KEY" }
 # # Request body fields this backend rejects as unknown, removed before
 # # forwarding. Dot-separated paths reach into objects (not arrays).
 # drop_fields = ["context_management", "metadata.user_id"]
@@ -115,7 +118,7 @@ credential = { kind = "none" }
 # [backends.inhouse]
 # kind = "openai"
 # url = "https://llm.example.corp"
-# credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
+# credential = { kind = "env", name = "INHOUSE_API_KEY" }
 # # Where `anthroxy check` and the console read this backend's model list;
 # # defaults to /v1/models. The chat path is not configurable.
 # models_path = "/llm/api/models"
@@ -210,7 +213,7 @@ mod tests {
     fn example_is_a_valid_configuration() {
         let text = render("test-token");
         let config = Config::parse(&text, |_| None).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(config.server.token, "test-token");
+        assert_eq!(config.server.token.resolve().unwrap(), "test-token");
         assert_eq!(config.models.len(), 1);
         assert_eq!(
             config.routing.default_model.as_deref(),
