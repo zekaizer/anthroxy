@@ -89,6 +89,12 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   resolves them each time it runs, so a secret it names never sits in the
   loaded configuration, the console or `check` output (that every variable
   exists is still checked at load).
+- `server.token` is the value itself or `{ kind = "env", name = "VAR" }`. The
+  variable is read when the router starts or reloads and by `anthroxy env`, with
+  surrounding whitespace dropped; `check` reports one that is unset or empty and
+  carries on, and the commands that do not use the token run without it. A new
+  value takes a restart. `token = "${VAR}"` also works, but it is resolved at
+  load, so without the variable no command that reads the file runs.
 - Unknown keys are errors. `check` reports every problem at once with its TOML
   path.
 

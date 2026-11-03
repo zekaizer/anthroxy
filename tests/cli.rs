@@ -217,7 +217,7 @@ fn check_probe_reports_unreachable_backend() {
         .assert()
         .failure()
         .stdout(predicate::str::contains("unreachable"))
-        .stdout(predicate::str::contains("1 backend problem"));
+        .stdout(predicate::str::contains("1 problem(s)"));
 }
 
 #[test]
@@ -311,6 +311,78 @@ backend = "good"
     )
     .unwrap();
     path
+}
+
+/// A router whose token is in `ANTHROXY_TEST_TOKEN`.
+fn env_token_config(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[server]
+listen = "127.0.0.1:0"
+token = { kind = "env", name = "ANTHROXY_TEST_TOKEN" }
+
+[backends.none]
+url = "http://127.0.0.1:1"
+
+[[models]]
+id = "m"
+backend = "none"
+"#,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn a_token_variable_is_needed_only_by_what_uses_the_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = env_token_config(dir.path());
+    let config = path.to_str().unwrap();
+    let run = |args: &[&str]| {
+        let mut command = bin();
+        command
+            .args(["--config", config])
+            .args(args)
+            .env_remove("ANTHROXY_TEST_TOKEN");
+        command.assert()
+    };
+
+    run(&["credential"]).success();
+    run(&["models"]).success();
+    run(&["env"])
+        .failure()
+        .stderr(predicate::str::contains("ANTHROXY_TEST_TOKEN"));
+    run(&["serve"])
+        .failure()
+        .stderr(predicate::str::contains("server.token"))
+        .stderr(predicate::str::contains("ANTHROXY_TEST_TOKEN"));
+    run(&["check", "--no-probe"])
+        .failure()
+        .stdout(predicate::str::contains("server.token"))
+        .stdout(predicate::str::contains("Backends"))
+        .stderr(predicate::str::contains("1 problem(s)"));
+}
+
+#[test]
+fn a_token_variable_reaches_the_client_without_its_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = env_token_config(dir.path());
+    bin()
+        .args(["--config", path.to_str().unwrap(), "env"])
+        .env("ANTHROXY_TEST_TOKEN", " router-secret\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "export ANTHROPIC_AUTH_TOKEN='router-secret'\n",
+        ));
+    bin()
+        .args(["--config", path.to_str().unwrap(), "check", "--no-probe"])
+        .env("ANTHROXY_TEST_TOKEN", "")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("is empty"));
 }
 
 #[test]
@@ -954,7 +1026,7 @@ url = "{url}"
             .stdout(predicate::str::contains("(passthrough)"))
             .stdout(predicate::str::contains("skipped"))
             .stdout(predicate::str::contains("x-api-key").not())
-            .stdout(predicate::str::contains("backend problem").not());
+            .stdout(predicate::str::contains("problem(s)").not());
     })
     .await
     .unwrap();

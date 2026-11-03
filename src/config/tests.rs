@@ -253,6 +253,54 @@ fn unknown_field_is_a_syntax_error() {
 }
 
 #[test]
+fn a_token_can_name_the_variable_that_holds_it() {
+    let text = MINIMAL.replace(
+        "\"secret\"",
+        r#"{ kind = "env", name = "ANTHROXY_TEST_TOKEN_UNSET" }"#,
+    );
+    let c = Config::parse(&text, |_| None).expect("a missing variable does not stop a load");
+    assert_eq!(
+        c.server.token,
+        TokenConfig::Env {
+            name: "ANTHROXY_TEST_TOKEN_UNSET".to_owned()
+        }
+    );
+    assert_eq!(
+        c.server.token.resolve(),
+        Err(EnvSecretError::Missing(
+            "ANTHROXY_TEST_TOKEN_UNSET".to_owned()
+        ))
+    );
+    assert_eq!(
+        view::masked(&c)["server"]["token"]["name"],
+        "ANTHROXY_TEST_TOKEN_UNSET"
+    );
+}
+
+#[test]
+fn a_token_table_is_checked_like_the_rest_of_the_file() {
+    let with = |token: &str| MINIMAL.replace("\"secret\"", token);
+    for (token, needle) in [
+        (r#"{ kind = "file", name = "K" }"#, "file"),
+        (r#"{ name = "K" }"#, "kind"),
+        (r#"{ kind = "env" }"#, "name"),
+        (
+            r#"{ kind = "env", name = "K", header = "bearer" }"#,
+            "header",
+        ),
+    ] {
+        let err = Config::parse(&with(token), |_| None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(needle), "{token}: {err}");
+    }
+    let err = Config::parse(&with(r#"{ kind = "env", name = " " }"#), |_| None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("server.token.name"), "{err}");
+}
+
+#[test]
 fn env_expansion_resolves_and_escapes() {
     let lookup = |name: &str| match name {
         "TOKEN" => Some("from-env".to_owned()),
@@ -261,7 +309,7 @@ fn env_expansion_resolves_and_escapes() {
     let text = MINIMAL.replace("\"secret\"", "\"${TOKEN}\"")
         + "\n[backends.local.headers]\nx-literal = \"$${HOME}\"\n";
     let c = Config::parse(&text, lookup).unwrap();
-    assert_eq!(c.server.token, "from-env");
+    assert_eq!(c.server.token.resolve().unwrap(), "from-env");
     assert_eq!(c.backends["local"].headers["x-literal"], "${HOME}");
 }
 
@@ -1111,7 +1159,7 @@ backend = "a"
         _ => None,
     };
     let c = Config::parse(text, lookup).unwrap();
-    assert_eq!(c.server.token, "t");
+    assert_eq!(c.server.token.resolve().unwrap(), "t");
     match &c.backends["a"].credential {
         CredentialConfig::Command { command, .. } => {
             assert_eq!(command, "vault read -token=${SECRET} x")

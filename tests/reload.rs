@@ -129,6 +129,31 @@ async fn failed_reload_keeps_the_previous_configuration() {
 }
 
 #[tokio::test]
+async fn a_token_variable_authenticates_and_its_absence_rejects_a_reload() {
+    let upstream = MockUpstream::start(echo).await;
+    // SAFETY: test-local variable, no other thread reads it concurrently.
+    unsafe { std::env::set_var("ANTHROXY_TEST_RELOAD_TOKEN", " from-variable\n") };
+    let text = config_with_backend(&upstream.url(), "");
+    let with_env = text.replace(
+        &format!("token = \"{TOKEN}\""),
+        r#"token = { kind = "env", name = "ANTHROXY_TEST_RELOAD_TOKEN" }"#,
+    );
+    assert_ne!(with_env, text);
+    let router = TestRouter::start(&with_env).await;
+    assert_eq!(list_models(&router, "from-variable").await.0, 200);
+    assert_eq!(list_models(&router, TOKEN).await.0, 401);
+
+    let broken = with_env.replace("ANTHROXY_TEST_RELOAD_TOKEN", "ANTHROXY_TEST_RELOAD_UNSET");
+    let err = router.reload.apply(&parse(&broken)).unwrap_err();
+    assert!(err.to_string().contains("server.token"), "{err}");
+    assert!(
+        err.to_string().contains("ANTHROXY_TEST_RELOAD_UNSET"),
+        "{err}"
+    );
+    assert_eq!(list_models(&router, "from-variable").await.0, 200);
+}
+
+#[tokio::test]
 async fn reload_reports_a_changed_listen_address() {
     let upstream = MockUpstream::start(echo).await;
     let router = TestRouter::start(&config_with_backend(&upstream.url(), "")).await;

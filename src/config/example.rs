@@ -16,7 +16,8 @@ pub const EXAMPLE: &str = r##"# anthroxy configuration
 # router running inside WSL2. Use "127.0.0.1:8787" to stay local.
 listen = "0.0.0.0:8787"
 # The one token Claude Code presents (as ANTHROPIC_AUTH_TOKEN). Generated at
-# init; replace it with anything you like.
+# init; replace it with anything you like, or keep it out of this file with
+# token = { kind = "env", name = "ANTHROXY_TOKEN" }.
 token = "__TOKEN__"
 # How /v1 authenticates. "token" (default) requires this value as x-api-key
 # or Authorization: Bearer. "none" is unauthenticated /v1 and requires a
@@ -210,7 +211,7 @@ mod tests {
     fn example_is_a_valid_configuration() {
         let text = render("test-token");
         let config = Config::parse(&text, |_| None).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(config.server.token, "test-token");
+        assert_eq!(config.server.token.resolve().unwrap(), "test-token");
         assert_eq!(config.models.len(), 1);
         assert_eq!(
             config.routing.default_model.as_deref(),

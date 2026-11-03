@@ -7,19 +7,21 @@ use std::sync::Arc;
 use axum::Extension;
 use axum::extract::{ConnectInfo, State};
 use axum::response::Response;
-use http::HeaderMap;
 use http::header::HOST;
+use http::{HeaderMap, StatusCode};
 use serde_json::json;
 
-use super::live;
 use super::probe::max_context_tokens;
+use super::{error, live};
+use crate::anthropic::ErrorType;
 use crate::config::client_env::{self, EnvFormat};
-use crate::server::{AppState, Snapshot};
+use crate::server::{AppState, RequestId, Snapshot};
 
 pub async fn env(
     State(app): State<AppState>,
     Extension(snapshot): Extension<Arc<Snapshot>>,
     ConnectInfo(viewer): ConnectInfo<SocketAddr>,
+    request_id: RequestId,
     headers: HeaderMap,
 ) -> Response {
     let config = &snapshot.config;
@@ -33,7 +35,17 @@ pub async fn env(
             format!("{host}:{}", config.server.listen.port())
         });
     let base_url = format!("http://{host}");
-    let mut vars = client_env::vars(config, &base_url);
+    let mut vars = match client_env::vars(config, &base_url) {
+        Ok(vars) => vars,
+        Err(problem) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorType::ApiError,
+                &problem.to_string(),
+                &request_id,
+            );
+        }
+    };
     let max_context = max_context_tokens(&app.probed(), &snapshot.registry);
     if let Some(tokens) = max_context {
         vars.push(("CLAUDE_CODE_MAX_CONTEXT_TOKENS", tokens.to_string()));

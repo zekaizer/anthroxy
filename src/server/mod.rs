@@ -39,6 +39,8 @@ pub enum ServerBuildError {
     Backend(#[from] crate::upstream::BackendBuildError),
     #[error(transparent)]
     Client(#[from] crate::upstream::ClientBuildError),
+    #[error("server.token: {0}")]
+    Token(#[from] crate::config::EnvSecretError),
     #[error("cannot open body log directory {dir}: {source}")]
     BodyLog {
         dir: std::path::PathBuf,
