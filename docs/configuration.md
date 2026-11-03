@@ -88,12 +88,15 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   credential `command` is the exception: it keeps its `${NAME}` references and
   resolves them each time it runs, so a secret it names never sits in the
   loaded configuration, the console or `check` output (that every variable
-  exists is still checked at load).
+  exists is still checked at load). The substituted value is part of the
+  `sh -c` argument, where any local account can see it in `ps`; a secret belongs
+  in `$NAME`, which the shell resolves, or in the script the command runs.
 - The service reads variables from `env` beside the configuration file
   (`~/.config/anthroxy/env`): `NAME=value` lines, no `export`, mode 600. `check`
   warns when other accounts can read it. A shell does not read it, so
   `set -a; . ~/.config/anthroxy/env; set +a` before a command that needs one. A
-  unit installed before this file existed needs `anthroxy service install` again.
+  unit installed before this file existed needs `anthroxy service install`
+  again.
 - `server.token` is the value itself or `{ kind = "env", name = "VAR" }`. The
   variable is read when the router starts or reloads and by `anthroxy env`, with
   surrounding whitespace dropped; `check` reports one that is unset or empty and

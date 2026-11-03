@@ -84,7 +84,8 @@ url = "http://127.0.0.1:1234"
 # credential kinds:
 #   { kind = "none" }                                   (default)
 #   { kind = "static",  value = "sk-...", header = "x_api_key" }
-#   { kind = "env",     name = "VLLM_API_KEY" }
+#   { kind = "env",     name = "VLLM_API_KEY" }     (the service reads `env`
+#                                                    beside this file)
 #   { kind = "command", command = "cat ~/.token", refresh = "5m", timeout = "10s" }
 # `header` is "bearer" (Authorization: Bearer ...), "x_api_key", or any header
 # as { name = "api-key" } / { name = "authorization", scheme = "Token" }.
@@ -94,7 +95,7 @@ credential = { kind = "none" }
 
 # [backends.vllm]
 # url = "http://10.0.0.5:8000"
-# credential = { kind = "static", value = "${VLLM_API_KEY}" }
+# credential = { kind = "env", name = "VLLM_API_KEY" }
 # # Request body fields this backend rejects as unknown, removed before
 # # forwarding. Dot-separated paths reach into objects (not arrays).
 # drop_fields = ["context_management", "metadata.user_id"]
@@ -116,7 +117,7 @@ credential = { kind = "none" }
 # [backends.inhouse]
 # kind = "openai"
 # url = "https://llm.example.corp"
-# credential = { kind = "static", value = "${INHOUSE_API_KEY}" }
+# credential = { kind = "env", name = "INHOUSE_API_KEY" }
 # # Where `anthroxy check` and the console read this backend's model list;
 # # defaults to /v1/models. The chat path is not configurable.
 # models_path = "/llm/api/models"
