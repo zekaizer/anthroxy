@@ -34,7 +34,10 @@ networking is set to `mirrored`.
   in a span `request{id=… method=… path=… model=… backend=…}`; the lines you
   will look for are `routed`, `upstream responded` (status, attempts, latency),
   `response body complete` (bytes, chunks, time to first byte) and the `WARN`s:
-  retries, credential refreshes, client disconnects, upstream errors.
+  retries, credential refreshes, `header command failed` (attempt, duration,
+  cause with the command's stderr), client disconnects, upstream errors. A
+  `header_command` that worked logs `header command ran` at `debug` with the
+  header names it set; its values are never logged.
 - **Credentials.** `anthroxy credential` runs every backend's credential command
   through the same code the router uses and reports what came back; `--reveal`
   prints values unmasked instead of `sk-a…9999 (108 chars)`. A command that

@@ -3,12 +3,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::set_fields;
 use super::view::redacted_url;
 use super::{
     BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, Template,
     TemplateError, TokenConfig, V1Auth, origin,
 };
+use super::{header_command, set_fields};
 use crate::openai::SystemPlacement;
 use crate::text::short;
 
@@ -181,6 +181,14 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             }
         }
         check_drop_headers(name, backend, &mut problems);
+        if let Some(command) = &backend.header_command {
+            header_command::check(name, command, &mut problems);
+            if backend.kind == BackendKind::Passthrough {
+                problems.push(format!(
+                    "backends.{name}: kind = \"passthrough\" relays the request unmodified; a header_command is not run"
+                ));
+            }
+        }
         for path in &backend.drop_fields {
             if path == "model" {
                 problems.push(format!(

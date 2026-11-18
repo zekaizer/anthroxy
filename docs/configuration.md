@@ -85,7 +85,8 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
 
 - `${NAME}` in any string value is replaced with the environment variable `NAME`
   at load time; `$${NAME}` keeps a literal `${NAME}` for shell commands. A
-  credential `command` is the exception: it keeps its `${NAME}` references and
+  credential `command` and a `header_command.command` are the exception: they
+  keep their `${NAME}` references and
   resolves them each time it runs, so a secret it names never sits in the
   loaded configuration, the console or `check` output (that every variable
   exists is still checked at load). The substituted value is part of the
@@ -163,6 +164,46 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   `x-claude-code-session-id` can be read there. A header may be named once:
   two keys that differ only in case are an error. Forced values are shown as
   `<redacted>` wherever headers are reported. See ADR-0019.
+- `header_command` computes headers for every attempt, for a gateway that
+  wants a value no file can hold, such as a token with an issue time and a
+  nonce, encrypted or signed:
+
+  ```toml
+  [backends.gw.header_command]
+  command = "python3 ~/.config/anthroxy/sign.py"  # through sh -c
+  timeout = "5s"                                  # default; 0 is refused
+  [backends.gw.header_command.env]
+  SIGN_KEY_FILE = "/home/me/.config/anthroxy/gateway.key"
+  SIGN_SESSION = "cc-{header:x-claude-code-session-id}"
+  ```
+
+  The command runs once per attempt, retries included, with nothing kept
+  between runs: no cache, no previous value on a failure, no queue, so
+  concurrent requests run it concurrently. It gets the router's environment
+  plus `ANTHROXY_BACKEND`, `ANTHROXY_METHOD`, `ANTHROXY_URL` (the full URL
+  sent to, without userinfo, which travels as basic auth), `ANTHROXY_PATH`, `ANTHROXY_MODEL` (the upstream model, empty when
+  the request names none), `ANTHROXY_REQUEST_ID` (empty for a request the
+  router makes itself), `ANTHROXY_ATTEMPT` (from 1) and `ANTHROXY_BODY_SHA256`
+  (hex digest of the exact bytes sent), and then `env`. An `env` value expands
+  `${NAME}` at load and `{header:<name>}` per request as in `headers`; a
+  variable whose header the client did not send is not set. `env` names are
+  shell variable names and may not begin `ANTHROXY_`. The command keeps its
+  `${NAME}` for the shell, as a credential command does.
+
+  It must exit 0 and print one JSON object of at least one member, each value
+  a string: `{"x-gw-iat": "1763...", "x-gw-token": "..."}`. Each member is a
+  header set on that attempt, replacing the client's value and `headers` under
+  that name; the credential is set after it. The credential's header, framing
+  and hop-by-hop headers, `host`, `content-type` and `x-anthroxy-*` are
+  refused, so with `credential = { kind = "none" }` the command may set
+  `authorization`. Anything else (another exit status, the `timeout`, more
+  than 64 KiB on a stream, output of another shape) answers 502 and the
+  attempt is not sent. The probe of `check`, the console's and a live model
+  list run it too. The values are never logged, recorded or shown; the console
+  lists each run's time, duration, outcome and header names, and the body
+  log's request headers do not include them. A Python interpreter's start
+  costs tens of milliseconds per attempt. `kind = "passthrough"` takes none.
+  See ADR-0021.
 - `live_models = true` fetches `GET {url}{models_path}` and publishes those ids
   as Anthropic model identity (`id`, `display_name`, `created_at`). Anthropic
   and OpenAI list JSON both work (ADR-0017). `kind = "passthrough"` always does

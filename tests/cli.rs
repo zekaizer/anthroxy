@@ -221,6 +221,23 @@ fn check_probe_reports_unreachable_backend() {
 }
 
 #[test]
+fn check_names_a_backends_header_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let extra = "[backends.mock.header_command]\ncommand = \"sign ${KEY}\"\ntimeout = \"2s\"\n";
+    let path = write_config(dir.path(), extra);
+    for probe in [&["--no-probe"][..], &["--timeout", "2s"][..]] {
+        bin()
+            .args(["--config", path.to_str().unwrap(), "check"])
+            .args(probe)
+            .env("KEY", "k")
+            .assert()
+            .stdout(predicate::str::contains(
+                "header command: command `sign ${KEY}` (timeout 2s)",
+            ));
+    }
+}
+
+#[test]
 fn check_reports_an_unreadable_ca_certificate() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(

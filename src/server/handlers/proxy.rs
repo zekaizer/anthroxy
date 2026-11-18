@@ -32,7 +32,7 @@ use crate::stats::StatsRecord;
 use crate::text::short;
 use crate::translate;
 use crate::upstream::{
-    SecretView, UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL,
+    Origin, SecretView, UpstreamError, UpstreamRequest, X_ROUTER_BACKEND, X_ROUTER_MODEL,
     X_ROUTER_UPSTREAM_MODEL, dropped_headers, header_value, is_event_stream, response_headers,
     sent_headers, upstream_headers,
 };
@@ -254,6 +254,11 @@ async fn handle(
             headers,
             body,
             stream: peek.stream,
+            origin: Origin {
+                request_id: Some(request_id.as_str()),
+                model: Some(&route.upstream_model),
+                client: Some(&parts.headers),
+            },
         })
         .await
     {

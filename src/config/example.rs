@@ -160,6 +160,19 @@ credential = { kind = "none" }
 # "anthropic-version" = "2023-06-01"
 # "x-session-id" = "cc-{header:x-claude-code-session-id}"
 
+# A gateway that wants each request signed (an issue time, a nonce, a body
+# hash). The command runs for every attempt and prints a JSON object of
+# headers; it is told the attempt through ANTHROXY_BACKEND, ANTHROXY_METHOD,
+# ANTHROXY_URL, ANTHROXY_PATH, ANTHROXY_MODEL, ANTHROXY_REQUEST_ID,
+# ANTHROXY_ATTEMPT and ANTHROXY_BODY_SHA256, plus `env` below. A failed run
+# answers 502 and nothing is sent.
+# [backends.signed.header_command]
+# command = "python3 ~/.config/anthroxy/sign.py"
+# timeout = "5s"
+# [backends.signed.header_command.env]
+# SIGN_KEY_FILE = "/home/me/.config/anthroxy/gateway.key"
+# SIGN_SESSION = "{header:x-claude-code-session-id}"
+
 # ---------------------------------------------------------------------------
 # Models: what Claude Code sees, in picker order.
 #   id             name shown to and sent by Claude Code

@@ -98,7 +98,7 @@ impl ForcedHeaders {
 /// Hop-by-hop headers belong to one connection and are never relayed. The
 /// proxy pair is the client's business with its own proxy, not a backend's,
 /// and the backend's is not the client's.
-fn is_hop_by_hop(name: &HeaderName) -> bool {
+pub(super) fn is_hop_by_hop(name: &HeaderName) -> bool {
     *name == CONNECTION
         || *name == KEEP_ALIVE
         || *name == PROXY_CONNECTION

@@ -29,8 +29,8 @@ that is not a JSON object, has no `model`, or nests deeper than the router can
 rewrite, 404 for an unknown model (listing the configured ones), 408 for a
 body that has not arrived whole two minutes after its head, 413 over
 `server.max_body_bytes`, 502 when a backend is unreachable, redirects (the
-router will not follow one, and neither should Claude Code), or its credential
-cannot be obtained. Backend errors are relayed with their status, and an
+router will not follow one, and neither should Claude Code), its credential
+cannot be obtained, or its `header_command` fails. Backend errors are relayed with their status, and an
 Anthropic backend's body byte-for-byte: Claude Code recovers from some
 rejections by matching the backend's wording. The one change is to a context
 overflow worded the backend's own way, as vLLM's Messages endpoint does: its

@@ -173,6 +173,12 @@ fn print_banner(snapshot: &Snapshot, path: &std::path::Path, addr: SocketAddr, s
             backend.shown_url(),
             style.dim(&format!("credential: {}", backend.credential.describe()))
         );
+        if let Some(command) = &backend.header_command {
+            println!(
+                "           {}",
+                style.dim(&format!("header command: {}", command.describe()))
+            );
+        }
     }
     for route in snapshot.registry.routes() {
         let aliases = if route.aliases.is_empty() {

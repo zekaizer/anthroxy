@@ -24,8 +24,9 @@ pub fn secret(name: &str, raw: Option<String>) -> Result<String, EnvSecretError>
 }
 
 /// Expands every string value in `value`, recursively, except a
-/// `credential.command`: that one is expanded when it runs, so a secret it
-/// references never sits in the loaded configuration.
+/// `credential.command` or `header_command.command`: those are expanded by
+/// the shell when they run, so a secret they reference never sits in the
+/// loaded configuration.
 pub fn expand_value(
     value: &mut toml::Value,
     lookup: &impl Fn(&str) -> Option<String>,
@@ -36,7 +37,7 @@ pub fn expand_value(
 fn walk(
     value: &mut toml::Value,
     lookup: &impl Fn(&str) -> Option<String>,
-    in_credential: bool,
+    in_command_table: bool,
 ) -> Result<(), ConfigError> {
     match value {
         toml::Value::String(text) => {
@@ -49,10 +50,10 @@ fn walk(
         }
         toml::Value::Table(table) => {
             for (key, item) in table.iter_mut() {
-                if in_credential && key == "command" {
+                if in_command_table && key == "command" {
                     continue;
                 }
-                walk(item, lookup, key == "credential")?;
+                walk(item, lookup, key == "credential" || key == "header_command")?;
             }
         }
         _ => {}

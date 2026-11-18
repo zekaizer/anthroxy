@@ -32,10 +32,17 @@ pub enum RunError {
 }
 
 /// Runs `program` with `args`, no stdin, until it exits or `timeout` passes.
-pub async fn run(program: &str, args: &[&str], timeout: Duration) -> Result<Output, RunError> {
+/// `env` is added to the router's own environment.
+pub async fn run(
+    program: &str,
+    args: &[&str],
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<Output, RunError> {
     let mut command = Command::new(program);
     command
         .args(args)
+        .envs(env.iter().map(|(name, value)| (name, value)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

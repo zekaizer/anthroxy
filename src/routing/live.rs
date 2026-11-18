@@ -166,6 +166,10 @@ impl LiveCatalog {
                 headers,
                 body: bytes::Bytes::new(),
                 stream: false,
+                origin: crate::upstream::Origin {
+                    client: Some(client_headers),
+                    ..Default::default()
+                },
             })
             .await?;
         if !upstream.response.status().is_success() {

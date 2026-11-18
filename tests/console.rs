@@ -998,3 +998,56 @@ async fn a_restart_goes_ahead_only_with_a_file_that_passes_the_gate() {
         "every attempt is in the history"
     );
 }
+
+#[tokio::test]
+async fn status_names_the_headers_a_header_command_set_and_none_of_their_values() {
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("headers.sh");
+    std::fs::write(&script, r#"printf '{"x-gw-token":"signed-secret-value"}'"#).unwrap();
+    let config = config_with_backend(
+        &upstream.url(),
+        &format!(
+            "[backends.mock.header_command]\ncommand = \"sh {}\"\n",
+            script.display()
+        ),
+    );
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        upstream.last().header("x-gw-token"),
+        Some("signed-secret-value")
+    );
+
+    let text = router
+        .get("/api/status")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!text.contains("signed-secret-value"), "{text}");
+    let status: Value = serde_json::from_str(&text).unwrap();
+    let command = &status["backends"][0]["header_command"];
+    assert!(
+        command["source"]
+            .as_str()
+            .unwrap()
+            .starts_with("command `sh "),
+        "{command}"
+    );
+    let runs = command["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["headers"], json!(["x-gw-token"]));
+    assert_eq!(runs[0]["error"], Value::Null);
+    assert_eq!(
+        status["config"]["backends"]["mock"]["header_command"]["timeout"],
+        "5s"
+    );
+}

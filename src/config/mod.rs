@@ -11,6 +11,7 @@ mod drop_headers;
 pub(crate) mod env;
 mod error;
 pub mod example;
+mod header_command;
 mod origin;
 mod schema;
 mod set_fields;
@@ -31,8 +32,9 @@ pub use env::EnvSecretError;
 pub use error::ConfigError;
 pub use origin::origin;
 pub use schema::{
-    BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, LogFormat, LoggingConfig,
-    ModelConfig, RoutingConfig, ServerConfig, StatsConfig, UpstreamConfig, V1Auth,
+    BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, HeaderCommandConfig,
+    LogFormat, LoggingConfig, ModelConfig, RoutingConfig, ServerConfig, StatsConfig,
+    UpstreamConfig, V1Auth,
 };
 pub use set_fields::{FieldError, SetFields};
 pub use template::{Template, TemplateError};

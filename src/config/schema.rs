@@ -242,6 +242,33 @@ pub struct BackendConfig {
     /// directly.
     #[serde(default)]
     pub proxy: Option<String>,
+    /// Run for every attempt; the headers it prints are set on that attempt
+    /// (ADR-0021).
+    #[serde(default)]
+    pub header_command: Option<HeaderCommandConfig>,
+}
+
+/// `backends.<name>.header_command` (ADR-0021).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeaderCommandConfig {
+    /// Run through `sh -c`; `${NAME}` is left for the shell.
+    pub command: String,
+    #[serde(
+        default = "HeaderCommandConfig::default_timeout",
+        with = "humantime_serde"
+    )]
+    pub timeout: Duration,
+    /// Variables added to the command's environment. A value may read the
+    /// client's request with `{header:<name>}`.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl HeaderCommandConfig {
+    pub const fn default_timeout() -> Duration {
+        Duration::from_secs(5)
+    }
 }
 
 impl BackendConfig {

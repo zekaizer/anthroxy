@@ -25,6 +25,7 @@ pub async fn status(
                 "kind": backend.kind,
                 "url": backend.shown_url(),
                 "credential": backend.credential.status(),
+                "header_command": backend.header_command.as_ref().map(|command| command.status()),
                 "drop_fields": backend.drop_fields,
                 "set_fields": backend.set_fields.paths(),
                 "drop_headers": snapshot
