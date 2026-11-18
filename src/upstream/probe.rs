@@ -8,7 +8,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method};
 
 use super::headers::{SecretView, SentHeader, header_text, sent_headers};
-use super::{Backend, UpstreamClient, UpstreamError, UpstreamRequest, upstream_headers};
+use super::{Backend, Origin, UpstreamClient, UpstreamError, UpstreamRequest, upstream_headers};
 use crate::credential::CredentialError;
 use crate::ir::Model;
 use crate::translate;
@@ -155,6 +155,7 @@ fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> 
         headers: upstream_headers(&base, backend),
         body: Bytes::new(),
         stream: false,
+        origin: Origin::default(),
     }
 }
 
@@ -210,6 +211,7 @@ mod tests {
                 set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
+                header_command: None,
             },
         )
         .unwrap();
@@ -239,6 +241,7 @@ mod tests {
                 set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
+                header_command: None,
             },
         )
         .unwrap();
@@ -284,6 +287,7 @@ mod tests {
                 set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
+                header_command: None,
             },
         )
         .unwrap()
@@ -350,6 +354,7 @@ mod tests {
                 set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
+                header_command: None,
             },
         )
         .unwrap();
@@ -432,6 +437,7 @@ mod tests {
                 set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
+                header_command: None,
             },
         )
         .unwrap();
@@ -488,6 +494,7 @@ mod tests {
                 set_fields: Default::default(),
                 mid_conversation_system: Default::default(),
                 proxy: None,
+                header_command: None,
             },
         )
         .unwrap()

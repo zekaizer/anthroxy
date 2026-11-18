@@ -48,8 +48,8 @@ cargo fmt
     formats. `Translator` adapts an upstream byte stream.
   - `routing/` — model id/alias → backend + upstream model.
   - `credential/` — `CredentialSource` trait; fixed and command-backed sources.
-  - `upstream/` — backend registry, header translation, retry policy, HTTP
-    client, probe.
+  - `upstream/` — backend registry, header translation, header command, retry
+    policy, HTTP client, probe.
   - `server/` — axum app: accepting connections, request id span, client auth,
     handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"`
     backends, `console/` for the web console's `/api/` routes with its page

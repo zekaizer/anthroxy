@@ -87,6 +87,7 @@ dependencies = [
  "rcgen",
  "regex-lite",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "subtle",

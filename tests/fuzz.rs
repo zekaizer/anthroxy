@@ -181,6 +181,7 @@ fn decoders_survive_arbitrary_documents() {
         let _ = translate::document_events(bytes, "m");
         let _ = translate::models(anthroxy::config::BackendKind::OpenAi, bytes);
         let _ = translate::failure(anthroxy::config::BackendKind::OpenAi, Some(400), bytes);
+        let _ = anthroxy::upstream::parse_output(bytes, Some(&http::header::AUTHORIZATION));
         let mut decoder = openai::ChunkDecoder::new();
         let _ = decoder.decode(&text);
         let _ = decoder.finish();

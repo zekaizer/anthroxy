@@ -1729,3 +1729,178 @@ url = "{url}"
         body["data"][0]["created_at"]
     );
 }
+
+/// A `header_command` table for the mock backend running `script`, written to
+/// a file in `dir`.
+fn header_command(dir: &std::path::Path, script: &str) -> String {
+    let path = dir.join("headers.sh");
+    std::fs::write(&path, script).unwrap();
+    format!(
+        "[backends.mock.header_command]\ncommand = \"sh {}\"\n[backends.mock.header_command.env]\nGW_SESSION = \"cc-{{header:x-claude-code-session-id}}\"\n",
+        path.display()
+    )
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_header_command_sets_headers_on_each_attempt_from_what_it_is_told() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let upstream = MockUpstream::start(move |received| {
+        if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            json_response(
+                503,
+                json!({"type":"error","error":{"type":"overloaded_error","message":"busy"}}),
+            )
+        } else {
+            echo(received)
+        }
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"printf '{"x-gw-attempt":"%s","x-gw-backend":"%s","x-gw-method":"%s","x-gw-path":"%s","x-gw-url":"%s","x-gw-model":"%s","x-gw-sha":"%s","x-gw-request-id":"%s","x-gw-session":"%s","x-over":"cmd"}' "$ANTHROXY_ATTEMPT" "$ANTHROXY_BACKEND" "$ANTHROXY_METHOD" "$ANTHROXY_PATH" "$ANTHROXY_URL" "$ANTHROXY_MODEL" "$ANTHROXY_BODY_SHA256" "$ANTHROXY_REQUEST_ID" "$GW_SESSION""#;
+    let config = config_with_backend(
+        &upstream.url(),
+        &format!(
+            "[upstream]\nretries = 1\nretry_backoff = \"1ms\"\nretry_on_status = [503]\n[backends.mock.headers]\nx-over = \"static\"\n{}",
+            header_command(dir.path(), script)
+        ),
+    );
+    let router = TestRouter::start(&config).await;
+
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .header("x-claude-code-session-id", "s-1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let request_id = res.headers()["x-request-id"].to_str().unwrap().to_owned();
+    let seen = upstream.received();
+    assert_eq!(seen.len(), 2);
+    for (number, received) in seen.iter().enumerate() {
+        let attempt = (number + 1).to_string();
+        assert_eq!(received.header("x-gw-attempt"), Some(attempt.as_str()));
+        assert_eq!(received.header("x-gw-backend"), Some("mock"));
+        assert_eq!(received.header("x-gw-method"), Some("POST"));
+        assert_eq!(received.header("x-gw-path"), Some("/v1/messages"));
+        assert_eq!(
+            received.header("x-gw-url"),
+            Some(format!("{}/v1/messages", upstream.url()).as_str())
+        );
+        assert_eq!(received.header("x-gw-model"), Some("mock-fast-v1"));
+        assert_eq!(
+            received.header("x-gw-sha"),
+            Some(sha256_hex(&received.body).as_str())
+        );
+        assert_eq!(
+            received.header("x-gw-request-id"),
+            Some(request_id.as_str())
+        );
+        assert_eq!(received.header("x-gw-session"), Some("cc-s-1"));
+        assert_eq!(received.header("x-over"), Some("cmd"), "beats `headers`");
+        assert_eq!(
+            received.header("authorization"),
+            Some("Bearer backend-secret-key")
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_header_command_env_value_whose_header_is_missing_is_not_set() {
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"printf '{"x-gw-session":"%s"}' "${GW_SESSION-unset}""#;
+    let config = config_with_backend(&upstream.url(), &header_command(dir.path(), script));
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(upstream.last().header("x-gw-session"), Some("unset"));
+}
+
+#[tokio::test]
+async fn a_failed_header_command_answers_502_and_sends_nothing() {
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    for (script, cause) in [
+        (
+            "echo 'no key' >&2; exit 3",
+            "header command failed: exit 3: no key",
+        ),
+        (
+            r#"printf '{"authorization":"Bearer mine"}'"#,
+            "header command failed: `authorization` is the backend credential's header",
+        ),
+        (
+            "printf 'x-a: 1'",
+            "header command failed: stdout is not JSON",
+        ),
+    ] {
+        let config = config_with_backend(&upstream.url(), &header_command(dir.path(), script));
+        let router = TestRouter::start(&config).await;
+        let res = router
+            .post("/v1/messages", &messages_body("fast"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 502, "{script}");
+        assert_eq!(res.headers()["x-anthroxy-backend"], "mock");
+        let body: Value = res.json().await.unwrap();
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(
+            message.starts_with(&format!("backend `mock`: {cause}")),
+            "{message}"
+        );
+    }
+    assert!(upstream.received().is_empty());
+}
+
+#[tokio::test]
+async fn a_header_command_runs_for_the_requests_the_router_makes_itself() {
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"printf '{"x-gw-path":"%s","x-gw-request-id":"%s","x-gw-model":"%s"}' "$ANTHROXY_PATH" "$ANTHROXY_REQUEST_ID" "$ANTHROXY_MODEL""#;
+    let config = config_with_backend(&upstream.url(), &header_command(dir.path(), script)).replace(
+        "anthropic_beta = [",
+        "live_models = true\nanthropic_beta = [",
+    );
+    let router = TestRouter::start(&config).await;
+    let res = router.get("/v1/models").send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let pull = upstream.last();
+    assert_eq!(pull.path_and_query, "/v1/models");
+    assert_eq!(pull.header("x-gw-path"), Some("/v1/models"));
+    assert_eq!(pull.header("x-gw-request-id"), Some(""));
+    assert_eq!(pull.header("x-gw-model"), Some(""));
+}
+
+#[tokio::test]
+async fn a_header_command_is_not_told_the_userinfo_of_the_backend_url() {
+    let upstream = MockUpstream::start(echo).await;
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"printf '{"x-gw-url":"%s"}' "$ANTHROXY_URL""#;
+    let with_userinfo = upstream.url().replace("http://", "http://user:pw@");
+    let config = config_with_backend(&with_userinfo, &header_command(dir.path(), script));
+    let router = TestRouter::start(&config).await;
+    let res = router
+        .post("/v1/messages", &messages_body("fast"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        upstream.last().header("x-gw-url"),
+        Some(format!("{}/v1/messages", upstream.url()).as_str())
+    );
+}

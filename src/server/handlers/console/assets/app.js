@@ -963,13 +963,25 @@ function overviewContent(status, reload) {
               : null]
           : h("span", { class: "error-text" }, event.error))));
 
+  const runChip = (run, detail) =>
+    h("span", {
+      class: `run ${run.error ? "failed" : ""}`,
+      title: `${fmt.time(run.at)} · ${run.duration_ms} ms${run.error ? ` · ${run.error}` : detail ? ` · ${detail}` : ""}`,
+    }, run.error ? `✗ ${run.duration_ms}ms` : `✓ ${run.duration_ms}ms`);
+
+  // The headers a backend's command set on recent attempts: names only.
+  const headerCommand = (command) => {
+    if (!command) return null;
+    const runs = command.runs.slice(-8).map((run) => runChip(run, run.headers.join(", ")));
+    const last = command.runs[command.runs.length - 1];
+    return h("div", { class: "sub" }, `header_command: ${command.source}`,
+      runs.length ? h("div", { class: "runs" }, runs) : null,
+      last && last.error ? h("div", { class: "error-text" }, last.error) : null);
+  };
+
   const backends = status.backends.map((backend) => {
     const credential = backend.credential;
-    const runs = credential.refreshes.slice(-8).map((run) =>
-      h("span", {
-        class: `run ${run.error ? "failed" : ""}`,
-        title: `${fmt.time(run.at)} · ${run.duration_ms} ms${run.error ? ` · ${run.error}` : ""}`,
-      }, run.error ? `✗ ${run.duration_ms}ms` : `✓ ${run.duration_ms}ms`));
+    const runs = credential.refreshes.slice(-8).map((run) => runChip(run));
     const lastRun = credential.refreshes[credential.refreshes.length - 1];
     return h("tr", null,
       h("td", null, h("strong", null, backend.name), h("div", { class: "sub" }, backend.kind)),
@@ -977,7 +989,8 @@ function overviewContent(status, reload) {
         backend.drop_fields.length ? h("div", { class: "sub" }, `drop_fields: ${backend.drop_fields.join(", ")}`) : null,
         backend.set_fields.length ? h("div", { class: "sub" }, `set_fields: ${backend.set_fields.join(", ")}`) : null,
         backend.drop_headers.length ? h("div", { class: "sub" }, `drop_headers: ${backend.drop_headers.join(", ")}`) : null,
-        backend.anthropic_beta.length ? h("div", { class: "sub" }, `anthropic_beta: ${backend.anthropic_beta.join(", ")}`) : null),
+        backend.anthropic_beta.length ? h("div", { class: "sub" }, `anthropic_beta: ${backend.anthropic_beta.join(", ")}`) : null,
+        headerCommand(backend.header_command)),
       h("td", { class: "wrap-anywhere" }, credential.source),
       h("td", null, credential.masked ? h("code", null, credential.masked) : h("span", { class: "muted" }, credential.source === "none" ? "none" : "not cached")),
       h("td", { class: "nowrap" },

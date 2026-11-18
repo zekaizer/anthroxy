@@ -1361,3 +1361,94 @@ fn backends_on_one_origin_must_agree_on_the_proxy() {
         + "\n[backends.b]\nurl = \"https://gw.corp:8443\"\n";
     assert!(parse(&text).is_ok(), "another port is another origin");
 }
+
+const HEADER_COMMAND: &str = r#"
+[server]
+token = "secret"
+
+[backends.gw]
+url = "http://gw"
+
+[backends.gw.header_command]
+command = "sign --key=${KEY}"
+
+[backends.gw.header_command.env]
+GW_KEY_FILE = "${KEY_FILE}"
+GW_SESSION = "cc-{header:x-claude-code-session-id}"
+
+[[models]]
+id = "m"
+backend = "gw"
+"#;
+
+#[test]
+fn a_header_command_keeps_its_command_for_the_shell_and_expands_its_env() {
+    let lookup = |name: &str| (name == "KEY_FILE").then(|| "/k".to_owned());
+    let c = Config::parse(HEADER_COMMAND, lookup).unwrap();
+    let command = c.backends["gw"].header_command.as_ref().unwrap();
+    assert_eq!(command.command, "sign --key=${KEY}");
+    assert_eq!(command.timeout, Duration::from_secs(5));
+    assert_eq!(command.env["GW_KEY_FILE"], "/k");
+    assert_eq!(
+        command.env["GW_SESSION"],
+        "cc-{header:x-claude-code-session-id}"
+    );
+    assert!(
+        parse(MINIMAL).unwrap().backends["local"]
+            .header_command
+            .is_none()
+    );
+}
+
+#[test]
+fn a_header_command_is_checked() {
+    let text = HEADER_COMMAND
+        .replace("sign --key=${KEY}", " ")
+        .replace(
+            "[backends.gw.header_command.env]",
+            "timeout = \"0s\"\n[backends.gw.header_command.env]\nANTHROXY_URL = \"x\"\n\"1BAD\" = \"x\"\nGW_AUTH = \"{header:authorization}\"",
+        )
+        .replace("${KEY_FILE}", "/k");
+    let problems = problems(&text);
+    for expected in [
+        "backends.gw.header_command.command must not be empty",
+        "backends.gw.header_command.timeout: 0 is not `no limit` here; it kills the command before it can print",
+        "backends.gw.header_command.env: `ANTHROXY_URL`: names beginning `ANTHROXY_` are the router's own",
+        "backends.gw.header_command.env: `1BAD` is not a variable name",
+        "backends.gw.header_command.env: `GW_AUTH`: `{header:authorization}` would send the client's credential to the backend",
+    ] {
+        assert!(
+            problems.iter().any(|p| p == expected),
+            "{expected}\n{problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_passthrough_backend_takes_no_header_command() {
+    let text = HEADER_COMMAND
+        .replace(
+            "url = \"http://gw\"",
+            "url = \"http://gw\"\nkind = \"passthrough\"",
+        )
+        .replace("${KEY_FILE}", "/k");
+    let problems = problems(&text);
+    assert!(
+        problems.iter().any(|p| p
+            == "backends.gw: kind = \"passthrough\" relays the request unmodified; a header_command is not run"),
+        "{problems:#?}"
+    );
+}
+
+#[test]
+fn header_command_env_values_are_redacted_in_the_view() {
+    let c = Config::parse(HEADER_COMMAND, |name: &str| {
+        (name == "KEY_FILE").then(|| "/k".to_owned())
+    })
+    .unwrap();
+    let view = view::masked(&c);
+    let command = &view["backends"]["gw"]["header_command"];
+    assert_eq!(command["command"], "sign --key=${KEY}");
+    assert_eq!(command["timeout"], "5s");
+    assert_eq!(command["env"]["GW_KEY_FILE"], view::REDACTED);
+}

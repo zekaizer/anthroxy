@@ -1,3 +1,4 @@
+use super::header_command::HeaderCommand;
 use super::headers::ForcedHeaders;
 use crate::config::{BackendConfig, BackendKind, DropHeaders, SetFields};
 use crate::credential::{self, CredentialError, CredentialSource};
@@ -17,6 +18,8 @@ pub struct Backend {
     pub credential: Box<dyn CredentialSource>,
     /// Headers forced onto every upstream request.
     pub headers: ForcedHeaders,
+    /// Headers computed for every attempt (ADR-0021).
+    pub header_command: Option<HeaderCommand>,
     /// Beta flags merged into `anthropic-beta`.
     pub anthropic_beta: Vec<String>,
     /// Client headers this backend never sees.
@@ -59,6 +62,9 @@ impl Backend {
             kind: config.kind,
             url: config.url.clone(),
             models_path: config.models_path.clone(),
+            header_command: config.header_command.as_ref().map(|command| {
+                HeaderCommand::new(command, credential.header().map(|header| header.name))
+            }),
             credential,
             headers: ForcedHeaders::new(&config.headers),
             anthropic_beta: config.anthropic_beta.clone(),

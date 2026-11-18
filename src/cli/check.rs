@@ -106,6 +106,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
                 kind_label(backend, style)
             );
             println!("       credential: {}", backend.credential.describe());
+            print_header_command(backend);
         }
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
     } else {
@@ -153,6 +154,12 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
     } else {
         println!("{} {problems} problem(s) above.", style.err_mark());
         anyhow::bail!("{problems} problem(s)")
+    }
+}
+
+fn print_header_command(backend: &Backend) {
+    if let Some(command) = &backend.header_command {
+        println!("       header command: {}", command.describe());
     }
 }
 
@@ -231,6 +238,7 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
         kind_label(backend, style)
     );
     println!("       {credential_line}");
+    print_header_command(backend);
     if probe.credential.is_err() {
         println!(
             "       {}",

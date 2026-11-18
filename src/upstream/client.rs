@@ -8,6 +8,7 @@ use bytes::Bytes;
 use futures_util::Stream;
 use http::{HeaderMap, Method, StatusCode};
 
+use super::header_command::{Attempt, HeaderCommandError};
 use super::{
     Backend, BodyClock, BodyError, Decision, RetryPolicy, TimedBody, TimeoutClock, Timeouts,
 };
@@ -32,6 +33,20 @@ pub struct UpstreamRequest<'a> {
     pub body: Bytes,
     /// Whether the client asked for an event stream. Chooses the stream clocks.
     pub stream: bool,
+    /// What a backend's `header_command` is told about the request.
+    pub origin: Origin<'a>,
+}
+
+/// The request a send is made for, as a backend's `header_command` is told
+/// it (ADR-0021).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Origin<'a> {
+    pub request_id: Option<&'a str>,
+    /// The upstream model the request names.
+    pub model: Option<&'a str>,
+    /// The client's headers as they arrived; `None` for a request the router
+    /// makes on its own.
+    pub client: Option<&'a HeaderMap>,
 }
 
 /// Largest body [`UpstreamResponse::body_bytes`] reads whole.
@@ -57,6 +72,13 @@ pub enum UpstreamError {
         backend: String,
         #[source]
         source: CredentialError,
+    },
+    /// The backend's `header_command` produced no headers; nothing was sent.
+    #[error("backend `{backend}`: header command failed: {source}")]
+    HeaderCommand {
+        backend: String,
+        #[source]
+        source: HeaderCommandError,
     },
     #[error("backend `{backend}` unreachable after {attempts} attempt(s): {}", describe(.source))]
     Transport {
@@ -229,6 +251,10 @@ impl UpstreamClient {
         // Of the retry budget; the credential re-send below is not one of them.
         let mut failures: u32 = 0;
         let mut credential_refreshed = false;
+        let (target, body_sha256) = match backend.header_command {
+            Some(_) => (without_userinfo(&url), sha256_hex(&request.body)),
+            None => Default::default(),
+        };
         loop {
             attempt += 1;
             let credential = backend.credential.credential().await.map_err(|source| {
@@ -238,6 +264,28 @@ impl UpstreamClient {
                 }
             })?;
             let mut headers = request.headers.clone();
+            if let Some(command) = &backend.header_command {
+                let attempt = Attempt {
+                    backend: &backend.name,
+                    method: &request.method,
+                    url: &target,
+                    path: request.path_and_query,
+                    model: request.origin.model,
+                    request_id: request.origin.request_id,
+                    number: attempt,
+                    body_sha256: &body_sha256,
+                    client: request.origin.client,
+                };
+                let computed = command.headers(&attempt).await.map_err(|source| {
+                    UpstreamError::HeaderCommand {
+                        backend: backend.name.clone(),
+                        source,
+                    }
+                })?;
+                for (name, value) in computed {
+                    headers.insert(name, value);
+                }
+            }
             if let Some(credential) = &credential {
                 let (name, value) = credential.header_pair();
                 headers.insert(name, value);
@@ -321,6 +369,30 @@ impl UpstreamClient {
             }
         }
     }
+}
+
+/// `url` as the request target: userinfo travels as basic auth, not in it.
+fn without_userinfo(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut parsed) => {
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.into()
+        }
+        // The send fails on the same URL.
+        Err(_) => url.to_owned(),
+    }
+}
+
+fn sha256_hex(body: &[u8]) -> String {
+    use std::fmt::Write;
+    ring::digest::digest(&ring::digest::SHA256, body)
+        .as_ref()
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 /// The request target as a log line may carry it.

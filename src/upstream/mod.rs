@@ -2,6 +2,7 @@
 
 mod backend;
 mod client;
+mod header_command;
 mod headers;
 pub mod network;
 pub mod probe;
@@ -13,8 +14,11 @@ mod tests;
 
 pub use backend::{Backend, BackendBuildError};
 pub use client::{
-    ClientBuildError, UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse, describe,
-    http_client,
+    ClientBuildError, Origin, UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse,
+    describe, http_client,
+};
+pub use header_command::{
+    HeaderCommand, HeaderCommandError, HeaderCommandStatus, HeaderRun, parse_output,
 };
 pub use headers::{
     DropReason, DroppedHeader, ForcedHeaders, HeaderSource, SecretView, SentHeader,

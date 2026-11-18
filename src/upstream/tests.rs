@@ -30,6 +30,7 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
             set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
+            header_command: None,
         },
     )
     .unwrap()
@@ -51,6 +52,7 @@ fn backend_with_drops(drops: &[&str]) -> Backend {
             set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
+            header_command: None,
         },
     )
     .unwrap()
@@ -75,6 +77,7 @@ fn backend_forcing(headers: &[(&str, &str)], drops: &[&str]) -> Backend {
             set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
+            header_command: None,
         },
     )
     .unwrap()
@@ -307,6 +310,7 @@ fn every_header_the_backend_does_not_see_says_why() {
             set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
+            header_command: None,
         },
     )
     .unwrap();
@@ -578,6 +582,7 @@ fn the_logged_request_target_keeps_the_url_userinfo_out() {
             set_fields: Default::default(),
             mid_conversation_system: Default::default(),
             proxy: None,
+            header_command: None,
         },
     )
     .unwrap();

@@ -5,12 +5,16 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::{CommandOutput, Config, CredentialConfig, CredentialHeader, LogFormat, TokenConfig};
+use super::{
+    CommandOutput, Config, CredentialConfig, CredentialHeader, HeaderCommandConfig, LogFormat,
+    TokenConfig,
+};
 
 pub const REDACTED: &str = "<redacted>";
 
 /// A literal `server.token`, `static` credential values, every forced header
-/// value and the userinfo of a proxy URL are redacted; the rest is shown as
+/// value, every `header_command.env` value and the userinfo of a proxy URL
+/// are redacted; the rest is shown as
 /// loaded, `${ENV}` expanded.
 pub fn masked(config: &Config) -> Value {
     let backends: Map<String, Value> = config
@@ -37,6 +41,7 @@ pub fn masked(config: &Config) -> Value {
                     "set_fields": backend.set_fields,
                     "mid_conversation_system": backend.mid_conversation_system,
                     "proxy": backend.proxy.as_deref().map(redacted_url),
+                    "header_command": backend.header_command.as_ref().map(header_command),
                 }),
             )
         })
@@ -162,6 +167,21 @@ fn credential(config: &CredentialConfig) -> Value {
             "header": header_shape(header),
         }),
     }
+}
+
+/// The command as written, `${NAME}` included; `env` values are redacted, as
+/// a `${NAME}` in them was expanded at load.
+fn header_command(config: &HeaderCommandConfig) -> Value {
+    let env: Map<String, Value> = config
+        .env
+        .keys()
+        .map(|name| (name.clone(), json!(REDACTED)))
+        .collect();
+    json!({
+        "command": config.command,
+        "timeout": duration(config.timeout),
+        "env": env,
+    })
 }
 
 /// `authorization: Bearer …`

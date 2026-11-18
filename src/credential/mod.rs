@@ -118,7 +118,7 @@ pub enum CredentialError {
 /// command wrote — a token server's answer, a shell trace — and this message
 /// reaches both a log line and the client, so it travels escaped and cut.
 /// `anthroxy credential` prints the run's own stderr in full instead.
-fn stderr_suffix(stderr: &str) -> String {
+pub(crate) fn stderr_suffix(stderr: &str) -> String {
     let trimmed = stderr.trim();
     if trimmed.is_empty() {
         String::new()

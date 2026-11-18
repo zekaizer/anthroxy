@@ -20,8 +20,10 @@ calls, images and reasoning included, so Claude Code uses it like any other
 model.
 
 Each backend carries its own credential: none, a static key, an environment
-variable, or a command that is re-run as the token expires. Claude Code only
-ever holds one static router token.
+variable, or a command that is re-run as the token expires. A gateway that
+wants every request signed (an issue time, a nonce, a body hash) gets its
+headers from a script of yours run for each attempt. Claude Code only ever
+holds one static router token.
 
 Everything that happens is visible: a request id on every response and log line,
 a browser console showing requests in flight and recently finished with their
@@ -167,8 +169,8 @@ covers logs, credential problems and recording the exact bytes of an exchange.
 
 ## Documentation
 
-- [Configuration](docs/configuration.md) — every key, credentials,
-  `drop_fields`, private CAs and proxies, reloading.
+- [Configuration](docs/configuration.md) — every key, credentials, headers
+  from a command, `drop_fields`, private CAs and proxies, reloading.
 - [What Claude Code decides](docs/claude-code.md) — the picker filter, the
   context window, MCP tool loading, the environment variables that matter.
 - [The web console](docs/console.md) — what each tab shows and does.

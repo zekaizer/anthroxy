@@ -95,6 +95,7 @@ impl RouterError {
         match self {
             RouterError::Upstream(
                 UpstreamError::Credential { backend, .. }
+                | UpstreamError::HeaderCommand { backend, .. }
                 | UpstreamError::Transport { backend, .. }
                 | UpstreamError::Redirected { backend, .. }
                 | UpstreamError::Body { backend, .. }
