@@ -79,7 +79,7 @@ async fn run(command: &[&str], env_file: &Path, timeout: Duration) -> Result<Run
     };
     let started = Instant::now();
     let property = env_file_property(env_file);
-    let output = process::run(PROGRAM, &argv(&property, command), timeout)
+    let output = process::run(PROGRAM, &argv(&property, command), &[], timeout)
         .await
         .map_err(|e| failed(e.to_string()))?;
     Ok(Run::new(&output, started.elapsed()))

@@ -44,7 +44,7 @@ impl Run {
 /// secret.
 pub async fn run(command: &str, timeout: Duration) -> Result<Run, CredentialError> {
     let started = Instant::now();
-    let output = process::run("sh", &["-c", command], timeout)
+    let output = process::run("sh", &["-c", command], &[], timeout)
         .await
         .map_err(|error| match error {
             RunError::Spawn(error) | RunError::Read(error) => {
