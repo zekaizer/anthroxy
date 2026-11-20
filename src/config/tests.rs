@@ -1608,7 +1608,7 @@ fn every_problem_of_a_preset_file_is_reported_under_its_file_name() {
     let presets = [
         (
             "client.toml",
-            "header_case = \"upper\"\n[headers]\nuser-agent = \"c/{versoin}\"\n\"x y\" = \"1\"\n",
+            "tool_choice = \"auto\"\n[headers]\nuser-agent = \"c/{versoin}\"\n\"x y\" = \"1\"\n",
         ),
         ("fine.toml", CLIENT_PRESET),
         ("torn.toml", "[headers\n"),
@@ -1619,7 +1619,7 @@ fn every_problem_of_a_preset_file_is_reported_under_its_file_name() {
         [
             "presets/client.toml: headers: `x y` is not a valid header name",
             "presets/client.toml: headers: `user-agent`: `{versoin}` names no variable in [variables]",
-            "presets/client.toml: `header_case` is not a preset key",
+            "presets/client.toml: `tool_choice` is not a preset key",
         ],
         "the backend that names the broken preset adds no problem of its own"
     );

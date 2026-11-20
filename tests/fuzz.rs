@@ -273,7 +273,10 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 58] = [
+const PRESET_LINES: [&str; 61] = [
+    "header_case = \"title\"",
+    "header_case = \"Title\"",
+    "header_case = true",
     "header_order = [\"authorization\", \"host\", \"Host\", \"a b\", \"\", \"host\"]",
     "header_order = [[\"accept\"]]",
     "header_order = \"accept\"",

@@ -33,6 +33,7 @@ pub struct Preset {
     pub drop_headers: Vec<String>,
     /// Lower-case names, each once.
     pub header_order: Vec<HeaderName>,
+    pub header_case: HeaderCase,
     pub http_version: HttpVersion,
     /// Every variable a value names is declared.
     set_fields: PresetFields,
@@ -75,6 +76,17 @@ impl Preset {
             .iter()
             .any(|(_, value)| value.variables().any(|name| name == variable))
     }
+}
+
+/// How the header names of an HTTP/1.1 request are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeaderCase {
+    /// `content-type`
+    #[default]
+    Lower,
+    /// `Content-Type`: a capital first and after each hyphen.
+    Title,
 }
 
 /// The HTTP version a route speaks with its backend.

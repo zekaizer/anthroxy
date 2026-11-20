@@ -3,7 +3,8 @@
 use super::{Backend, ForcedHeaders, HeaderOrder, Transport};
 use crate::body_field::{BodyEdits, BodyField};
 use crate::config::{
-    BackendConfig, DropHeaders, HttpVersion, ModelConfig, Preset, PresetLibrary, SetFields,
+    BackendConfig, DropHeaders, HeaderCase, HttpVersion, ModelConfig, Preset, PresetLibrary,
+    SetFields,
 };
 use crate::openai::EncodeOptions;
 
@@ -92,7 +93,7 @@ impl Dialect {
                 order: HeaderOrder::new(preset.header_order.clone()),
                 transport: Transport {
                     http1_only: preset.http_version == HttpVersion::Http11,
-                    title_case: false,
+                    title_case: preset.header_case == HeaderCase::Title,
                 },
             },
             body: BodyRules {

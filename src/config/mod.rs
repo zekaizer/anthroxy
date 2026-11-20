@@ -35,7 +35,7 @@ pub use emulate::EmulateConfig;
 pub use env::EnvSecretError;
 pub use error::ConfigError;
 pub use origin::origin;
-pub use preset::{BindProblem, Emulation, HttpVersion, Preset, PresetLibrary};
+pub use preset::{BindProblem, Emulation, HeaderCase, HttpVersion, Preset, PresetLibrary};
 pub use schema::{
     BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, HeaderCommandConfig,
     LogFormat, LoggingConfig, ModelConfig, RoutingConfig, ServerConfig, StatsConfig,

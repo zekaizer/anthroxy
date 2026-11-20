@@ -1093,3 +1093,57 @@ async fn headers_the_order_does_not_list_follow_in_the_order_they_had() {
         "the model list is sent in the preset's order too"
     );
 }
+
+#[tokio::test]
+async fn a_preset_writes_header_names_in_title_case() {
+    let upstream = RawUpstream::start().await;
+    let titled = format!("header_case = \"title\"\n{OPENCODE_HEADERS}");
+    let dir = ConfigDir::new(
+        &config_at(
+            &upstream.url(),
+            "emulate = \"client\"\nlive_models = true",
+            "emulate = \"lower\"",
+        ),
+        &[
+            ("client", &titled),
+            ("lower", "http_version = \"1.1\"\nheader_case = \"lower\"\n"),
+        ],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let head = head_sent(&router, &upstream, &chat("qwen")).await;
+    assert_eq!(
+        head.names(),
+        [
+            "Authorization",
+            "Content-Type",
+            "User-Agent",
+            "X-Opencode-Session-Id",
+            "X-Session-Affinity",
+            "X-Session-Id",
+            "Accept",
+            "Host",
+            "Content-Length",
+        ]
+    );
+    assert_eq!(head.value("Content-Type"), Some("application/json"));
+    assert_eq!(
+        head.value("Authorization"),
+        Some("Bearer backend-secret-key")
+    );
+
+    let res = router.get("/v1/models").send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let names = upstream.last().names().join(" ");
+    assert!(
+        names.starts_with("Authorization User-Agent Accept Host"),
+        "the model list is written the same way: {names}"
+    );
+
+    let head = head_sent(&router, &upstream, &chat("other")).await;
+    let names = head.names();
+    assert!(
+        names.contains(&"authorization") && names.contains(&"content-type"),
+        "{names:?}"
+    );
+}

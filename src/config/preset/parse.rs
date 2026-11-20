@@ -19,12 +19,13 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 14] = [
+const KEYS: [(&str, Reader); 15] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
     ("http_version", http_version),
     ("header_order", header_order),
+    ("header_case", header_case),
     ("set_fields", set_fields),
     ("omit_fields", omit_fields),
     ("field_order", field_order),
@@ -170,6 +171,13 @@ fn header_order(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<Str
             }
             Ok(header) => preset.header_order.push(header),
         }
+    }
+}
+
+fn header_case(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    needs_http_1_1("header_case", "the case of header names", preset, problems);
+    if let Some(case) = one_of("header_case", value, problems) {
+        preset.header_case = case;
     }
 }
 

@@ -510,3 +510,27 @@ fn header_order_lists_lower_case_names_once_and_needs_http_1_1() {
         ["header_order: must be a list of strings"]
     );
 }
+
+#[test]
+fn header_case_is_lower_or_title_and_needs_http_1_1() {
+    let case = |text: &str| Preset::parse("client", text).unwrap().header_case;
+    assert_eq!(
+        case("http_version = \"1.1\"\nheader_case = \"title\"\n"),
+        HeaderCase::Title
+    );
+    assert_eq!(
+        case("http_version = \"1.1\"\nheader_case = \"lower\"\n"),
+        HeaderCase::Lower
+    );
+    assert_eq!(case(""), HeaderCase::Lower);
+    assert_eq!(
+        problems("http_version = \"1.1\"\nheader_case = \"upper\"\n"),
+        ["header_case: `upper` is not `lower` or `title`"]
+    );
+    assert_eq!(
+        problems("header_case = \"title\"\n"),
+        [
+            "header_case: needs `http_version = \"1.1\"`; the case of header names exists in HTTP/1.1 only"
+        ]
+    );
+}
