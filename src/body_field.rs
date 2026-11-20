@@ -1,5 +1,6 @@
-//! A field a backend's configuration sets in the request body it receives
-//! (`set_fields`, ADR-0019), in whichever format that body is.
+//! What a backend's configuration sets in or removes from the request body it
+//! receives (`set_fields`, ADR-0019; `drop_fields`), in whichever format that
+//! body is.
 
 use serde_json::{Map, Value};
 
@@ -38,11 +39,61 @@ fn set(object: &mut Map<String, Value>, path: &[String], value: &Value) {
     }
 }
 
+/// Whether `path` named a field, which is now gone. A path is dot-separated
+/// object keys; one whose prefix is missing or not an object removes nothing.
+/// The fields left keep their order.
+pub fn remove(object: &mut Map<String, Value>, path: &str) -> bool {
+    match path.split_once('.') {
+        None => object.shift_remove(path).is_some(),
+        Some((head, rest)) => match object.get_mut(head) {
+            Some(Value::Object(inner)) => remove(inner, rest),
+            _ => false,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn removed(body: Value, path: &str) -> (bool, String) {
+        let Value::Object(mut object) = body else {
+            panic!("an object");
+        };
+        let found = remove(&mut object, path);
+        (found, Value::Object(object).to_string())
+    }
+
+    #[test]
+    fn a_named_field_is_removed_and_the_rest_keep_their_order() {
+        let body = json!({"a": 1, "metadata": {"user_id": "u", "keep": true}, "z": 2});
+        assert_eq!(
+            removed(body.clone(), "a"),
+            (
+                true,
+                r#"{"metadata":{"user_id":"u","keep":true},"z":2}"#.to_owned()
+            )
+        );
+        assert_eq!(
+            removed(body, "metadata.user_id"),
+            (true, r#"{"a":1,"metadata":{"keep":true},"z":2}"#.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_path_that_names_nothing_removes_nothing() {
+        let body = json!({"a": 1, "list": [{"b": 2}], "text": "a.b"});
+        let untouched = body.to_string();
+        for path in ["b", "a.b", "missing.b", "list.b", "text.b", ""] {
+            assert_eq!(
+                removed(body.clone(), path),
+                (false, untouched.clone()),
+                "{path:?}"
+            );
+        }
+    }
 
     fn set(body: Value, fields: &[(&str, Value)]) -> Value {
         let Value::Object(mut object) = body else {
