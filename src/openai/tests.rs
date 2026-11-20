@@ -27,6 +27,7 @@ fn user(parts: Vec<Part>) -> RequestMessage {
     RequestMessage {
         role: Role::User,
         parts,
+        reasoning: vec![],
     }
 }
 
@@ -34,6 +35,7 @@ fn assistant(parts: Vec<Part>) -> RequestMessage {
     RequestMessage {
         role: Role::Assistant,
         parts,
+        reasoning: vec![],
     }
 }
 
@@ -798,6 +800,7 @@ fn mid_conversation_system_messages_stay_in_place() {
         RequestMessage {
             role: Role::System,
             parts: vec![Part::Text("env changed".into()), Part::Text("again".into())],
+            reasoning: vec![],
         },
         assistant(vec![Part::Text("ok".into())]),
     ]);
@@ -819,6 +822,7 @@ fn with_mid_conversation_system() -> Request {
         RequestMessage {
             role: Role::System,
             parts: vec![Part::Text("env changed".into())],
+            reasoning: vec![],
         },
         assistant(vec![Part::Text("ok".into())]),
     ]);
@@ -866,6 +870,7 @@ fn a_leading_system_message_stays_system_under_user_placement() {
         RequestMessage {
             role: Role::System,
             parts: vec![Part::Text("top".into())],
+            reasoning: vec![],
         },
         user(vec![Part::Text("hi".into())]),
     ]);
@@ -887,6 +892,7 @@ fn merge_skips_an_empty_system_message() {
         RequestMessage {
             role: Role::System,
             parts: vec![],
+            reasoning: vec![],
         },
     ]);
     r.system = Some("top".into());

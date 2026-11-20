@@ -188,12 +188,22 @@ fn decode_message(
             });
         }
     };
+    let mut reasoning = Vec::new();
     let parts = match message.get("content") {
         Some(Value::String(text)) => vec![Part::Text(text.clone())],
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter_map(|block| decode_block(index, block, definitions).transpose())
-            .collect::<Result<Vec<_>, _>>()?,
+        Some(Value::Array(blocks)) => {
+            let mut parts = Vec::new();
+            for block in blocks {
+                if role == Role::Assistant
+                    && let Some(text) = thinking_text(block)
+                {
+                    reasoning.push(text.to_owned());
+                } else if let Some(part) = decode_block(index, block, definitions)? {
+                    parts.push(part);
+                }
+            }
+            parts
+        }
         _ => return Err(DecodeError::Field("content")),
     };
     if let Some(part) = parts.iter().find(|part| !allowed(role, part)) {
@@ -203,7 +213,20 @@ fn decode_message(
             role: role_name.to_owned(),
         });
     }
-    Ok(RequestMessage { role, parts })
+    Ok(RequestMessage {
+        role,
+        parts,
+        reasoning,
+    })
+}
+
+/// The text of a `thinking` block. `None` for any other block, and for one
+/// whose text is not a string.
+fn thinking_text(block: &Value) -> Option<&str> {
+    if block.get("type").and_then(Value::as_str) != Some("thinking") {
+        return None;
+    }
+    block.get("thinking").and_then(Value::as_str)
 }
 
 /// What each role may carry, as the Messages API defines it.
@@ -218,7 +241,8 @@ fn allowed(role: Role, part: &Part) -> bool {
     )
 }
 
-/// `None` for blocks that are dropped on purpose (thinking).
+/// `None` for blocks that are dropped on purpose: `redacted_thinking`, and
+/// `thinking` wherever it is not an assistant turn's reasoning.
 fn decode_block(
     index: usize,
     block: &Value,
@@ -451,6 +475,7 @@ mod tests {
                 messages: vec![RequestMessage {
                     role: Role::User,
                     parts: vec![Part::Text("hi".into())],
+                    reasoning: vec![],
                 }],
                 tools: vec![],
                 tool_choice: None,
@@ -481,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn content_blocks_map_to_parts_thinking_is_dropped_and_result_images_kept() {
+    fn content_blocks_map_to_parts_thinking_is_kept_apart_and_result_images_kept() {
         let mut v = base();
         v["messages"] = json!([
             {"role": "user", "content": [
@@ -517,6 +542,7 @@ mod tests {
                             data: "AAAA".into()
                         },
                     ],
+                    reasoning: vec![],
                 },
                 RequestMessage {
                     role: Role::Assistant,
@@ -528,6 +554,7 @@ mod tests {
                             input: json!({"path": "a.rs"}),
                         },
                     ],
+                    reasoning: vec!["hmm".into()],
                 },
                 RequestMessage {
                     role: Role::User,
@@ -554,6 +581,66 @@ mod tests {
                             is_error: false,
                         },
                     ],
+                    reasoning: vec![],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_assistant_turn_keeps_its_thinking_text_as_reasoning() {
+        let mut v = base();
+        v["messages"] = json!([
+            {"role": "user", "content": [
+                {"type": "thinking", "thinking": "on a user turn", "signature": ""},
+                {"type": "text", "text": "hi"}
+            ]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "first", "signature": ""},
+                {"type": "text", "text": "answer"},
+                {"type": "redacted_thinking", "data": "xx"},
+                {"type": "thinking", "thinking": 7},
+                {"type": "thinking"},
+                {"type": "thinking", "thinking": "second", "signature": "sig"},
+                {"type": "tool_use", "id": "toolu_1", "name": "read", "input": {}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+                    {"type": "thinking", "thinking": "in a tool result", "signature": ""},
+                    {"type": "text", "text": "done"}
+                ]}
+            ]}
+        ]);
+        let messages = decode_json(v).unwrap().messages;
+        assert_eq!(
+            messages,
+            vec![
+                RequestMessage {
+                    role: Role::User,
+                    parts: vec![Part::Text("hi".into())],
+                    reasoning: vec![],
+                },
+                RequestMessage {
+                    role: Role::Assistant,
+                    parts: vec![
+                        Part::Text("answer".into()),
+                        Part::ToolUse {
+                            id: "toolu_1".into(),
+                            name: "read".into(),
+                            input: json!({}),
+                        },
+                    ],
+                    reasoning: vec!["first".into(), "second".into()],
+                },
+                RequestMessage {
+                    role: Role::User,
+                    parts: vec![Part::ToolResult {
+                        tool_use_id: "toolu_1".into(),
+                        content: "done".into(),
+                        images: vec![],
+                        is_error: false,
+                    }],
+                    reasoning: vec![],
                 },
             ]
         );
