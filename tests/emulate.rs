@@ -1147,3 +1147,75 @@ async fn a_preset_writes_header_names_in_title_case() {
         "{names:?}"
     );
 }
+
+/// The `meta.json` of the one exchange recorded under `dir`, once it is
+/// finished.
+async fn recorded_meta(dir: &std::path::Path) -> String {
+    for _ in 0..100 {
+        let entry = std::fs::read_dir(dir)
+            .ok()
+            .and_then(|mut entries| entries.next())
+            .and_then(|entry| entry.ok());
+        if let Some(entry) = entry
+            && let Ok(meta) = std::fs::read_to_string(entry.path().join("meta.json"))
+            && meta.contains("\"outcome\"")
+        {
+            return meta;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("no finished exchange was recorded in {}", dir.display());
+}
+
+#[tokio::test]
+async fn a_preset_header_is_reported_like_one_the_backend_forces() {
+    let upstream = backend().await;
+    let log = tempfile::tempdir().unwrap();
+    let dir = ConfigDir::new(
+        &config(
+            &upstream,
+            &format!(
+                "emulate = {{ preset = \"client\", version = \"9.9.9-variable\" }}\n\n[logging]\nbody_dir = \"{}\"",
+                log.path().display()
+            ),
+            "",
+        ),
+        &[("client", CLIENT)],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+    let received = sent(&router, &upstream, &chat("qwen")).await;
+    assert_eq!(
+        received.header("user-agent"),
+        Some("opencode/9.9.9-variable")
+    );
+    assert_eq!(received.header("x-session-id"), Some("ses_abc-123"));
+
+    let meta = recorded_meta(log.path()).await;
+    assert!(!meta.contains("9.9.9-variable"), "{meta}");
+    assert!(!meta.contains("ses_abc-123"), "{meta}");
+    let meta: Value = serde_json::from_str(&meta).unwrap();
+    let headers = meta["request_headers"].as_array().unwrap();
+    for name in ["user-agent", "x-session-id"] {
+        let header = headers
+            .iter()
+            .find(|header| header["name"] == name)
+            .expect("a header the backend received is recorded");
+        assert_eq!(header["value"], "<redacted>", "{name}");
+        assert_eq!(header["source"], "backend", "{name}");
+    }
+
+    let status: Value = router
+        .get("/api/status")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        status["config"]["backends"]["mock"]["emulate"],
+        json!({"preset": "client", "variables": {"version": "9.9.9-variable"}})
+    );
+    assert_eq!(status["config"]["backends"]["mock"]["headers"], json!({}));
+    assert_eq!(status["config"]["models"][0]["emulate"], Value::Null);
+}

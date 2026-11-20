@@ -119,6 +119,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
                 kind_label(backend, style)
             );
             println!("       credential: {}", backend.credential.describe());
+            print_emulation(backend);
             print_header_command(backend);
         }
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
@@ -166,6 +167,13 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
     } else {
         println!("{} {problems} problem(s) above.", style.err_mark());
         anyhow::bail!("{problems} problem(s)")
+    }
+}
+
+/// The preset the backend's own `emulate` selects.
+fn print_emulation(backend: &Backend) {
+    if let Some(emulation) = &backend.dialect.emulation {
+        println!("       emulate: {}", emulation.describe());
     }
 }
 
@@ -250,6 +258,7 @@ fn report_backend(backend: &Backend, probe: &Probe, style: &Style) -> (bool, Opt
         kind_label(backend, style)
     );
     println!("       {credential_line}");
+    print_emulation(backend);
     print_header_command(backend);
     if probe.credential.is_err() {
         println!(

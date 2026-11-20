@@ -1635,3 +1635,53 @@ fn a_configuration_without_a_presets_directory_loads() {
     let c = load(MINIMAL, &[]).unwrap();
     assert!(c.presets.problems().is_empty());
 }
+
+#[test]
+fn the_view_shows_the_preset_and_the_value_of_each_variable() {
+    let presets = [
+        (
+            "client.toml",
+            "mid_conversation_system = \"merge\"\n[variables]\nversion = \"1\"\nos = \"linux\"\n[headers]\nuser-agent = \"c/{version}\"\n",
+        ),
+        ("plain.toml", ""),
+    ];
+    let text = format!(
+        "{}emulate = {{ preset = \"client\", version = \"2\" }}\n\n[[models]]\nid = \"second\"\nbackend = \"local\"\n",
+        openai_backend("emulate = \"plain\"")
+    );
+    let view = view::masked(&load(&text, &presets).unwrap());
+    let backend = &view["backends"]["local"];
+    assert_eq!(
+        backend["emulate"],
+        serde_json::json!({"preset": "plain", "variables": {}})
+    );
+    assert_eq!(
+        backend["mid_conversation_system"],
+        serde_json::Value::Null,
+        "left out beside `emulate`, the preset decides"
+    );
+    assert_eq!(backend["headers"], serde_json::json!({}));
+    assert_eq!(
+        view["models"][0]["emulate"],
+        serde_json::json!({"preset": "client", "variables": {"os": "linux", "version": "2"}})
+    );
+    assert_eq!(view["models"][1]["emulate"], serde_json::Value::Null);
+
+    let view = view::masked(
+        &load(
+            &openai_backend("emulate = \"plain\"\nmid_conversation_system = \"user\""),
+            &presets,
+        )
+        .unwrap(),
+    );
+    assert_eq!(view["backends"]["local"]["mid_conversation_system"], "user");
+}
+
+#[test]
+fn the_view_of_a_backend_that_emulates_nothing_is_what_it_was() {
+    let view = view::masked(&Config::parse(OPENAI, |_| None).unwrap());
+    let backend = &view["backends"]["local"];
+    assert_eq!(backend["mid_conversation_system"], "keep");
+    assert_eq!(backend["emulate"], serde_json::Value::Null);
+    assert_eq!(view["models"][0]["emulate"], serde_json::Value::Null);
+}

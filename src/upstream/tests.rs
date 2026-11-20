@@ -421,6 +421,26 @@ fn a_preset_header_is_reported_as_a_forced_header() {
 }
 
 #[test]
+fn a_backend_shown_for_debugging_keeps_its_preset_header_values_out() {
+    let backend = backend_emulating(
+        "[variables]\ntenant = \"default-tenant\"\nbuild = \"default-build\"\n\n[headers]\nx-client-api-key = \"llm_secret-value {tenant} {build}\"\n",
+        &[("tenant", "given-tenant")],
+    );
+    let shown = format!("{backend:?}");
+    for secret in [
+        "llm_secret-value",
+        "default-tenant",
+        "default-build",
+        "given-tenant",
+    ] {
+        assert!(!shown.contains(secret), "`{secret}` in {shown}");
+    }
+    for name in ["x-client-api-key", "client", "tenant", "build"] {
+        assert!(shown.contains(name), "`{name}` not in {shown}");
+    }
+}
+
+#[test]
 fn upstream_headers_merge_beta_flags_without_duplicates() {
     let out = upstream_headers(
         &client_headers(),
@@ -607,6 +627,7 @@ async fn head_sent_over(transport: Transport) -> String {
         emulate: None,
     };
     let dialect = Dialect {
+        emulation: None,
         headers: HeaderRules {
             transport,
             ..Default::default()

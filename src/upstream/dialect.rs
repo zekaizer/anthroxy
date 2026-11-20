@@ -3,8 +3,8 @@
 use super::{Backend, ForcedHeaders, HeaderOrder, Transport};
 use crate::body_field::{BodyEdits, BodyField};
 use crate::config::{
-    BackendConfig, DropHeaders, HeaderCase, HttpVersion, ModelConfig, Preset, PresetLibrary,
-    SetFields,
+    BackendConfig, DropHeaders, Emulation, HeaderCase, HttpVersion, ModelConfig, Preset,
+    PresetLibrary, SetFields,
 };
 use crate::openai::EncodeOptions;
 
@@ -14,6 +14,9 @@ use crate::openai::EncodeOptions;
 /// Built once per snapshot.
 #[derive(Debug)]
 pub struct Dialect {
+    /// The preset in effect with the value of each of its variables; `None`
+    /// without `emulate`. For a report: what it does is in the two halves.
+    pub emulation: Option<Emulation>,
     pub headers: HeaderRules,
     pub body: BodyRules,
 }
@@ -113,6 +116,7 @@ impl Dialect {
                 omit_fields: preset.omit_fields.clone(),
                 field_order: preset.field_order.clone(),
             },
+            emulation,
         }
     }
 }

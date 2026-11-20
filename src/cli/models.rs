@@ -12,7 +12,8 @@ pub fn run(cli: &Cli, style: &Style) -> anyhow::Result<()> {
 }
 
 /// A header row plus one row per route: `mark` (when given), id, backend,
-/// upstream model, picker label, aliases.
+/// upstream model, picker label, aliases and, when any route emulates a
+/// client, the preset in effect for each.
 pub fn table_rows(
     registry: &Registry,
     style: &Style,
@@ -27,6 +28,13 @@ pub fn table_rows(
             .iter()
             .map(|h| style.dim(h)),
     );
+    let emulates = registry
+        .routes()
+        .iter()
+        .any(|route| route.dialect.emulation.is_some());
+    if emulates {
+        header.push(style.dim("emulate"));
+    }
     let mut rows = vec![header];
     for route in registry.routes() {
         let mut row = Vec::new();
@@ -44,6 +52,12 @@ pub fn table_rows(
                 route.aliases.join(", ")
             },
         ]);
+        if emulates {
+            row.push(match &route.dialect.emulation {
+                Some(emulation) => emulation.describe(),
+                None => "-".to_owned(),
+            });
+        }
         rows.push(row);
     }
     rows

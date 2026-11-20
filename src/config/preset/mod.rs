@@ -19,6 +19,7 @@ use super::set_fields::PresetFields;
 use super::template::PresetValue;
 use super::{SetFields, Template};
 use crate::openai::{MaxTokensField, SystemPlacement, ToolChoiceDefault, ToolOnlyContent};
+use crate::text::short;
 
 /// A preset file whose every key and value passed the checks. An absent key
 /// holds what the router does without a preset.
@@ -133,5 +134,25 @@ impl Emulation {
     /// The preset's `set_fields` with every variable replaced by its value.
     pub fn set_fields(&self) -> SetFields {
         self.preset.set_fields.bind(&self.values)
+    }
+
+    /// Every variable the preset declares with its value here.
+    pub fn values(&self) -> &BTreeMap<String, String> {
+        &self.values
+    }
+
+    /// The preset's name and the value of each variable, on one line:
+    /// `opencode (version = 1.19.6)`.
+    pub fn describe(&self) -> String {
+        let name = short(&self.preset.name);
+        if self.values.is_empty() {
+            return name;
+        }
+        let values: Vec<String> = self
+            .values
+            .iter()
+            .map(|(variable, value)| format!("{variable} = {}", short(value)))
+            .collect();
+        format!("{name} ({})", values.join(", "))
     }
 }
