@@ -106,7 +106,8 @@ impl Config {
     }
 
     /// Parses `text`, resolving `${NAME}` in string values through `lookup`,
-    /// then validates. No preset file is read.
+    /// then validates. No preset file is read: `emulate` may name a built-in
+    /// preset only.
     pub fn parse(
         text: &str,
         lookup: impl Fn(&str) -> Option<String>,

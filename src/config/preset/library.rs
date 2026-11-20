@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use http::HeaderValue;
 
@@ -11,8 +11,9 @@ use super::{Emulation, Preset};
 use crate::config::EmulateConfig;
 use crate::text::short;
 
-/// What `emulate` may name: the `*.toml` files of one `presets/` directory.
-#[derive(Debug, Clone, Default)]
+/// What `emulate` may name: the built-in presets, and the `*.toml` files of
+/// one `presets/` directory.
+#[derive(Debug, Clone)]
 pub struct PresetLibrary {
     presets: BTreeMap<String, Entry>,
     /// Each starts with its file: `presets/mine.toml: headers: …`.
@@ -44,10 +45,38 @@ impl BindProblem {
     }
 }
 
+/// The presets compiled into the binary, by name.
+const BUILT_IN: [(&str, &str); 1] = [("opencode", include_str!("opencode.toml"))];
+
+static BUILT_IN_PRESETS: LazyLock<Vec<Arc<Preset>>> = LazyLock::new(|| {
+    BUILT_IN
+        .iter()
+        .map(|(name, text)| {
+            let preset = Preset::parse(name, text)
+                .unwrap_or_else(|problems| panic!("built-in preset `{name}`: {problems:?}"));
+            Arc::new(preset)
+        })
+        .collect()
+});
+
+/// The built-in presets alone.
+impl Default for PresetLibrary {
+    fn default() -> Self {
+        Self {
+            presets: BUILT_IN_PRESETS
+                .iter()
+                .map(|preset| (preset.name.clone(), Entry::Loaded(Arc::clone(preset))))
+                .collect(),
+            problems: Vec::new(),
+        }
+    }
+}
+
 impl PresetLibrary {
-    /// Every `*.toml` file in `dir`, each the preset its file name says.
-    /// Never fails: a file that cannot be read or has a problem is listed in
-    /// [`Self::problems`]. A directory that does not exist holds no preset.
+    /// The built-in presets and every `*.toml` file in `dir`, each the preset
+    /// its file name says. Never fails: a file that cannot be read, has a
+    /// problem or is named like a built-in preset is listed in
+    /// [`Self::problems`]. A directory that does not exist adds no preset.
     pub fn with_dir(dir: &Path) -> Self {
         let mut library = Self::default();
         let entries = match std::fs::read_dir(dir) {
@@ -79,6 +108,12 @@ impl PresetLibrary {
                 ));
                 continue;
             };
+            if BUILT_IN.iter().any(|(built_in, _)| *built_in == name) {
+                library.problems.push(format!(
+                    "presets/{name}.toml: `{name}` is a built-in preset; give the file another name"
+                ));
+                continue;
+            }
             let preset = std::fs::read_to_string(&file)
                 .map_err(|error| vec![format!("cannot read: {error}")])
                 .and_then(|text| Preset::parse(name, &text));
@@ -158,9 +193,6 @@ impl PresetLibrary {
             .keys()
             .map(|name| format!("`{}`", short(name)))
             .collect();
-        match names.is_empty() {
-            true => "there is no file in `presets/` beside the configuration file".to_owned(),
-            false => format!("there are: {}", names.join(", ")),
-        }
+        format!("there are: {}", names.join(", "))
     }
 }

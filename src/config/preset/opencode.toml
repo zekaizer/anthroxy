@@ -1,0 +1,28 @@
+http_version = "1.1"
+header_case = "title"
+header_order = [
+	"authorization", "content-type", "user-agent",
+	"x-opencode-session-id", "x-session-affinity", "x-session-id",
+	"accept", "host", "content-length",
+]
+drop_headers = ["@claude-code", "anthropic-client-*"]
+omit_fields = ["user", "reasoning_effort"]
+field_order = [
+	"model", "max_tokens", "messages", "tools", "tool_choice",
+	"stream", "stream_options",
+]
+max_tokens_field = "max_tokens"
+mid_conversation_system = "merge"
+reasoning_field = "reasoning_content"
+default_tool_choice = "auto"
+tool_only_content = "empty"
+
+[variables]
+version = "1.19.6"
+
+[headers]
+user-agent = "opencode/{version}"
+accept = "*/*"
+x-opencode-session-id = "{header:x-claude-code-session-id}"
+x-session-affinity = "{header:x-claude-code-session-id}"
+x-session-id = "{header:x-claude-code-session-id}"

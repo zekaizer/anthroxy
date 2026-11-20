@@ -534,3 +534,37 @@ fn header_case_is_lower_or_title_and_needs_http_1_1() {
         ]
     );
 }
+
+const REFERENCE: &str = include_str!("../../../docs/emulation.md");
+
+/// The part of the preset reference under the `## ` heading `title`.
+fn reference_section(title: &str) -> &'static str {
+    let heading = format!("\n## {title}\n");
+    let start = REFERENCE
+        .find(&heading)
+        .unwrap_or_else(|| panic!("docs/emulation.md has no section `{title}`"));
+    let section = &REFERENCE[start + heading.len()..];
+    section.find("\n## ").map_or(section, |end| &section[..end])
+}
+
+#[test]
+fn the_reference_shows_the_built_in_opencode_preset_as_it_is() {
+    let section = reference_section("The `opencode` preset");
+    let (_, block) = section
+        .split_once("```toml\n")
+        .expect("the section holds a TOML block");
+    let (shown, _) = block.split_once("```").expect("the block is closed");
+    assert_eq!(shown, include_str!("opencode.toml"));
+}
+
+#[test]
+fn the_reference_has_a_heading_for_every_key_the_reader_takes() {
+    let mut documented: Vec<&str> = reference_section("The preset file")
+        .lines()
+        .filter_map(|line| line.strip_prefix("### `")?.strip_suffix('`'))
+        .collect();
+    documented.sort_unstable();
+    let mut read: Vec<&str> = parse::KEYS.iter().map(|(key, _)| *key).collect();
+    read.sort_unstable();
+    assert_eq!(documented, read);
+}

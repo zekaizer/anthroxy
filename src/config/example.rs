@@ -126,6 +126,10 @@ credential = { kind = "none" }
 # # ("keep"), folded into the leading one ("merge") or sent as a user message
 # # ("user"), for a chat template that refuses it anywhere else (Qwen 3.5+).
 # mid_conversation_system = "merge"
+# # Requests written the way another client of this server writes them: its
+# # headers and their order, its body fields, the shape of its messages.
+# # "opencode" is built in; presets/<name>.toml beside this file adds more.
+# emulate = "opencode"
 
 # Grok via xAI Chat Completions. Login once with `scripts/xai-oauth login`,
 # then the command credential re-runs `print` before expiry. `live_models`
@@ -232,6 +236,24 @@ mod tests {
             config.routing.default_model.as_deref(),
             Some("local-default")
         );
+    }
+
+    #[test]
+    fn the_commented_openai_backend_is_valid_once_uncommented() {
+        let (_, rest) = EXAMPLE.split_once("# [backends.inhouse]\n").unwrap();
+        let (block, _) = rest.split_once("\n\n").unwrap();
+        let block: Vec<&str> = block
+            .lines()
+            .map(|line| line.strip_prefix("# ").unwrap())
+            .collect();
+        let text = format!(
+            "{}\n[backends.inhouse]\n{}\n",
+            render("test-token"),
+            block.join("\n")
+        );
+        let config = Config::parse(&text, |_| None).unwrap_or_else(|e| panic!("{e}"));
+        let emulate = config.backends["inhouse"].emulate.as_ref();
+        assert_eq!(emulate.map(|key| key.preset.as_str()), Some("opencode"));
     }
 
     #[test]

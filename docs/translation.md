@@ -58,8 +58,9 @@ backend kind.
 2. `anthropic::decode` turns the Messages request into `ir::Request`. This is
    where Anthropic-only things are settled: `system` (string or blocks) becomes
    one text; content blocks become typed parts (text, image, tool use, tool
-   result with its images kept apart); `thinking` blocks and `cache_control` are
-   dropped; a `document` becomes its text or a note saying it was omitted; a
+   result with its images kept apart); a `thinking` block keeps its text as
+   the turn's reasoning, `redacted_thinking` and `cache_control` are dropped; a
+   `document` becomes its text or a note saying it was omitted; a
    `tool_reference` inside a tool result becomes the definition it names,
    written as the `<function>` line Claude Code's `ToolSearch` tool promises
    the model, since the definition is already in the request's `tools` and a
@@ -80,9 +81,12 @@ backend kind.
    `function.parameters`
    (an object schema always gets `properties`), `metadata.user_id` as `user`,
    `output_config.effort` as `reasoning_effort`, and
-   `stream_options.include_usage` on every stream. `translate::request` then
-   sets the backend's `set_fields` in that document and writes it out, so
-   their paths name Chat Completions fields.
+   `stream_options.include_usage` on every stream. A turn's reasoning is not
+   written. `translate::request` then sets the backend's `set_fields` in that
+   document and writes it out, so their paths name Chat Completions fields. A
+   backend that names a preset in `emulate` changes several of these choices,
+   the reasoning among them; see
+   [Client emulation presets](emulation.md).
 4. The request goes to `<url>/v1/chat/completions` with the credential and
    without `anthropic-version` / `anthropic-beta`.
 

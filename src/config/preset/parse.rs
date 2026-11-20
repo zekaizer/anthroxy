@@ -15,11 +15,11 @@ use crate::config::template::{PresetValue, is_variable_name};
 use crate::text::{cut, short};
 
 /// Reads one key's value into the preset, or says what is wrong with it.
-type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
+pub(super) type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 15] = [
+pub(super) const KEYS: [(&str, Reader); 15] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),

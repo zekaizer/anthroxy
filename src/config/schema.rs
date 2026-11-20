@@ -31,8 +31,8 @@ pub struct Config {
     pub routing: RoutingConfig,
     #[serde(default)]
     pub stats: StatsConfig,
-    /// The presets `emulate` may name. Not a key of the file: for a file
-    /// loaded from disk, `presets/` beside it.
+    /// The presets `emulate` may name. Not a key of the file: the built-in
+    /// ones and, for a file loaded from disk, `presets/` beside it.
     #[serde(skip)]
     pub presets: PresetLibrary,
 }

@@ -1589,17 +1589,39 @@ fn emulate_must_name_a_preset_and_only_its_variables() {
     assert_eq!(
         load_problems(&text, &presets),
         [
-            "backends.local.emulate: `nope` is not a preset; there are: `client`, `other`",
+            "backends.local.emulate: `nope` is not a preset; there are: `client`, `opencode`, `other`",
             "models[0].emulate.os: preset `client` declares no variable `os`",
             "models[0].emulate.version: the value cannot be sent in a header",
         ]
     );
     assert_eq!(
         problems(&openai_backend("emulate = \"client\"")),
-        [
-            "backends.local.emulate: `client` is not a preset; there is no file in `presets/` beside the configuration file"
-        ],
-        "text parsed without a file has no presets"
+        ["backends.local.emulate: `client` is not a preset; there are: `opencode`"],
+        "text parsed without a file has the built-in presets only"
+    );
+}
+
+#[test]
+fn the_built_in_preset_needs_no_file_and_gives_its_name_to_none() {
+    let c = Config::parse(&openai_backend("emulate = \"opencode\""), |_| None).unwrap();
+    assert_eq!(
+        c.backends["local"].emulate.as_ref().unwrap().preset,
+        "opencode"
+    );
+    let text = openai_backend("emulate = { preset = \"opencode\", version = \"1.20.0\" }");
+    assert!(load(&text, &[("other.toml", "")]).is_ok());
+
+    assert_eq!(
+        load_problems(
+            &openai_backend("emulate = \"opencode\""),
+            &[("opencode.toml", CLIENT_PRESET)]
+        ),
+        ["presets/opencode.toml: `opencode` is a built-in preset; give the file another name"],
+        "whether a backend names it or not, and without a second problem at `emulate`"
+    );
+    assert_eq!(
+        load_problems(OPENAI, &[("opencode.toml", "")]),
+        ["presets/opencode.toml: `opencode` is a built-in preset; give the file another name"]
     );
 }
 

@@ -42,20 +42,23 @@ impl Head {
     }
 }
 
-/// Answers a chat request with a completion and anything else with a model
-/// list, over HTTP/1.1.
+/// Answers a chat request with a completion, as an event stream when the
+/// request asks for one, and anything else with a model list, over HTTP/1.1.
 pub struct RawUpstream {
     addr: SocketAddr,
-    heads: Arc<Mutex<Vec<Head>>>,
+    requests: Requests,
     _task: tokio::task::JoinHandle<()>,
 }
+
+/// The head and the body of every request, in the order they arrived.
+type Requests = Arc<Mutex<Vec<(Head, String)>>>;
 
 impl RawUpstream {
     pub async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let heads = Arc::new(Mutex::new(Vec::new()));
-        let recorded = heads.clone();
+        let requests = Requests::default();
+        let recorded = requests.clone();
         let task = tokio::spawn(async move {
             loop {
                 let (socket, _) = listener.accept().await.unwrap();
@@ -64,7 +67,7 @@ impl RawUpstream {
         });
         Self {
             addr,
-            heads,
+            requests,
             _task: task,
         }
     }
@@ -73,18 +76,37 @@ impl RawUpstream {
         format!("http://{}", self.addr)
     }
 
-    pub fn heads(&self) -> Vec<Head> {
-        self.heads.lock().unwrap().clone()
+    /// The head of the last request.
+    pub fn last(&self) -> Head {
+        self.last_request().0
     }
 
-    pub fn last(&self) -> Head {
-        self.heads()
-            .pop()
+    /// The body of the last request, as the bytes that arrived.
+    pub fn last_body(&self) -> String {
+        self.last_request().1
+    }
+
+    fn last_request(&self) -> (Head, String) {
+        self.requests
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
             .expect("the backend received at least one request")
     }
 }
 
-async fn serve(mut socket: TcpStream, heads: Arc<Mutex<Vec<Head>>>) {
+const STREAMED: &str = concat!(
+    r#"data: {"id":"chatcmpl-9","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}"#,
+    "\n\n",
+    r#"data: {"id":"chatcmpl-9","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+    "\n\n",
+    r#"data: {"id":"chatcmpl-9","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":7,"total_tokens":12}}"#,
+    "\n\n",
+    "data: [DONE]\n\n",
+);
+
+async fn serve(mut socket: TcpStream, requests: Requests) {
     let mut buffer = Vec::new();
     loop {
         let end = loop {
@@ -109,6 +131,7 @@ async fn serve(mut socket: TcpStream, heads: Arc<Mutex<Vec<Head>>>) {
                 _ => return,
             }
         }
+        let body = String::from_utf8_lossy(&buffer[end..end + body_len]).into_owned();
         buffer.drain(..end + body_len);
         let refused = head.fields().any(|(name, value)| {
             name.eq_ignore_ascii_case("authorization") && value.ends_with(REFUSED_KEY)
@@ -121,22 +144,31 @@ async fn serve(mut socket: TcpStream, heads: Arc<Mutex<Vec<Head>>>) {
             continue;
         }
 
-        let answer = match head.request_line().contains("/v1/chat/completions") {
-            true => json!({
-                "id": "chatcmpl-9", "object": "chat.completion", "created": 1, "model": "qwen",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "ok"},
-                    "finish_reason": "stop"
-                }],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
-            }),
-            false => json!({"object": "list", "data": [{"id": "live-1", "object": "model"}]}),
-        }
-        .to_string();
-        heads.lock().unwrap().push(head);
+        let chat = head.request_line().contains("/v1/chat/completions");
+        let (content_type, answer) = match (chat, body.contains(r#""stream":true"#)) {
+            (true, true) => ("text/event-stream", STREAMED.to_owned()),
+            (true, false) => (
+                "application/json",
+                json!({
+                    "id": "chatcmpl-9", "object": "chat.completion", "created": 1, "model": "qwen",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
+                })
+                .to_string(),
+            ),
+            (false, _) => (
+                "application/json",
+                json!({"object": "list", "data": [{"id": "live-1", "object": "model"}]})
+                    .to_string(),
+            ),
+        };
+        requests.lock().unwrap().push((head, body));
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{answer}",
+            "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\n\r\n{answer}",
             answer.len()
         );
         if socket.write_all(response.as_bytes()).await.is_err() {

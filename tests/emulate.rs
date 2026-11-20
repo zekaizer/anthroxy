@@ -1219,3 +1219,183 @@ async fn a_preset_header_is_reported_like_one_the_backend_forces() {
     assert_eq!(status["config"]["backends"]["mock"]["headers"], json!({}));
     assert_eq!(status["config"]["models"][0]["emulate"], Value::Null);
 }
+
+/// One tool round trip the way Claude Code 2.1.328 sends its second request:
+/// the turn that only called a tool comes back with its `thinking` block,
+/// followed by the tool's result and a system message.
+fn claude_code_round_trip(model: &str) -> Value {
+    json!({
+        "model": model,
+        "max_tokens": 32000,
+        "stream": true,
+        "system": [{"type": "text", "text": "Lead.", "cache_control": {"type": "ephemeral"}}],
+        "metadata": {"user_id": "{\"device_id\":\"d1\",\"session_id\":\"abc-123\"}"},
+        "output_config": {"effort": "high"},
+        "tools": [{
+            "name": "Read",
+            "description": "Read a file",
+            "input_schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "additionalProperties": false
+            }
+        }],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "read a.rs"}]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "The user wants a.rs.", "signature": ""},
+                {"type": "tool_use", "id": "call_1", "name": "Read", "input": {"path": "a.rs"}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "fn main() {}"}
+            ]},
+            {"role": "system", "content": "Later."}
+        ]
+    })
+}
+
+/// `request` with the headers Claude Code adds to it.
+fn from_claude_code(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    request
+        .header("accept", "application/json")
+        .header("user-agent", "claude-cli/2.1.328 (external, cli)")
+        .header("anthropic-beta", "claude-code-20250219")
+        .header("anthropic-dangerous-direct-browser-access", "true")
+        // Stands for whatever Claude Code sends under this prefix.
+        .header("anthropic-client-any", "1")
+        .header("x-app", "cli")
+        .header("x-claude-code-session-id", "abc-123")
+        .header("x-stainless-lang", "js")
+        .header("x-stainless-retry-count", "0")
+        .header("x-stainless-timeout", "600")
+}
+
+#[tokio::test]
+async fn the_built_in_opencode_preset_writes_a_request_as_opencode_1_19_6_does() {
+    let upstream = RawUpstream::start().await;
+    let router = TestRouter::start(&config_at(
+        &upstream.url(),
+        "emulate = \"opencode\"\nlive_models = true",
+        "emulate = { preset = \"opencode\", version = \"1.20.0\" }",
+    ))
+    .await;
+
+    let res = from_claude_code(router.post("/v1/messages", &claude_code_round_trip("qwen")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let answer = res.text().await.unwrap();
+    assert!(answer.contains("event: message_stop"), "{answer}");
+
+    let head = upstream.last();
+    assert_eq!(head.request_line(), "POST /v1/chat/completions HTTP/1.1");
+    assert_eq!(
+        head.names(),
+        [
+            "Authorization",
+            "Content-Type",
+            "User-Agent",
+            "X-Opencode-Session-Id",
+            "X-Session-Affinity",
+            "X-Session-Id",
+            "Accept",
+            "Host",
+            "Content-Length",
+        ],
+        "the headers of opencode in its order, and none of Claude Code's own"
+    );
+    assert_eq!(
+        head.value("Authorization"),
+        Some("Bearer backend-secret-key")
+    );
+    assert_eq!(head.value("Content-Type"), Some("application/json"));
+    assert_eq!(head.value("User-Agent"), Some("opencode/1.19.6"));
+    assert_eq!(head.value("Accept"), Some("*/*"));
+    for session in [
+        "X-Opencode-Session-Id",
+        "X-Session-Affinity",
+        "X-Session-Id",
+    ] {
+        assert_eq!(head.value(session), Some("abc-123"), "{session}");
+    }
+
+    let raw = upstream.last_body();
+    let body: Value = serde_json::from_str(&raw).unwrap();
+    let fields: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            "model",
+            "max_tokens",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stream_options"
+        ],
+        "no `user`, no `reasoning_effort`, and opencode's order"
+    );
+    assert_eq!(body["max_tokens"], 32000);
+    assert_eq!(body["tool_choice"], "auto");
+    assert_eq!(body["stream_options"], json!({"include_usage": true}));
+    assert_eq!(
+        body["tools"],
+        json!([{"type": "function", "function": {
+            "name": "Read",
+            "description": "Read a file",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "additionalProperties": false
+            }
+        }}]),
+        "a tool definition carries no `strict`"
+    );
+
+    let messages = body["messages"].as_array().unwrap();
+    let roles: Vec<&str> = messages
+        .iter()
+        .map(|message| message["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        roles,
+        ["system", "user", "assistant", "tool"],
+        "one leading system message"
+    );
+    let system = messages[0]["content"].as_str().unwrap();
+    assert!(
+        system.starts_with("Lead.") && system.ends_with("Later."),
+        "{system}"
+    );
+    assert_eq!(
+        messages[2].to_string(),
+        concat!(
+            r#"{"role":"assistant","content":"","reasoning_content":"The user wants a.rs.","#,
+            r#""tool_calls":[{"id":"call_1","type":"function","function":{"name":"Read","arguments":"{\"path\":\"a.rs\"}"}}]}"#
+        ),
+        "a turn that only called a tool, with the reasoning before it"
+    );
+
+    let res = from_claude_code(router.post("/v1/messages", &claude_code_round_trip("other")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(upstream.last().value("User-Agent"), Some("opencode/1.20.0"));
+
+    let res = router.get("/v1/models").send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let head = upstream.last();
+    assert_eq!(head.request_line(), "GET /v1/models HTTP/1.1");
+    assert_eq!(
+        head.names(),
+        ["Authorization", "User-Agent", "Accept", "Host"],
+        "the model list carries the preset's headers too"
+    );
+}
