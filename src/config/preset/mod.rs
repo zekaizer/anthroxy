@@ -31,6 +31,7 @@ pub struct Preset {
     headers: Vec<(HeaderName, PresetValue)>,
     /// Every entry is a pattern [`super::DropHeaders::new`] takes.
     pub drop_headers: Vec<String>,
+    pub http_version: HttpVersion,
     /// Every variable a value names is declared.
     set_fields: PresetFields,
     /// Dot-separated paths, none under a field a preset leaves alone.
@@ -72,6 +73,18 @@ impl Preset {
             .iter()
             .any(|(_, value)| value.variables().any(|name| name == variable))
     }
+}
+
+/// The HTTP version a route speaks with its backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+pub enum HttpVersion {
+    /// The one the server and the router agree on.
+    #[default]
+    #[serde(skip)]
+    Negotiated,
+    /// HTTP/1.1 though the server offers HTTP/2.
+    #[serde(rename = "1.1")]
+    Http11,
 }
 
 /// A preset with a value for each of its variables: what one `emulate`

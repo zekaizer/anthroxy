@@ -19,10 +19,11 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 12] = [
+const KEYS: [(&str, Reader); 13] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
+    ("http_version", http_version),
     ("set_fields", set_fields),
     ("omit_fields", omit_fields),
     ("field_order", field_order),
@@ -141,6 +142,12 @@ fn drop_headers(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<Str
         .collect();
     header_rules::check_drop_headers("drop_headers", &entries, &forced, "this preset", problems);
     preset.drop_headers = entries;
+}
+
+fn http_version(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    if let Some(version) = one_of("http_version", value, problems) {
+        preset.http_version = version;
+    }
 }
 
 fn set_fields(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {

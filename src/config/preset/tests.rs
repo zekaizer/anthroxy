@@ -452,3 +452,18 @@ fn reasoning_field_names_a_field_of_its_own() {
         ["reasoning_field: must be a string"]
     );
 }
+
+#[test]
+fn http_version_is_absent_or_1_1() {
+    let version = |text: &str| Preset::parse("client", text).unwrap().http_version;
+    assert_eq!(version("http_version = \"1.1\"\n"), HttpVersion::Http11);
+    assert_eq!(version(""), HttpVersion::Negotiated);
+    assert_eq!(
+        problems("http_version = \"2\"\n"),
+        ["http_version: `2` is not `1.1`"]
+    );
+    assert_eq!(
+        problems("http_version = 1.1\n"),
+        ["http_version: must be a string"]
+    );
+}

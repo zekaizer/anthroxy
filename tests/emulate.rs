@@ -3,6 +3,8 @@
 
 mod support;
 
+use axum::http::Version;
+use axum::response::Response;
 use serde_json::{Value, json};
 
 use support::config_dir::ConfigDir;
@@ -20,17 +22,19 @@ user-agent = "opencode/{version}"
 x-session-id = "ses_{header:x-claude-code-session-id}"
 "#;
 
-/// Answers a chat request with a completion and anything else with a model
-/// list.
-async fn backend() -> MockUpstream {
-    MockUpstream::start(|received| match received.path_and_query.as_str() {
+/// A completion for a chat request and a model list for anything else.
+fn answer(received: &Received) -> Response {
+    match received.path_and_query.as_str() {
         "/v1/chat/completions" => completion(json!({"role": "assistant", "content": "ok"}), "stop"),
         _ => json_response(
             200,
             json!({"object": "list", "data": [{"id": "live-1", "object": "model"}]}),
         ),
-    })
-    .await
+    }
+}
+
+async fn backend() -> MockUpstream {
+    MockUpstream::start(answer).await
 }
 
 /// One `openai` backend at `upstream` with the models `qwen` and `other`.
@@ -745,4 +749,78 @@ async fn a_turn_without_reasoning_text_gets_no_reasoning_field() {
             r#"{"role":"assistant","content":"Hello"}"#
         );
     }
+}
+
+/// The HTTP versions requests arrive in at an HTTPS backend that offers
+/// HTTP/2 and HTTP/1.1: a chat request for `qwen`, one for `other`, and the
+/// model list. `backend` and `other` are the `emulate` lines of the backend
+/// and of the model `other`.
+async fn versions_with(
+    backend: &str,
+    other: &str,
+    presets: &[(&str, &str)],
+) -> (Version, Version, Version) {
+    let (upstream, ca_pem) = MockUpstream::start_tls(answer).await;
+    let dir = ConfigDir::new("", presets);
+    let ca = dir.config().with_file_name("ca.pem");
+    std::fs::write(&ca, ca_pem).unwrap();
+    dir.write_config(&config(
+        &upstream,
+        &format!(
+            "{backend}\nlive_models = true\n\n[upstream]\nca_certificate = \"{}\"",
+            ca.display()
+        ),
+        other,
+    ));
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let qwen = sent(&router, &upstream, &chat("qwen")).await.version;
+    let other = sent(&router, &upstream, &chat("other")).await.version;
+    let res = router.get("/v1/models").send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let lists: Vec<Version> = upstream
+        .received()
+        .into_iter()
+        .filter(|received| received.path_and_query == "/v1/models")
+        .map(|received| received.version)
+        .collect();
+    assert!(!lists.is_empty(), "the backend was asked for its models");
+    assert!(
+        lists.iter().all(|version| *version == lists[0]),
+        "{lists:?}"
+    );
+    (qwen, other, lists[0])
+}
+
+const HTTP_1_1: &str = "http_version = \"1.1\"\n";
+
+#[tokio::test]
+async fn a_preset_keeps_a_route_off_http_2() {
+    assert_eq!(
+        versions_with("emulate = \"client\"", "", &[("client", "")]).await,
+        (Version::HTTP_2, Version::HTTP_2, Version::HTTP_2),
+        "without the key the server's offer of HTTP/2 is taken"
+    );
+    assert_eq!(
+        versions_with("emulate = \"client\"", "", &[("client", HTTP_1_1)]).await,
+        (Version::HTTP_11, Version::HTTP_11, Version::HTTP_11)
+    );
+}
+
+#[tokio::test]
+async fn the_http_version_is_that_of_the_preset_a_request_travels_under() {
+    assert_eq!(
+        versions_with("", "emulate = \"client\"", &[("client", HTTP_1_1)]).await,
+        (Version::HTTP_2, Version::HTTP_11, Version::HTTP_2),
+        "the model list is the backend's request, not a model's"
+    );
+    assert_eq!(
+        versions_with(
+            "emulate = \"client\"",
+            "emulate = \"plain\"",
+            &[("client", HTTP_1_1), ("plain", "")]
+        )
+        .await,
+        (Version::HTTP_11, Version::HTTP_2, Version::HTTP_11)
+    );
 }

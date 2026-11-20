@@ -273,7 +273,10 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 52] = [
+const PRESET_LINES: [&str; 55] = [
+    "http_version = \"1.1\"",
+    "http_version = \"2\"",
+    "http_version = 1.1",
     "reasoning_field = \"reasoning_content\"",
     "reasoning_field = \"content\"",
     "reasoning_field = [\"\"]",

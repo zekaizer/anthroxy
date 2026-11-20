@@ -2,7 +2,9 @@
 
 use super::{Backend, ForcedHeaders, Transport};
 use crate::body_field::{BodyEdits, BodyField};
-use crate::config::{BackendConfig, DropHeaders, ModelConfig, Preset, PresetLibrary, SetFields};
+use crate::config::{
+    BackendConfig, DropHeaders, HttpVersion, ModelConfig, Preset, PresetLibrary, SetFields,
+};
 use crate::openai::EncodeOptions;
 
 /// How requests along one route are written: the backend's `headers`,
@@ -85,7 +87,10 @@ impl Dialect {
             headers: HeaderRules {
                 forced: ForcedHeaders::new(&backend.headers).over(preset_headers),
                 drop: DropHeaders::new(&drop),
-                transport: Transport::default(),
+                transport: Transport {
+                    http1_only: preset.http_version == HttpVersion::Http11,
+                    title_case: false,
+                },
             },
             body: BodyRules {
                 set_fields: preset_fields.then(SetFields::new(&backend.set_fields)),
