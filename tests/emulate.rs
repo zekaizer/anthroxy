@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use support::config_dir::ConfigDir;
 use support::mock_upstream::{Received, json_response};
 use support::openai::completion;
+use support::raw_upstream::{Head, REFUSED_KEY, RawUpstream};
 use support::router::TOKEN;
 use support::{MockUpstream, TestRouter};
 
@@ -40,6 +41,11 @@ async fn backend() -> MockUpstream {
 /// One `openai` backend at `upstream` with the models `qwen` and `other`.
 /// `backend` is added to the backend's table and `other` to that model's.
 fn config(upstream: &MockUpstream, backend: &str, other: &str) -> String {
+    config_at(&upstream.url(), backend, other)
+}
+
+/// [`config`] with the backend at `url`.
+fn config_at(url: &str, backend: &str, other: &str) -> String {
     format!(
         r#"
 [server]
@@ -57,11 +63,10 @@ backend = "mock"
 
 [backends.mock]
 kind = "openai"
-url = "{}"
+url = "{url}"
 credential = {{ kind = "static", value = "backend-secret-key" }}
 {backend}
-"#,
-        upstream.url()
+"#
     )
 }
 
@@ -822,5 +827,269 @@ async fn the_http_version_is_that_of_the_preset_a_request_travels_under() {
         )
         .await,
         (Version::HTTP_11, Version::HTTP_2, Version::HTTP_11)
+    );
+}
+
+/// The head of the request a backend on a bare socket received for `body`,
+/// sent by a client in session `abc-123`.
+async fn head_sent(router: &TestRouter, upstream: &RawUpstream, body: &Value) -> Head {
+    let res = router
+        .post("/v1/messages", body)
+        .header("x-claude-code-session-id", "abc-123")
+        .header("x-app", "cli")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "{}", res.text().await.unwrap());
+    upstream.last()
+}
+
+/// The headers of opencode 1.19.6 in the order it sends them, without the
+/// two a preset never sends (`Connection`, `Accept-Encoding`).
+const OPENCODE_HEADERS: &str = r#"
+http_version = "1.1"
+header_order = [
+    "authorization", "content-type", "user-agent",
+    "x-opencode-session-id", "x-session-affinity", "x-session-id",
+    "accept", "host", "content-length",
+]
+drop_headers = ["@claude-code"]
+
+[headers]
+user-agent = "opencode/1.19.6"
+accept = "*/*"
+x-opencode-session-id = "{header:x-claude-code-session-id}"
+x-session-affinity = "{header:x-claude-code-session-id}"
+x-session-id = "{header:x-claude-code-session-id}"
+"#;
+
+#[tokio::test]
+async fn a_preset_orders_the_headers_credential_and_framing_included() {
+    let upstream = RawUpstream::start().await;
+    let dir = ConfigDir::new(
+        &config_at(&upstream.url(), "emulate = \"client\"", ""),
+        &[("client", OPENCODE_HEADERS)],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let head = head_sent(&router, &upstream, &chat("qwen")).await;
+    assert_eq!(head.request_line(), "POST /v1/chat/completions HTTP/1.1");
+    assert_eq!(
+        head.names(),
+        [
+            "authorization",
+            "content-type",
+            "user-agent",
+            "x-opencode-session-id",
+            "x-session-affinity",
+            "x-session-id",
+            "accept",
+            "host",
+            "content-length",
+        ]
+    );
+    assert_eq!(
+        head.value("authorization"),
+        Some("Bearer backend-secret-key")
+    );
+    assert_eq!(
+        head.value("host"),
+        Some(upstream.url().trim_start_matches("http://"))
+    );
+}
+
+#[tokio::test]
+async fn a_listed_host_holds_the_value_an_unlisted_one_does() {
+    let upstream = RawUpstream::start().await;
+    let url = upstream.url().replace("127.0.0.1", "LocalHost");
+    let plain = ConfigDir::new(&config_at(&url, "", ""), &[]);
+    let ordered = ConfigDir::new(
+        &config_at(&url, "emulate = \"client\"", ""),
+        &[(
+            "client",
+            "http_version = \"1.1\"\nheader_order = [\"host\"]\n",
+        )],
+    );
+
+    let router = TestRouter::start_at(&plain.config()).await;
+    let head = head_sent(&router, &upstream, &chat("qwen")).await;
+    let unlisted = head.value("host").expect("a host header").to_owned();
+    assert_eq!(unlisted, url.trim_start_matches("http://").to_lowercase());
+
+    let router = TestRouter::start_at(&ordered.config()).await;
+    let head = head_sent(&router, &upstream, &chat("qwen")).await;
+    assert_eq!(head.names().first(), Some(&"host"));
+    assert_eq!(head.value("host"), Some(unlisted.as_str()));
+}
+
+/// `listed`, then the names of `without` that are not among them.
+fn listed_first<'a>(listed: &[&'a str], without: &'a [String]) -> Vec<&'a str> {
+    let rest = without
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !listed.contains(name));
+    listed.iter().copied().chain(rest).collect()
+}
+
+/// The credential line [`config_at`] writes.
+const STATIC: &str = r#"credential = { kind = "static", value = "backend-secret-key" }"#;
+
+#[tokio::test]
+async fn the_authorization_of_a_url_with_userinfo_stands_where_the_order_lists_it() {
+    let listed = ["content-type", "authorization"];
+    let preset = "http_version = \"1.1\"\nheader_order = [\"content-type\", \"authorization\"]\n";
+    let upstream = RawUpstream::start().await;
+    let url = upstream.url().replace("http://", "http://user:pw@");
+    for (credential, value) in [
+        (STATIC, "Bearer backend-secret-key"),
+        ("credential = { kind = \"none\" }", "Basic dXNlcjpwdw=="),
+    ] {
+        let config = |backend: &str| config_at(&url, backend, "").replace(STATIC, credential);
+        let plain = ConfigDir::new(&config(""), &[]);
+        let ordered = ConfigDir::new(&config("emulate = \"client\""), &[("client", preset)]);
+
+        let router = TestRouter::start_at(&plain.config()).await;
+        let head = head_sent(&router, &upstream, &chat("qwen")).await;
+        let without: Vec<String> = head.names().into_iter().map(str::to_owned).collect();
+        assert_eq!(without[0], "authorization", "{credential}");
+        assert_eq!(head.value("authorization"), Some(value));
+
+        let router = TestRouter::start_at(&ordered.config()).await;
+        let head = head_sent(&router, &upstream, &chat("qwen")).await;
+        assert_eq!(
+            head.names(),
+            listed_first(&listed, &without),
+            "{credential}"
+        );
+        assert_eq!(head.value("authorization"), Some(value));
+    }
+}
+
+/// The status line of the answer to `body`, posted by a client that sends no
+/// `accept` header.
+async fn post_without_accept(router: &TestRouter, body: &Value) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = body.to_string();
+    let request = format!(
+        "POST /v1/messages HTTP/1.1\r\nhost: {}\r\nx-api-key: {TOKEN}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        router.addr,
+        body.len()
+    );
+    let mut socket = tokio::net::TcpStream::connect(router.addr).await.unwrap();
+    socket.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    socket.read_to_string(&mut answer).await.unwrap();
+    answer.lines().next().unwrap_or_default().to_owned()
+}
+
+#[tokio::test]
+async fn the_accept_the_http_client_adds_stands_where_the_order_lists_it() {
+    let listed = ["accept", "content-type"];
+    let preset = "http_version = \"1.1\"\nheader_order = [\"accept\", \"content-type\"]\n";
+    let upstream = RawUpstream::start().await;
+    let plain = ConfigDir::new(&config_at(&upstream.url(), "", ""), &[]);
+    let ordered = ConfigDir::new(
+        &config_at(&upstream.url(), "emulate = \"client\"", ""),
+        &[("client", preset)],
+    );
+
+    let router = TestRouter::start_at(&plain.config()).await;
+    let status = post_without_accept(&router, &chat("qwen")).await;
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    let head = upstream.last();
+    let without: Vec<String> = head.names().into_iter().map(str::to_owned).collect();
+    assert_eq!(
+        without[without.len() - 3..],
+        ["accept", "host", "content-length"]
+    );
+    assert_eq!(head.value("accept"), Some("*/*"));
+
+    let router = TestRouter::start_at(&ordered.config()).await;
+    let status = post_without_accept(&router, &chat("qwen")).await;
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    let head = upstream.last();
+    assert_eq!(head.names(), listed_first(&listed, &without));
+    assert_eq!(head.value("accept"), Some("*/*"));
+}
+
+#[tokio::test]
+async fn a_retry_with_a_new_credential_and_computed_headers_is_sent_in_the_order() {
+    let upstream = RawUpstream::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let used = dir.path().join("used");
+    let credential = format!(
+        "credential = {{ kind = \"command\", command = 'if [ -e {used} ]; then echo fresh-key; else touch {used}; echo {REFUSED_KEY}; fi' }}",
+        used = used.display()
+    );
+    let script = dir.path().join("headers.sh");
+    std::fs::write(
+        &script,
+        r#"printf '{"x-gw-attempt":"%s"}' "$ANTHROXY_ATTEMPT""#,
+    )
+    .unwrap();
+    let backend = format!(
+        "emulate = \"client\"\n\n[backends.mock.header_command]\ncommand = \"sh {}\"",
+        script.display()
+    );
+    let listed = ["x-gw-attempt", "content-length", "authorization"];
+    let preset = "http_version = \"1.1\"\nheader_order = [\"x-gw-attempt\", \"content-length\", \"authorization\"]\n";
+    let presets = ConfigDir::new(
+        &config_at(&upstream.url(), &backend, "").replace(STATIC, &credential),
+        &[("client", preset)],
+    );
+    let router = TestRouter::start_at(&presets.config()).await;
+
+    let head = head_sent(&router, &upstream, &chat("qwen")).await;
+    assert_eq!(
+        head.value("x-gw-attempt"),
+        Some("2"),
+        "the attempt after the refused one"
+    );
+    assert_eq!(head.value("authorization"), Some("Bearer fresh-key"));
+    assert_eq!(head.names()[..3], listed);
+}
+
+#[tokio::test]
+async fn headers_the_order_does_not_list_follow_in_the_order_they_had() {
+    let listed = "http_version = \"1.1\"\nheader_order = [\"host\", \"x-absent\", \"x-app\"]\n";
+    let upstream = RawUpstream::start().await;
+    let plain = ConfigDir::new(&config_at(&upstream.url(), "live_models = true", ""), &[]);
+    let ordered = ConfigDir::new(
+        &config_at(
+            &upstream.url(),
+            "emulate = \"client\"\nlive_models = true",
+            "",
+        ),
+        &[("client", listed)],
+    );
+
+    let router = TestRouter::start_at(&plain.config()).await;
+    let head = head_sent(&router, &upstream, &chat("qwen")).await;
+    let without: Vec<String> = head.names().into_iter().map(str::to_owned).collect();
+    assert_eq!(
+        without[without.len() - 3..],
+        ["authorization", "host", "content-length"]
+    );
+    assert!(without.contains(&"x-app".to_owned()), "{without:?}");
+
+    let router = TestRouter::start_at(&ordered.config()).await;
+    let head = head_sent(&router, &upstream, &chat("qwen")).await;
+    let mut expected = vec!["host", "x-app"];
+    expected.extend(
+        without
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !["host", "x-app"].contains(name)),
+    );
+    assert_eq!(head.names(), expected);
+
+    let res = router.get("/v1/models").send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let head = upstream.last();
+    assert_eq!(head.request_line(), "GET /v1/models HTTP/1.1");
+    assert_eq!(
+        head.names().first(),
+        Some(&"host"),
+        "the model list is sent in the preset's order too"
     );
 }

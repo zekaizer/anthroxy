@@ -31,6 +31,8 @@ pub struct Preset {
     headers: Vec<(HeaderName, PresetValue)>,
     /// Every entry is a pattern [`super::DropHeaders::new`] takes.
     pub drop_headers: Vec<String>,
+    /// Lower-case names, each once.
+    pub header_order: Vec<HeaderName>,
     pub http_version: HttpVersion,
     /// Every variable a value names is declared.
     set_fields: PresetFields,

@@ -368,7 +368,7 @@ pub fn sent_headers(
 
 /// Authority of `url`, as the HTTP client sends it: the default port for the
 /// scheme is left off.
-fn host(url: &str) -> Option<String> {
+pub(super) fn host(url: &str) -> Option<String> {
     let uri: http::Uri = url.parse().ok()?;
     let authority = uri.authority()?;
     let default = match uri.scheme_str() {

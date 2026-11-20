@@ -467,3 +467,46 @@ fn http_version_is_absent_or_1_1() {
         ["http_version: must be a string"]
     );
 }
+
+#[test]
+fn header_order_lists_lower_case_names_once_and_needs_http_1_1() {
+    let preset = Preset::parse(
+        "client",
+        "http_version = \"1.1\"\nheader_order = [\"authorization\", \"host\", \"content-length\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        preset.header_order,
+        ["authorization", "host", "content-length"],
+        "the credential header and the two the HTTP client frames can be placed"
+    );
+    assert!(Preset::parse("client", "").unwrap().header_order.is_empty());
+    assert_eq!(
+        problems(
+            "http_version = \"1.1\"\nheader_order = [\"accept\", \"Host\", \"a b\", \"\", \"accept\"]\n"
+        ),
+        [
+            "header_order: `Host` must be written in lower case",
+            "header_order: `a b` is not a valid header name",
+            "header_order: `` is not a valid header name",
+            "header_order: `accept` is listed twice",
+        ]
+    );
+    assert_eq!(
+        problems("header_order = [\"accept\"]\n"),
+        [
+            "header_order: needs `http_version = \"1.1\"`; the order of headers exists in HTTP/1.1 only"
+        ]
+    );
+    assert_eq!(
+        problems("http_version = \"1.1\"\nheader_order = [\"Accept\", 3]\n"),
+        [
+            "header_order: entry 2 must be a string",
+            "header_order: `Accept` must be written in lower case",
+        ]
+    );
+    assert_eq!(
+        problems("http_version = \"1.1\"\nheader_order = \"accept\"\n"),
+        ["header_order: must be a list of strings"]
+    );
+}

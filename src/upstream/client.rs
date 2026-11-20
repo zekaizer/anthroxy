@@ -163,7 +163,8 @@ impl UpstreamClient {
         request: UpstreamRequest<'_>,
     ) -> Result<UpstreamResponse, UpstreamError> {
         let backend = request.target.backend();
-        let http = self.clients.get(request.target.headers().transport);
+        let rules = request.target.headers();
+        let http = self.clients.get(rules.transport);
         let url = format!("{}{}", backend.url, request.path_and_query);
         // Logged instead of `url`, whose userinfo reqwest sends as basic auth.
         let shown = shown_target(backend, request.path_and_query);
@@ -224,11 +225,16 @@ impl UpstreamClient {
             } else {
                 TimeoutClock::NonStream
             };
-            let send = http
-                .request(request.method.clone(), &url)
-                .headers(headers)
-                .body(request.body.clone())
-                .send();
+            let send = async {
+                let mut built = http
+                    .request(request.method.clone(), &url)
+                    .headers(headers)
+                    .body(request.body.clone())
+                    .build()?;
+                // Last: what this attempt and the builder added is placed too.
+                rules.order.arrange(&mut built);
+                http.execute(built).await
+            };
             let outcome = match tokio::time::timeout_at(header_deadline, send).await {
                 Ok(outcome) => outcome,
                 Err(_) => {

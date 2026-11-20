@@ -745,3 +745,118 @@ fn a_forced_host_is_reported_as_the_backend_s_not_the_url_s() {
     );
     assert_eq!(sent.iter().filter(|h| h.name == "host").count(), 1);
 }
+
+fn names(headers: &HeaderMap) -> Vec<&str> {
+    headers.keys().map(|name| name.as_str()).collect()
+}
+
+/// The headers a request to `url` with `headers` and a body of `body_len`
+/// bytes leaves with, once put in the order `listed`.
+fn arranged(listed: &[&'static str], url: &str, headers: &HeaderMap, body_len: usize) -> HeaderMap {
+    let order = HeaderOrder::new(
+        listed
+            .iter()
+            .map(|name| http::HeaderName::from_static(name))
+            .collect(),
+    );
+    let mut request = reqwest::Client::new()
+        .post(url)
+        .headers(headers.clone())
+        .body(vec![b'.'; body_len])
+        .build()
+        .unwrap();
+    order.arrange(&mut request);
+    request.headers().clone()
+}
+
+#[test]
+fn listed_headers_come_first_and_the_others_keep_their_order() {
+    let mut headers = HeaderMap::new();
+    for (name, value) in [
+        ("accept", "a"),
+        ("x-b", "1"),
+        ("content-type", "c"),
+        ("x-a", "2"),
+        ("authorization", "k"),
+    ] {
+        headers.append(name, HeaderValue::from_static(value));
+    }
+    headers.append("x-b", HeaderValue::from_static("3"));
+    let listed = ["authorization", "x-absent", "content-type", "x-b"];
+
+    let placed = arranged(&listed, "http://backend:8080", &headers, 12);
+    assert_eq!(
+        names(&placed),
+        [
+            "authorization",
+            "content-type",
+            "x-b",
+            "accept",
+            "x-a",
+            "host",
+            "content-length"
+        ],
+        "what the HTTP client adds follows, as it would write it"
+    );
+    let repeated: Vec<_> = placed.get_all("x-b").iter().collect();
+    assert_eq!(repeated, ["1", "3"], "every value of a name is kept");
+
+    let unchanged = arranged(&[], "http://backend:8080", &headers, 12);
+    assert_eq!(
+        names(&unchanged),
+        ["accept", "x-b", "content-type", "x-a", "authorization"],
+        "without an order the request is left to the HTTP client"
+    );
+}
+
+#[test]
+fn what_the_http_client_adds_stands_where_the_list_names_it() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-a", HeaderValue::from_static("1"));
+    let listed = ["x-a", "accept", "authorization"];
+
+    let placed = arranged(&listed, "http://user:pw@Backend:8080/v1", &headers, 0);
+    assert_eq!(names(&placed), ["x-a", "accept", "authorization", "host"]);
+    assert_eq!(placed["accept"], "*/*");
+    assert_eq!(placed["authorization"], "Basic dXNlcjpwdw==");
+    assert_eq!(placed["host"], "backend:8080", "as the URL is parsed");
+
+    headers.insert("accept", HeaderValue::from_static("text/plain"));
+    headers.insert("authorization", HeaderValue::from_static("Bearer k"));
+    let placed = arranged(&listed, "http://user:pw@backend/v1", &headers, 0);
+    assert_eq!(names(&placed), ["x-a", "accept", "authorization", "host"]);
+    assert_eq!(placed["accept"], "text/plain");
+    assert_eq!(
+        placed["authorization"], "Bearer k",
+        "the request's own value is the one sent"
+    );
+}
+
+#[test]
+fn host_and_content_length_stand_where_the_list_names_them() {
+    let mut headers = HeaderMap::new();
+    headers.insert("accept", HeaderValue::from_static("a"));
+    headers.insert("x-a", HeaderValue::from_static("1"));
+    let listed = ["content-length", "accept", "host"];
+
+    let placed = arranged(&listed, "https://backend:8443", &headers, 12);
+    assert_eq!(names(&placed), ["content-length", "accept", "host", "x-a"]);
+    assert_eq!(placed["content-length"], "12");
+    assert_eq!(placed["host"], "backend:8443");
+
+    let placed = arranged(&listed, "https://backend:443", &headers, 0);
+    assert_eq!(
+        names(&placed),
+        ["accept", "host", "x-a"],
+        "a request without a body has no content-length to place"
+    );
+    assert_eq!(placed["host"], "backend", "the default port is left off");
+
+    headers.insert("host", HeaderValue::from_static("gateway.example.corp"));
+    let placed = arranged(&listed, "http://backend", &headers, 0);
+    assert_eq!(names(&placed), ["accept", "host", "x-a"]);
+    assert_eq!(
+        placed["host"], "gateway.example.corp",
+        "a host the backend forces is the one placed"
+    );
+}

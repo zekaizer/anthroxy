@@ -273,7 +273,10 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 55] = [
+const PRESET_LINES: [&str; 58] = [
+    "header_order = [\"authorization\", \"host\", \"Host\", \"a b\", \"\", \"host\"]",
+    "header_order = [[\"accept\"]]",
+    "header_order = \"accept\"",
     "http_version = \"1.1\"",
     "http_version = \"2\"",
     "http_version = 1.1",

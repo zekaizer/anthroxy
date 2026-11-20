@@ -1,6 +1,6 @@
 //! How the requests along one route are written.
 
-use super::{Backend, ForcedHeaders, Transport};
+use super::{Backend, ForcedHeaders, HeaderOrder, Transport};
 use crate::body_field::{BodyEdits, BodyField};
 use crate::config::{
     BackendConfig, DropHeaders, HttpVersion, ModelConfig, Preset, PresetLibrary, SetFields,
@@ -26,6 +26,8 @@ pub struct HeaderRules {
     /// Client headers the backend never sees: the preset's `drop_headers`
     /// and the backend's.
     pub drop: DropHeaders,
+    /// The preset's `header_order`.
+    pub order: HeaderOrder,
     /// Which HTTP client sends the request.
     pub transport: Transport,
 }
@@ -87,6 +89,7 @@ impl Dialect {
             headers: HeaderRules {
                 forced: ForcedHeaders::new(&backend.headers).over(preset_headers),
                 drop: DropHeaders::new(&drop),
+                order: HeaderOrder::new(preset.header_order.clone()),
                 transport: Transport {
                     http1_only: preset.http_version == HttpVersion::Http11,
                     title_case: false,

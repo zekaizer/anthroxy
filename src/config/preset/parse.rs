@@ -7,7 +7,7 @@ use http::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde::de::IntoDeserializer;
 
-use super::Preset;
+use super::{HttpVersion, Preset};
 use crate::config::emulate::PRESET_KEY;
 use crate::config::header_rules;
 use crate::config::set_fields::{PresetFields, check_preset_path};
@@ -19,11 +19,12 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 13] = [
+const KEYS: [(&str, Reader); 14] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
     ("http_version", http_version),
+    ("header_order", header_order),
     ("set_fields", set_fields),
     ("omit_fields", omit_fields),
     ("field_order", field_order),
@@ -147,6 +148,38 @@ fn drop_headers(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<Str
 fn http_version(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
     if let Some(version) = one_of("http_version", value, problems) {
         preset.http_version = version;
+    }
+}
+
+fn header_order(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    needs_http_1_1("header_order", "the order of headers", preset, problems);
+    let Some(names) = string_list("header_order", value, problems) else {
+        return;
+    };
+    for (index, name) in names.iter().enumerate() {
+        let shown = short(name);
+        match HeaderName::from_bytes(name.as_bytes()) {
+            Err(_) => problems.push(format!(
+                "header_order: `{shown}` is not a valid header name"
+            )),
+            Ok(header) if header.as_str() != name => problems.push(format!(
+                "header_order: `{shown}` must be written in lower case"
+            )),
+            Ok(_) if names[..index].contains(name) => {
+                problems.push(format!("header_order: `{shown}` is listed twice"))
+            }
+            Ok(header) => preset.header_order.push(header),
+        }
+    }
+}
+
+/// A problem at `field` unless the preset keeps its routes on HTTP/1.1, the
+/// only version in which `what` exists.
+fn needs_http_1_1(field: &str, what: &str, preset: &Preset, problems: &mut Vec<String>) {
+    if preset.http_version != HttpVersion::Http11 {
+        problems.push(format!(
+            "{field}: needs `http_version = \"1.1\"`; {what} exists in HTTP/1.1 only"
+        ));
     }
 }
 
