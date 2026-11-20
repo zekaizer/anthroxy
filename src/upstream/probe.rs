@@ -141,6 +141,7 @@ async fn fill_native_context(client: &UpstreamClient, backend: &Backend, models:
 }
 
 fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> {
+    let target = backend.target();
     // What Claude Code always sends; backend `headers` still override.
     let mut base = HeaderMap::new();
     base.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
@@ -149,10 +150,10 @@ fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> 
         HeaderValue::from_static("application/json"),
     );
     UpstreamRequest {
-        backend,
+        target,
         method: Method::GET,
         path_and_query: path,
-        headers: upstream_headers(&base, backend.target()),
+        headers: upstream_headers(&base, target),
         body: Bytes::new(),
         stream: false,
         origin: Origin::default(),
@@ -181,7 +182,7 @@ mod tests {
     use crate::upstream::{HeaderSource, RetryPolicy};
 
     fn client() -> UpstreamClient {
-        UpstreamClient::new(reqwest::Client::new(), RetryPolicy::never())
+        UpstreamClient::new(reqwest::Client::new().into(), RetryPolicy::never())
     }
 
     #[test]

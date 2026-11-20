@@ -162,10 +162,11 @@ impl LiveCatalog {
         upstream: &UpstreamClient,
         client_headers: &HeaderMap,
     ) -> Result<Vec<ModelObject>, crate::upstream::UpstreamError> {
-        let headers = upstream_headers(client_headers, self.backend.target());
+        let target = self.backend.target();
+        let headers = upstream_headers(client_headers, target);
         let upstream = upstream
             .send(UpstreamRequest {
-                backend: &self.backend,
+                target,
                 method: Method::GET,
                 path_and_query: &self.backend.models_path,
                 headers,

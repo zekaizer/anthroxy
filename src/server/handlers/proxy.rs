@@ -250,7 +250,7 @@ async fn handle(
     let upstream = match state
         .upstream
         .send(UpstreamRequest {
-            backend,
+            target,
             method: parts.method.clone(),
             path_and_query,
             headers,

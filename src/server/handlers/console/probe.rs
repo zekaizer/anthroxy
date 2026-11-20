@@ -18,7 +18,7 @@ use crate::ir::Model;
 use crate::routing::Registry;
 use crate::server::{AppState, RequestId, Snapshot};
 use crate::upstream::probe::{ModelsProbe, probe_all};
-use crate::upstream::{RetryPolicy, UpstreamClient, http_client};
+use crate::upstream::{HttpClients, RetryPolicy, UpstreamClient};
 
 /// Per backend, like `anthroxy check --timeout`.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -28,10 +28,16 @@ pub async fn probe(
     Extension(snapshot): Extension<Arc<Snapshot>>,
     request_id: RequestId,
 ) -> Response {
-    let client = match http_client(&snapshot.config.upstream, &snapshot.config.backends)
-        .and_then(|builder| Ok(builder.timeout(PROBE_TIMEOUT).build()?))
-    {
-        Ok(http) => UpstreamClient::new(http, RetryPolicy::never()),
+    let client = match HttpClients::build(
+        &snapshot.config.upstream,
+        &snapshot.config.backends,
+        Some(PROBE_TIMEOUT),
+        snapshot
+            .registry
+            .backends()
+            .map(|backend| backend.dialect.headers.transport),
+    ) {
+        Ok(clients) => UpstreamClient::new(clients, RetryPolicy::never()),
         Err(problem) => {
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,

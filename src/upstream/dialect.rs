@@ -1,6 +1,6 @@
 //! How the requests along one route are written.
 
-use super::{Backend, ForcedHeaders};
+use super::{Backend, ForcedHeaders, Transport};
 use crate::config::{BackendConfig, DropHeaders, ModelConfig, SetFields};
 use crate::openai::EncodeOptions;
 
@@ -20,6 +20,8 @@ pub struct HeaderRules {
     pub forced: ForcedHeaders,
     /// Client headers the backend never sees.
     pub drop: DropHeaders,
+    /// Which HTTP client sends the request.
+    pub transport: Transport,
 }
 
 /// The body of a chat request.
@@ -40,6 +42,7 @@ impl Dialect {
             headers: HeaderRules {
                 forced: ForcedHeaders::new(&backend.headers),
                 drop: DropHeaders::new(&backend.drop_headers),
+                transport: Transport::default(),
             },
             body: BodyRules {
                 set_fields: SetFields::new(&backend.set_fields),

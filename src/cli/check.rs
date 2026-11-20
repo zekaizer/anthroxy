@@ -13,7 +13,7 @@ use super::{Cli, Style, display_path};
 use crate::config::{self, BackendKind, Config};
 use crate::routing::{Registry, Route};
 use crate::upstream::probe::{ModelsProbe, Probe, probe_all};
-use crate::upstream::{Backend, RetryPolicy, UpstreamClient, http_client};
+use crate::upstream::{Backend, HttpClients, RetryPolicy, Transport, UpstreamClient};
 
 #[derive(Debug, Clone, Args)]
 pub struct CheckArgs {
@@ -85,8 +85,21 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
     };
 
-    let client = match http_client(&config.upstream, &config.backends) {
-        Ok(client) => client,
+    // Without a probe nothing is sent, and `ca_certificate` is still read.
+    let transports: Vec<Transport> = match args.no_probe {
+        true => Vec::new(),
+        false => registry
+            .backends()
+            .map(|backend| backend.dialect.headers.transport)
+            .collect(),
+    };
+    let clients = match HttpClients::build(
+        &config.upstream,
+        &config.backends,
+        Some(args.timeout),
+        transports,
+    ) {
+        Ok(clients) => clients,
         Err(error) => {
             println!("{} {error}", style.err_mark());
             anyhow::bail!("configuration is not usable");
@@ -110,8 +123,7 @@ pub async fn run(cli: &Cli, args: &CheckArgs, style: &Style) -> anyhow::Result<(
         }
         println!("  {}", style.dim("(probing skipped: --no-probe)"));
     } else {
-        let client =
-            UpstreamClient::new(client.timeout(args.timeout).build()?, RetryPolicy::never());
+        let client = UpstreamClient::new(clients, RetryPolicy::never());
         let results = probe_all(&client, registry.backends().map(Arc::as_ref)).await;
         for (backend, result) in registry.backends().zip(&results) {
             let (ok, ids) = report_backend(backend, result, style);

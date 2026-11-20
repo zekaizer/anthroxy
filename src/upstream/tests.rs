@@ -525,6 +525,80 @@ async fn retry_policy_retries_connection_refused_but_not_timeouts() {
     assert_eq!(policy.on_transport_error(1, &closed), Decision::GiveUp);
 }
 
+/// The head of a request sent over `transport` to a backend that answers 200.
+async fn head_sent_over(transport: Transport) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = BackendConfig {
+        kind: BackendKind::Anthropic,
+        url: format!("http://{}", listener.local_addr().unwrap()),
+        models_path: BackendConfig::default_models_path(),
+        live_models: false,
+        credential: CredentialConfig::None,
+        headers: Default::default(),
+        anthropic_beta: Vec::new(),
+        drop_headers: Vec::new(),
+        drop_fields: Vec::new(),
+        set_fields: Default::default(),
+        mid_conversation_system: Default::default(),
+        proxy: None,
+        header_command: None,
+    };
+    let dialect = Dialect {
+        headers: HeaderRules {
+            transport,
+            ..Default::default()
+        },
+        body: Default::default(),
+    };
+    let backend = Backend::from_config("b", &config, Arc::new(dialect)).unwrap();
+    let served = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut buf = [0u8; 1024];
+        while !head.ends_with(b"\r\n\r\n") {
+            let read = socket.read(&mut buf).await.unwrap();
+            assert!(read > 0, "closed before the head ended");
+            head.extend_from_slice(&buf[..read]);
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        String::from_utf8(head).unwrap()
+    });
+    let client =
+        UpstreamClient::from_config(&UpstreamConfig::default(), &Default::default()).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-request-source", HeaderValue::from_static("cli"));
+    let sent = client
+        .send(UpstreamRequest {
+            target: backend.target(),
+            method: http::Method::GET,
+            path_and_query: "/v1/models",
+            headers,
+            body: bytes::Bytes::new(),
+            stream: false,
+            origin: Origin::default(),
+        })
+        .await;
+    assert!(sent.is_ok(), "{:?}", sent.err());
+    served.await.unwrap()
+}
+
+#[tokio::test]
+async fn a_request_is_sent_by_the_client_of_its_transport() {
+    let head = head_sent_over(Transport::default()).await;
+    assert!(head.contains("\r\nx-request-source: cli\r\n"), "{head}");
+    let head = head_sent_over(Transport {
+        http1_only: true,
+        title_case: true,
+    })
+    .await;
+    assert!(head.contains("\r\nX-Request-Source: cli\r\n"), "{head}");
+}
+
 #[test]
 fn ca_certificate_must_be_a_readable_pem_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -534,17 +608,17 @@ fn ca_certificate_must_be_a_readable_pem_file() {
     };
 
     let missing = dir.path().join("missing.pem");
-    let error =
-        http_client(&with(&missing), &Default::default()).expect_err("a missing file is an error");
+    let error = UpstreamClient::from_config(&with(&missing), &Default::default())
+        .expect_err("a missing file is an error");
     assert!(error.to_string().contains("missing.pem"), "{error}");
 
     let empty = dir.path().join("empty.pem");
     std::fs::write(&empty, "no certificate here\n").unwrap();
-    let error = http_client(&with(&empty), &Default::default())
+    let error = UpstreamClient::from_config(&with(&empty), &Default::default())
         .expect_err("a file without a certificate is an error");
     assert!(error.to_string().contains("empty.pem"), "{error}");
 
-    assert!(http_client(&UpstreamConfig::default(), &Default::default()).is_ok());
+    assert!(UpstreamClient::from_config(&UpstreamConfig::default(), &Default::default()).is_ok());
 }
 
 #[test]

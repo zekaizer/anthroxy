@@ -9,14 +9,14 @@ pub mod network;
 pub mod probe;
 mod retry;
 mod timeout;
+mod transport;
 
 #[cfg(test)]
 mod tests;
 
 pub use backend::{Backend, BackendBuildError};
 pub use client::{
-    ClientBuildError, Origin, UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse,
-    describe, http_client,
+    Origin, UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse, describe,
 };
 pub use dialect::{BodyRules, Dialect, HeaderRules, Target};
 pub use header_command::{
@@ -29,3 +29,4 @@ pub use headers::{
 };
 pub use retry::{Decision, MAX_BACKOFF, RetryPolicy, is_connection_failure};
 pub use timeout::{BodyClock, BodyError, TimedBody, TimeoutClock, Timeouts};
+pub use transport::{ClientBuildError, HttpClients, Transport};
