@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anthroxy::config::{Config, process_env};
@@ -22,9 +22,20 @@ pub struct TestRouter {
 
 impl TestRouter {
     pub async fn start(config_toml: &str) -> Self {
-        let mut config = Config::parse(config_toml, process_env).expect("valid test config");
+        let config = Config::parse(config_toml, process_env).expect("valid test config");
+        Self::serve(config, config_toml.contains("[stats]")).await
+    }
+
+    /// A router serving the configuration file at `path`, with the presets
+    /// beside it.
+    pub async fn start_at(path: &Path) -> Self {
+        let config = Config::load(path).expect("valid test config");
+        Self::serve(config, false).await
+    }
+
+    async fn serve(mut config: Config, own_stats: bool) -> Self {
         let state = tempfile::tempdir().unwrap();
-        if !config_toml.contains("[stats]") {
+        if !own_stats {
             config.stats.dir = state.path().join("stats");
         }
         let stats_dir = config.stats.dir.clone();

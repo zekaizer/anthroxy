@@ -1467,3 +1467,158 @@ fn header_command_env_values_are_redacted_in_the_view() {
     assert_eq!(command["timeout"], "5s");
     assert_eq!(command["env"]["GW_KEY_FILE"], view::REDACTED);
 }
+
+/// `text` loaded from a file with `presets` beside it, each `(name, text)`.
+fn load(text: &str, presets: &[(&str, &str)]) -> Result<Config, ConfigError> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, text).unwrap();
+    if !presets.is_empty() {
+        std::fs::create_dir(presets_dir(&path)).unwrap();
+    }
+    for (name, preset) in presets {
+        std::fs::write(presets_dir(&path).join(name), preset).unwrap();
+    }
+    Config::load(&path)
+}
+
+fn load_problems(text: &str, presets: &[(&str, &str)]) -> Vec<String> {
+    match load(text, presets) {
+        Err(ConfigError::Invalid(p)) => p,
+        other => panic!("expected validation failure, got {other:?}"),
+    }
+}
+
+const OPENAI: &str = r#"
+[server]
+token = "secret"
+
+[backends.local]
+kind = "openai"
+url = "http://127.0.0.1:1234"
+
+[[models]]
+id = "gemma"
+backend = "local"
+"#;
+
+const CLIENT_PRESET: &str =
+    "[variables]\nversion = \"1\"\n[headers]\nuser-agent = \"c/{version}\"\n";
+
+/// `OPENAI` with `line` in the backend's table.
+fn openai_backend(line: &str) -> String {
+    OPENAI.replace("kind = \"openai\"", &format!("kind = \"openai\"\n{line}"))
+}
+
+#[test]
+fn emulate_is_a_preset_name_or_a_table_with_variable_values() {
+    let presets = [("client.toml", CLIENT_PRESET)];
+    let c = load(&openai_backend("emulate = \"client\""), &presets).unwrap();
+    assert_eq!(
+        c.backends["local"].emulate,
+        Some(EmulateConfig {
+            preset: "client".into(),
+            values: Default::default(),
+        })
+    );
+    let text = format!("{OPENAI}emulate = {{ preset = \"client\", version = \"2\" }}\n");
+    let c = load(&text, &presets).unwrap();
+    assert_eq!(c.backends["local"].emulate, None);
+    assert_eq!(
+        c.models[0].emulate,
+        Some(EmulateConfig {
+            preset: "client".into(),
+            values: [("version".to_owned(), "2".to_owned())].into(),
+        })
+    );
+    for wrong in [
+        "emulate = { version = \"2\" }",
+        "emulate = { preset = \"client\", version = 2 }",
+        "emulate = 3",
+    ] {
+        assert!(
+            matches!(
+                load(&openai_backend(wrong), &presets),
+                Err(ConfigError::Parse(_))
+            ),
+            "{wrong}"
+        );
+    }
+}
+
+#[test]
+fn emulate_applies_only_to_an_openai_backend() {
+    let presets = [("client.toml", CLIENT_PRESET)];
+    let text = format!("{MINIMAL}emulate = \"client\"\n").replace(
+        "url = \"http://127.0.0.1:1234\"",
+        "url = \"http://127.0.0.1:1234\"\nemulate = \"client\"",
+    );
+    assert_eq!(
+        load_problems(&text, &presets),
+        [
+            "backends.local.emulate: applies only to kind = \"openai\"",
+            "models[0].emulate: applies only to a backend with kind = \"openai\"",
+        ]
+    );
+}
+
+#[test]
+fn emulate_must_name_a_preset_and_only_its_variables() {
+    let presets = [
+        ("client.toml", CLIENT_PRESET),
+        ("other.toml", ""),
+        ("notes.txt", "not a preset"),
+    ];
+    let text = format!(
+        "{}emulate = {{ preset = \"client\", os = \"linux\", version = \"a\\nb\" }}\n",
+        openai_backend("emulate = \"nope\"")
+    );
+    assert_eq!(
+        load_problems(&text, &presets),
+        [
+            "backends.local.emulate: `nope` is not a preset; there are: `client`, `other`",
+            "models[0].emulate.os: preset `client` declares no variable `os`",
+            "models[0].emulate.version: the value cannot be sent in a header",
+        ]
+    );
+    assert_eq!(
+        problems(&openai_backend("emulate = \"client\"")),
+        [
+            "backends.local.emulate: `client` is not a preset; there is no file in `presets/` beside the configuration file"
+        ],
+        "text parsed without a file has no presets"
+    );
+}
+
+#[test]
+fn every_problem_of_a_preset_file_is_reported_under_its_file_name() {
+    let presets = [
+        (
+            "client.toml",
+            "header_case = \"upper\"\n[headers]\nuser-agent = \"c/{versoin}\"\n\"x y\" = \"1\"\n",
+        ),
+        ("fine.toml", CLIENT_PRESET),
+        ("torn.toml", "[headers\n"),
+    ];
+    let found = load_problems(&openai_backend("emulate = \"client\""), &presets);
+    assert_eq!(
+        found[..3],
+        [
+            "presets/client.toml: headers: `x y` is not a valid header name",
+            "presets/client.toml: headers: `user-agent`: `{versoin}` names no variable in [variables]",
+            "presets/client.toml: `header_case` is not a preset key",
+        ],
+        "the backend that names the broken preset adds no problem of its own"
+    );
+    assert_eq!(found.len(), 4, "{found:?}");
+    assert!(
+        found[3].starts_with("presets/torn.toml: line 1: "),
+        "a preset nothing names is checked too: {found:?}"
+    );
+}
+
+#[test]
+fn a_configuration_without_a_presets_directory_loads() {
+    let c = load(MINIMAL, &[]).unwrap();
+    assert!(c.presets.problems().is_empty());
+}

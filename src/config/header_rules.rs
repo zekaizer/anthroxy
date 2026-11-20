@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::{HeaderPattern, Template, TemplateError};
+use super::{HeaderPattern, TemplateError};
 use crate::text::short;
 
 /// Framing and hop-by-hop headers: the HTTP client owns them, so a value set
@@ -36,10 +36,13 @@ const ALREADY_DROPPED: [&str; 7] = [
 /// Headers the backend needs to read the request the router sends it.
 const REQUIRED: [(&str, &str); 1] = [("content-type", "says what the body is")];
 
-/// The problems of a `headers` table written at `field`.
+/// The problems of a `headers` table written at `field`. `reads_client`
+/// parses a value the way its table does and says whether it reads the
+/// client's request.
 pub(super) fn check_forced_headers(
     field: &str,
     headers: &BTreeMap<String, String>,
+    reads_client: impl Fn(&str) -> Result<bool, TemplateError>,
     problems: &mut Vec<String>,
 ) {
     // Header names are case-insensitive, table keys are not: two spellings
@@ -71,7 +74,7 @@ pub(super) fn check_forced_headers(
                 short(header)
             ));
         } else {
-            match Template::parse(value) {
+            match reads_client(value) {
                 // The value may be a key, and what follows `{header:` is
                 // part of it: the problem quotes none of it.
                 Err(TemplateError::NotAHeaderName(_)) => problems.push(format!(
@@ -79,12 +82,12 @@ pub(super) fn check_forced_headers(
                     short(header)
                 )),
                 Err(problem) => problems.push(format!("{field}: `{}`: {problem}", short(header))),
-                Ok(template) => {
+                Ok(reads_client) => {
                     let required = REQUIRED
                         .iter()
                         .find(|(required, _)| header.eq_ignore_ascii_case(required));
                     if let Some((_, why)) = required
-                        && template.reads_client()
+                        && reads_client
                     {
                         problems.push(format!(
                             "{field}: `{}` {why}; a value read from the client's request may be left out",

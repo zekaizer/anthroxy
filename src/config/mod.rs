@@ -8,12 +8,14 @@ mod byte_size;
 pub mod client_env;
 mod credential_header;
 mod drop_headers;
+mod emulate;
 pub(crate) mod env;
 mod error;
 pub mod example;
 mod header_command;
 mod header_rules;
 mod origin;
+mod preset;
 mod schema;
 mod set_fields;
 pub mod snippet;
@@ -29,9 +31,11 @@ use std::path::{Path, PathBuf};
 
 pub use credential_header::{CredentialHeader, X_API_KEY};
 pub use drop_headers::{CLAUDE_CODE_PRESET, DropHeaders, HeaderPattern, PatternError};
+pub use emulate::EmulateConfig;
 pub use env::EnvSecretError;
 pub use error::ConfigError;
 pub use origin::origin;
+pub use preset::{BindProblem, Emulation, Preset, PresetLibrary};
 pub use schema::{
     BackendConfig, BackendKind, CommandOutput, Config, CredentialConfig, HeaderCommandConfig,
     LogFormat, LoggingConfig, ModelConfig, RoutingConfig, ServerConfig, StatsConfig,
@@ -80,21 +84,42 @@ pub fn default_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// Where the preset files of a configuration file are: `presets/` beside it.
+pub fn presets_dir(config: &Path) -> PathBuf {
+    config.with_file_name("presets")
+}
+
 impl Config {
-    /// Reads, expands and validates the file at `path`.
+    /// Reads, expands and validates the file at `path`, with the preset files
+    /// beside it. A problem in a preset file is a [`ConfigError::Invalid`]
+    /// line.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
             path: path.to_path_buf(),
             source,
         })?;
-        Config::parse(&text, process_env)
+        Config::parse_with(
+            &text,
+            process_env,
+            PresetLibrary::with_dir(&presets_dir(path)),
+        )
     }
 
     /// Parses `text`, resolving `${NAME}` in string values through `lookup`,
-    /// then validates.
+    /// then validates. No preset file is read.
     pub fn parse(
         text: &str,
         lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Config, ConfigError> {
+        Config::parse_with(text, lookup, PresetLibrary::default())
+    }
+
+    /// [`Config::parse`] with `presets` for `emulate` to name. `${NAME}` is
+    /// not expanded in a preset: it is the same file on every machine.
+    pub fn parse_with(
+        text: &str,
+        lookup: impl Fn(&str) -> Option<String>,
+        presets: PresetLibrary,
     ) -> Result<Config, ConfigError> {
         let mut document: toml::Value =
             toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
@@ -102,6 +127,7 @@ impl Config {
         let mut config: Config = document
             .try_into()
             .map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))?;
+        config.presets = presets;
         // A credential command keeps its references and expands them each
         // run; that every one resolves is still checked here.
         for backend in config.backends.values() {

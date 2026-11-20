@@ -5,13 +5,16 @@ use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
 use crate::config::view::REDACTED;
-use crate::config::{BackendConfig, BackendKind, CredentialConfig, UpstreamConfig};
+use crate::config::{
+    BackendConfig, BackendKind, CredentialConfig, EmulateConfig, PresetLibrary, UpstreamConfig,
+};
 use crate::upstream::{DropReason, dropped_headers};
 
 /// The backend `config` describes, with the dialect of a request no route
 /// makes.
 pub(super) fn built(name: &str, config: &BackendConfig) -> Backend {
-    Backend::from_config(name, config, Arc::new(Dialect::new(config, None))).unwrap()
+    let dialect = Dialect::new(config, None, &PresetLibrary::default());
+    Backend::from_config(name, config, Arc::new(dialect)).unwrap()
 }
 
 fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
@@ -38,6 +41,7 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     )
 }
@@ -59,6 +63,7 @@ fn backend_with_drops(drops: &[&str]) -> Backend {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     )
 }
@@ -83,6 +88,7 @@ fn backend_forcing(headers: &[(&str, &str)], drops: &[&str]) -> Backend {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     )
 }
@@ -316,6 +322,7 @@ fn every_header_the_backend_does_not_see_says_why() {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     );
 
@@ -358,6 +365,59 @@ fn every_header_the_backend_does_not_see_says_why() {
             "{name} is in neither report"
         );
     }
+}
+
+/// A `kind = "openai"` backend that emulates the preset `text` describes,
+/// with `values` for its variables.
+fn backend_emulating(text: &str, values: &[(&str, &str)]) -> Backend {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("client.toml"), text).unwrap();
+    let presets = PresetLibrary::with_dir(dir.path());
+    let config = BackendConfig {
+        kind: BackendKind::OpenAi,
+        url: "http://backend".into(),
+        models_path: BackendConfig::default_models_path(),
+        live_models: false,
+        credential: CredentialConfig::None,
+        headers: Default::default(),
+        anthropic_beta: Vec::new(),
+        drop_headers: Vec::new(),
+        drop_fields: Vec::new(),
+        set_fields: Default::default(),
+        mid_conversation_system: Default::default(),
+        proxy: None,
+        header_command: None,
+        emulate: Some(EmulateConfig {
+            preset: "client".into(),
+            values: values
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+        }),
+    };
+    let dialect = Dialect::new(&config, None, &presets);
+    Backend::from_config("b", &config, Arc::new(dialect)).unwrap()
+}
+
+#[test]
+fn a_preset_header_is_reported_as_a_forced_header() {
+    let backend = backend_emulating("[headers]\nuser-agent = \"client/1\"\n", &[]);
+
+    let client = client_headers();
+    let dropped = dropped_headers(&client, backend.target());
+    let overridden = dropped.iter().find(|h| h.name == "user-agent").unwrap();
+    assert_eq!(
+        (overridden.value.as_str(), overridden.reason),
+        ("claude-cli/2.0", DropReason::Overridden)
+    );
+    let headers = upstream_headers(&client, backend.target());
+    assert_eq!(headers["user-agent"], "client/1");
+    let sent = sent_headers(backend.target(), &headers, None, 0, SecretView::Redacted);
+    let shown = sent.iter().find(|h| h.name == "user-agent").unwrap();
+    assert_eq!(
+        (shown.value.as_str(), shown.source),
+        (REDACTED, HeaderSource::Backend)
+    );
 }
 
 #[test]
@@ -544,6 +604,7 @@ async fn head_sent_over(transport: Transport) -> String {
         mid_conversation_system: Default::default(),
         proxy: None,
         header_command: None,
+        emulate: None,
     };
     let dialect = Dialect {
         headers: HeaderRules {
@@ -662,6 +723,7 @@ fn the_logged_request_target_keeps_the_url_userinfo_out() {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     );
     assert_eq!(

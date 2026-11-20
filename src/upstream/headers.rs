@@ -28,8 +28,8 @@ pub fn header_value(text: &str) -> HeaderValue {
     HeaderValue::from_str(text).expect("validated header-safe")
 }
 
-/// Headers a backend forces onto every upstream request. A value may read the
-/// client's request (ADR-0019).
+/// Headers forced onto every upstream request to a backend. A value may read
+/// the client's request (ADR-0019).
 #[derive(Default)]
 pub struct ForcedHeaders(Vec<(HeaderName, Template)>);
 
@@ -57,6 +57,16 @@ impl ForcedHeaders {
                 })
                 .collect(),
         )
+    }
+
+    /// `preset`'s headers for the names not set here, then these.
+    pub fn over(self, preset: Vec<(HeaderName, Template)>) -> Self {
+        let mut merged: Vec<_> = preset
+            .into_iter()
+            .filter(|(name, _)| !self.contains_key(name))
+            .collect();
+        merged.extend(self.0);
+        Self(merged)
     }
 
     pub fn len(&self) -> usize {

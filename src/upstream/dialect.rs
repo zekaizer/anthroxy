@@ -1,12 +1,13 @@
 //! How the requests along one route are written.
 
 use super::{Backend, ForcedHeaders, Transport};
-use crate::config::{BackendConfig, DropHeaders, ModelConfig, SetFields};
+use crate::config::{BackendConfig, DropHeaders, ModelConfig, PresetLibrary, SetFields};
 use crate::openai::EncodeOptions;
 
 /// How requests along one route are written: the backend's `headers`,
-/// `drop_headers`, `set_fields` and `mid_conversation_system`, with what the
-/// route's `[[models]]` entry sets in their place. Built once per snapshot.
+/// `drop_headers`, `set_fields` and `mid_conversation_system` over the preset
+/// in effect, with what the route's `[[models]]` entry sets in their place.
+/// Built once per snapshot.
 #[derive(Debug)]
 pub struct Dialect {
     pub headers: HeaderRules,
@@ -36,11 +37,25 @@ pub struct BodyRules {
 impl Dialect {
     /// The dialect of the route `model` makes on `backend`; without a model,
     /// of a request no route makes (the model list, a probe). A key the entry
-    /// sets replaces the backend's. Assumes both passed validation.
-    pub fn new(backend: &BackendConfig, model: Option<&ModelConfig>) -> Self {
+    /// sets replaces the backend's, `emulate` included; a key the backend
+    /// writes wins over the preset's (ADR-0022). Assumes both passed
+    /// validation against `presets`.
+    pub fn new(
+        backend: &BackendConfig,
+        model: Option<&ModelConfig>,
+        presets: &PresetLibrary,
+    ) -> Self {
+        let emulation = model
+            .and_then(|model| model.emulate.as_ref())
+            .or(backend.emulate.as_ref())
+            .map(|emulate| presets.bind(emulate).expect("validated emulate"));
+        let preset_headers = emulation
+            .as_ref()
+            .map(|emulation| emulation.headers())
+            .unwrap_or_default();
         Self {
             headers: HeaderRules {
-                forced: ForcedHeaders::new(&backend.headers),
+                forced: ForcedHeaders::new(&backend.headers).over(preset_headers),
                 drop: DropHeaders::new(&backend.drop_headers),
                 transport: Transport::default(),
             },

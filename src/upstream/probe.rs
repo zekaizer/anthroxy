@@ -214,6 +214,7 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         );
         let request = list_request(&backend, "/v1/models");
@@ -243,6 +244,7 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         );
         let probe = super::probe(&client(), &backend).await;
@@ -288,6 +290,7 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         )
     }
@@ -354,6 +357,7 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         );
 
@@ -436,6 +440,7 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         );
 
@@ -492,6 +497,7 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         )
     }

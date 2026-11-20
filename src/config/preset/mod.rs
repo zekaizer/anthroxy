@@ -1,0 +1,88 @@
+//! Client emulation presets (ADR-0022): a preset file once checked, and a
+//! preset with a value for each of its variables.
+
+mod library;
+mod parse;
+
+#[cfg(test)]
+mod tests;
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
+
+use http::HeaderName;
+
+pub use library::{BindProblem, PresetLibrary};
+
+use super::Template;
+use super::template::PresetValue;
+
+/// A preset file whose every key and value passed the checks. An absent key
+/// holds what the router does without a preset.
+#[derive(Default)]
+pub struct Preset {
+    pub name: String,
+    /// Declared variables with their defaults.
+    pub variables: BTreeMap<String, String>,
+    /// Every variable a value names is declared.
+    headers: Vec<(HeaderName, PresetValue)>,
+}
+
+/// Names only: a header value may be a key, and the value of a variable is
+/// written into one.
+impl fmt::Debug for Preset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let headers: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("Preset")
+            .field("name", &self.name)
+            .field("variables", &self.variables.keys())
+            .field("headers", &headers)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Preset {
+    /// The preset `text` describes. `Err` holds every problem, each as
+    /// `<key path>: <problem>`.
+    pub fn parse(name: &str, text: &str) -> Result<Preset, Vec<String>> {
+        parse::parse(name, text)
+    }
+
+    /// Whether a header value names `variable`.
+    fn sends_in_a_header(&self, variable: &str) -> bool {
+        self.headers
+            .iter()
+            .any(|(_, value)| value.variables().any(|name| name == variable))
+    }
+}
+
+/// A preset with a value for each of its variables: what one `emulate`
+/// selects, as [`PresetLibrary::bind`] builds it.
+#[derive(Clone)]
+pub struct Emulation {
+    preset: Arc<Preset>,
+    /// Every declared variable: the value `emulate` gave, else the default.
+    values: BTreeMap<String, String>,
+}
+
+/// Names only, as a [`Preset`] is shown.
+impl fmt::Debug for Emulation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Emulation")
+            .field("preset", &self.preset.name)
+            .field("variables", &self.values.keys())
+            .finish()
+    }
+}
+
+impl Emulation {
+    /// The preset's headers with every variable replaced by its value.
+    pub fn headers(&self) -> Vec<(HeaderName, Template)> {
+        self.preset
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), value.bind(&self.values)))
+            .collect()
+    }
+}

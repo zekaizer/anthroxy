@@ -272,3 +272,39 @@ fn configuration_parsing_survives_arbitrary_files() {
         let _ = anthroxy::config::Config::parse(&text, env);
     }
 }
+
+const PRESET_LINES: [&str; 22] = [
+    "[variables]",
+    "version = \"1.19.6\"",
+    "preset = \"x\"",
+    "bad-name = \"\"",
+    "v = 1",
+    "v = \"a\\nb\"",
+    "[headers]",
+    "user-agent = \"opencode/{version}\"",
+    "x-session-id = \"ses_{header:x-claude-code-session-id}{v}{\"",
+    "x-open = \"{header:x\"",
+    "x-key = \"{header:authorization}{{v}}\"",
+    "\"x y\" = \"{}\"",
+    "content-length = \"1\"",
+    "Content-Type = \"{header:a}\"",
+    "X-A = \"{한}\"",
+    "x-a = 3",
+    "headers = \"x\"",
+    "variables = []",
+    "unknown = { a = [1] }",
+    "[headers.user-agent]",
+    "[[headers]]",
+    "= \"",
+];
+
+#[test]
+fn preset_parsing_survives_arbitrary_files() {
+    let mut rng = Rng(0x0e30_1a7e);
+    for _ in 0..8_000u32 {
+        let lines: Vec<&str> = (0..rng.upto(10) + 1)
+            .map(|_| *rng.pick(&PRESET_LINES))
+            .collect();
+        let _ = anthroxy::config::Preset::parse("fuzz", &lines.join("\n"));
+    }
+}

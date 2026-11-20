@@ -4,7 +4,10 @@
 use std::collections::{HashMap, HashSet};
 
 use super::view::redacted_url;
-use super::{BackendKind, Config, ConfigError, CredentialConfig, TokenConfig, V1Auth, origin};
+use super::{
+    BackendKind, Config, ConfigError, CredentialConfig, EmulateConfig, PresetLibrary, Template,
+    TokenConfig, V1Auth, origin,
+};
 use super::{header_command, header_rules, set_fields};
 use crate::openai::SystemPlacement;
 use crate::text::short;
@@ -124,6 +127,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         header_rules::check_forced_headers(
             &format!("backends.{name}.headers"),
             &backend.headers,
+            |value| Template::parse(value).map(|template| template.reads_client()),
             &mut problems,
         );
         let forced: Vec<&str> = backend.headers.keys().map(String::as_str).collect();
@@ -175,6 +179,13 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             problems.push(format!(
                 "backends.{name}.mid_conversation_system: applies only to kind = \"openai\""
             ));
+        }
+        if let Some(emulate) = &backend.emulate {
+            let field = format!("backends.{name}.emulate");
+            if backend.kind != BackendKind::OpenAi {
+                problems.push(format!("{field}: applies only to kind = \"openai\""));
+            }
+            check_emulate(&field, emulate, &config.presets, &mut problems);
         }
         if backend.kind == BackendKind::OpenAi && !backend.anthropic_beta.is_empty() {
             problems.push(format!(
@@ -246,6 +257,19 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 "models[{index}].mid_conversation_system: applies only to a backend with kind = \"openai\""
             ));
         }
+        if let Some(emulate) = &model.emulate {
+            let field = format!("models[{index}].emulate");
+            if config
+                .backends
+                .get(&model.backend)
+                .is_some_and(|backend| backend.kind != BackendKind::OpenAi)
+            {
+                problems.push(format!(
+                    "{field}: applies only to a backend with kind = \"openai\""
+                ));
+            }
+            check_emulate(&field, emulate, &config.presets, &mut problems);
+        }
         if !config.backends.contains_key(&model.backend) {
             problems.push(format!(
                 "models[{index}].backend: `{}` is not a configured backend",
@@ -276,10 +300,25 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
         ));
     }
 
+    problems.extend(config.presets.problems().iter().cloned());
+
     if problems.is_empty() {
         Ok(())
     } else {
         Err(ConfigError::Invalid(problems))
+    }
+}
+
+/// The problems of an `emulate` key written at `field`: what keeps
+/// [`PresetLibrary::bind`] from binding it.
+fn check_emulate(
+    field: &str,
+    emulate: &EmulateConfig,
+    presets: &PresetLibrary,
+    problems: &mut Vec<String>,
+) {
+    if let Err(found) = presets.bind(emulate) {
+        problems.extend(found.iter().map(|problem| problem.at(field)));
     }
 }
 

@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use anthroxy::config::{Config, process_env};
 use anthroxy::server::{Loaded, ReloadOutcome, ReloadTrigger};
 use serde_json::json;
+use support::config_dir::ConfigDir;
 use support::mock_upstream::echo;
+use support::openai::{completion, config_with_openai_backend};
 use support::router::{TOKEN, config_with_backend, model_ids};
 use support::{MockUpstream, TestRouter};
 
@@ -237,4 +239,61 @@ async fn reload_runs_the_loader_and_keeps_a_history() {
         router.reload.reloads()[0].outcome,
         ReloadOutcome::Applied { models: 2, .. }
     ));
+}
+
+#[tokio::test]
+async fn a_reload_reads_the_preset_files_again() {
+    let upstream =
+        MockUpstream::start(|_| completion(json!({"role": "assistant", "content": "ok"}), "stop"))
+            .await;
+    let dir = ConfigDir::new(&config_with_openai_backend(&upstream.url(), ""), &[]);
+    let router = TestRouter::start_at(&dir.config()).await;
+    let path = dir.config();
+    router.reload.set_loader(
+        path.clone(),
+        Arc::new(move || {
+            Ok(Loaded {
+                config: Config::load(&path)?,
+                restart_needed: Vec::new(),
+            })
+        }),
+    );
+    let user_agent = || async {
+        let body = json!({"model": "other", "max_tokens": 1, "messages": []});
+        let res = router.post("/v1/messages", &body).send().await.unwrap();
+        assert_eq!(res.status(), 200);
+        upstream.last().header("user-agent").map(str::to_owned)
+    };
+    assert_eq!(user_agent().await, None);
+
+    dir.write_preset("client", "[headers]\nuser-agent = \"client/1\"\n");
+    dir.write_config(&config_with_openai_backend(
+        &upstream.url(),
+        "emulate = \"client\"",
+    ));
+    let event = router.reload.reload(ReloadTrigger::Signal);
+    assert!(
+        matches!(event.outcome, ReloadOutcome::Applied { .. }),
+        "{event:?}"
+    );
+    assert_eq!(user_agent().await.as_deref(), Some("client/1"));
+
+    dir.write_preset("client", "[headers]\nuser-agent = \"client/2\"\n");
+    router.reload.reload(ReloadTrigger::Signal);
+    assert_eq!(user_agent().await.as_deref(), Some("client/2"));
+
+    dir.write_preset("client", "tool_choice = \"auto\"\n");
+    let event = router.reload.reload(ReloadTrigger::Signal);
+    match &event.outcome {
+        ReloadOutcome::Rejected { error } => assert!(
+            error.contains("presets/client.toml: `tool_choice` is not a preset key"),
+            "{error}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        user_agent().await.as_deref(),
+        Some("client/2"),
+        "a rejected reload keeps the presets it had"
+    );
 }

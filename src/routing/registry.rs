@@ -58,7 +58,7 @@ impl Registry {
     pub fn from_config(config: &Config) -> Result<Registry, BackendBuildError> {
         let mut backends = BTreeMap::new();
         for (name, cfg) in &config.backends {
-            let dialect = Arc::new(Dialect::new(cfg, None));
+            let dialect = Arc::new(Dialect::new(cfg, None, &config.presets));
             backends.insert(
                 name.clone(),
                 Arc::new(Backend::from_config(name, cfg, dialect)?),
@@ -73,7 +73,11 @@ impl Registry {
                 upstream_model: m.upstream_model.clone().unwrap_or_else(|| m.id.clone()),
                 display_name: m.display_name.clone().unwrap_or_else(|| m.id.clone()),
                 aliases: m.aliases.clone(),
-                dialect: Arc::new(Dialect::new(&config.backends[&m.backend], Some(m))),
+                dialect: Arc::new(Dialect::new(
+                    &config.backends[&m.backend],
+                    Some(m),
+                    &config.presets,
+                )),
             })
             .collect();
         let mut by_name = HashMap::new();
