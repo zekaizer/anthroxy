@@ -1420,3 +1420,71 @@ fn a_default_tool_choice_applies_to_a_request_with_tools_that_names_none() {
         "with or without tools"
     );
 }
+
+#[test]
+fn a_turn_that_only_calls_tools_gets_the_content_chosen() {
+    let request = request(vec![
+        assistant(vec![Part::ToolUse {
+            id: "c1".into(),
+            name: "read".into(),
+            input: json!({}),
+        }]),
+        assistant(vec![
+            Part::Text("Reading".into()),
+            Part::ToolUse {
+                id: "c2".into(),
+                name: "read".into(),
+                input: json!({}),
+            },
+        ]),
+        assistant(vec![]),
+    ]);
+    let messages = |tool_only_content| {
+        let options = EncodeOptions {
+            tool_only_content,
+            ..Default::default()
+        };
+        let body = Value::Object(encode_request(&request, &options));
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+    };
+    let call = |id: &str| {
+        format!(
+            r#""tool_calls":[{{"id":"{id}","type":"function","function":{{"name":"read","arguments":"{{}}"}}}}]"#
+        )
+    };
+    let with_text = format!(
+        r#"{{"role":"assistant","content":"Reading",{}}}"#,
+        call("c2")
+    );
+    let no_parts = r#"{"role":"assistant","content":""}"#.to_owned();
+    assert_eq!(
+        messages(ToolOnlyContent::Omitted),
+        [
+            format!(r#"{{"role":"assistant",{}}}"#, call("c1")),
+            with_text.clone(),
+            no_parts.clone()
+        ]
+    );
+    assert_eq!(
+        messages(ToolOnlyContent::Empty),
+        [
+            format!(r#"{{"role":"assistant","content":"",{}}}"#, call("c1")),
+            with_text.clone(),
+            no_parts.clone()
+        ]
+    );
+    assert_eq!(
+        messages(ToolOnlyContent::Null),
+        [
+            format!(r#"{{"role":"assistant","content":null,{}}}"#, call("c1")),
+            with_text,
+            no_parts
+        ],
+        "only a turn with tool calls and no text is touched"
+    );
+}

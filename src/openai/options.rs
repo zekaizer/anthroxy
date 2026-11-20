@@ -8,6 +8,7 @@ pub struct EncodeOptions {
     pub max_tokens_field: MaxTokensField,
     /// The `tool_choice` of a request that has tools and names none.
     pub default_tool_choice: Option<ToolChoiceDefault>,
+    pub tool_only_content: ToolOnlyContent,
 }
 
 /// Where a `Role::System` message that is not the first message goes.
@@ -48,4 +49,17 @@ pub enum ToolChoiceDefault {
     Auto,
     Required,
     None,
+}
+
+/// The `content` of an assistant message that calls tools and has no text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolOnlyContent {
+    /// No `content` key.
+    #[default]
+    Omitted,
+    /// `""`
+    Empty,
+    /// `null`
+    Null,
 }

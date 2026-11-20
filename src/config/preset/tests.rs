@@ -1,5 +1,5 @@
 use super::*;
-use crate::openai::{MaxTokensField, SystemPlacement, ToolChoiceDefault};
+use crate::openai::{MaxTokensField, SystemPlacement, ToolChoiceDefault, ToolOnlyContent};
 
 fn problems(text: &str) -> Vec<String> {
     Preset::parse("client", text).expect_err("a preset with problems")
@@ -389,5 +389,28 @@ fn default_tool_choice_is_one_of_three_words() {
     assert_eq!(
         problems("default_tool_choice = { type = \"auto\" }\n"),
         ["default_tool_choice: must be a string"]
+    );
+}
+
+#[test]
+fn tool_only_content_is_one_of_three_words() {
+    for (written, content) in [
+        ("omitted", ToolOnlyContent::Omitted),
+        ("empty", ToolOnlyContent::Empty),
+        ("null", ToolOnlyContent::Null),
+    ] {
+        let text = format!("tool_only_content = \"{written}\"\n");
+        assert_eq!(
+            Preset::parse("client", &text).unwrap().tool_only_content,
+            content
+        );
+    }
+    assert_eq!(
+        Preset::parse("client", "").unwrap().tool_only_content,
+        ToolOnlyContent::Omitted
+    );
+    assert_eq!(
+        problems("tool_only_content = \"\"\n"),
+        ["tool_only_content: `` is not one of `omitted`, `empty`, `null`"]
     );
 }

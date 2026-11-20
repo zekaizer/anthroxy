@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use serde_json::{Map, Value, json};
 
-use super::options::{EncodeOptions, SystemPlacement, ToolChoiceDefault};
+use super::options::{EncodeOptions, SystemPlacement, ToolChoiceDefault, ToolOnlyContent};
 use crate::ir::{Part, Request, RequestMessage, Role, ToolChoice};
 
 /// Text parts of one message are joined with a blank line.
@@ -40,7 +40,7 @@ pub fn encode(request: &Request, options: &EncodeOptions) -> Map<String, Value> 
         match (message.role, placement) {
             (Role::System, SystemPlacement::Merge) => {}
             (Role::System, SystemPlacement::User) if leading => {
-                encode_message(message, &mut messages)
+                encode_message(message, options, &mut messages)
             }
             // Marked the way Claude Code marks its own system notes inside a
             // user turn, so the model does not answer it as user input.
@@ -48,7 +48,7 @@ pub fn encode(request: &Request, options: &EncodeOptions) -> Map<String, Value> 
                 "role": "user",
                 "content": format!("<system-reminder>\n{}\n</system-reminder>", text_of(message)),
             })),
-            _ => encode_message(message, &mut messages),
+            _ => encode_message(message, options, &mut messages),
         }
     }
     let mut body = Map::new();
@@ -134,7 +134,7 @@ fn text_of(message: &RequestMessage) -> String {
     texts.join(TEXT_SEPARATOR)
 }
 
-fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
+fn encode_message(message: &RequestMessage, options: &EncodeOptions, out: &mut Vec<Value>) {
     let emitted_before = out.len();
     let mut pieces: Vec<Piece> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
@@ -218,7 +218,15 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
         (None, true) => {
             object.insert("content".into(), json!(""));
         }
-        (None, false) => {}
+        (None, false) => match options.tool_only_content {
+            ToolOnlyContent::Omitted => {}
+            ToolOnlyContent::Empty => {
+                object.insert("content".into(), json!(""));
+            }
+            ToolOnlyContent::Null => {
+                object.insert("content".into(), Value::Null);
+            }
+        },
     }
     if !tool_calls.is_empty() {
         object.insert("tool_calls".into(), Value::Array(tool_calls));

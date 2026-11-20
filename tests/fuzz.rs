@@ -273,7 +273,9 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 45] = [
+const PRESET_LINES: [&str; 47] = [
+    "tool_only_content = \"null\"",
+    "tool_only_content = 0",
     "default_tool_choice = \"required\"",
     "default_tool_choice = false",
     "max_tokens_field = \"max_completion_tokens\"",

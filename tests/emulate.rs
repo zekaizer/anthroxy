@@ -569,3 +569,64 @@ async fn a_preset_gives_the_tool_choice_of_a_request_with_tools_that_names_none(
         "what Claude Code named is kept"
     );
 }
+
+/// A conversation whose assistant turn called a tool and said nothing.
+fn chat_after_a_tool_only_turn(model: &str) -> Value {
+    json!({
+        "model": model,
+        "max_tokens": 16,
+        "messages": [
+            {"role": "user", "content": "read a.rs"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"path": "a.rs"}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "fn main() {}"}
+            ]}
+        ]
+    })
+}
+
+/// The assistant message of the request the backend received, as sent.
+async fn assistant_turn(router: &TestRouter, upstream: &MockUpstream, body: &Value) -> String {
+    let body = sent(router, upstream, body).await.json();
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .expect("an assistant message")
+        .to_string()
+}
+
+const READ_CALL: &str = r#""tool_calls":[{"id":"toolu_1","type":"function","function":{"name":"Read","arguments":"{\"path\":\"a.rs\"}"}}]"#;
+
+#[tokio::test]
+async fn a_preset_writes_the_content_of_a_turn_that_only_calls_tools() {
+    let upstream = backend().await;
+    let presets = [
+        ("empty", "tool_only_content = \"empty\"\n"),
+        ("null", "tool_only_content = \"null\"\n"),
+        ("omitted", "tool_only_content = \"omitted\"\n"),
+    ];
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"empty\"", "emulate = \"null\""),
+        &presets,
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+    assert_eq!(
+        assistant_turn(&router, &upstream, &chat_after_a_tool_only_turn("qwen")).await,
+        format!(r#"{{"role":"assistant","content":"",{READ_CALL}}}"#)
+    );
+    assert_eq!(
+        assistant_turn(&router, &upstream, &chat_after_a_tool_only_turn("other")).await,
+        format!(r#"{{"role":"assistant","content":null,{READ_CALL}}}"#)
+    );
+
+    let dir = ConfigDir::new(&config(&upstream, "emulate = \"omitted\"", ""), &presets);
+    let router = TestRouter::start_at(&dir.config()).await;
+    assert_eq!(
+        assistant_turn(&router, &upstream, &chat_after_a_tool_only_turn("qwen")).await,
+        format!(r#"{{"role":"assistant",{READ_CALL}}}"#)
+    );
+}
