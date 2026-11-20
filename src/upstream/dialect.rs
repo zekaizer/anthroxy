@@ -17,9 +17,11 @@ pub struct Dialect {
 /// The headers of every request to the backend, the model list included.
 #[derive(Debug, Default)]
 pub struct HeaderRules {
-    /// Headers forced onto the request.
+    /// Headers forced onto the request: the backend's `headers`, and the
+    /// preset's for the names it does not set.
     pub forced: ForcedHeaders,
-    /// Client headers the backend never sees.
+    /// Client headers the backend never sees: the preset's `drop_headers`
+    /// and the backend's.
     pub drop: DropHeaders,
     /// Which HTTP client sends the request.
     pub transport: Transport,
@@ -28,7 +30,8 @@ pub struct HeaderRules {
 /// The body of a chat request.
 #[derive(Debug, Default)]
 pub struct BodyRules {
-    /// Fields set in what the backend receives.
+    /// Fields set in what the backend receives: the preset's, then the
+    /// backend's.
     pub set_fields: SetFields,
     /// `kind = "openai"`: how the translated body is written.
     pub encode: EncodeOptions,
@@ -49,18 +52,22 @@ impl Dialect {
             .and_then(|model| model.emulate.as_ref())
             .or(backend.emulate.as_ref())
             .map(|emulate| presets.bind(emulate).expect("validated emulate"));
-        let preset_headers = emulation
-            .as_ref()
-            .map(|emulation| emulation.headers())
-            .unwrap_or_default();
+        let (preset_headers, preset_drop, preset_fields) = match &emulation {
+            Some(emulation) => (
+                emulation.headers(),
+                emulation.preset.drop_headers.as_slice(),
+                emulation.set_fields(),
+            ),
+            None => Default::default(),
+        };
         Self {
             headers: HeaderRules {
                 forced: ForcedHeaders::new(&backend.headers).over(preset_headers),
-                drop: DropHeaders::new(&backend.drop_headers),
+                drop: DropHeaders::new(&[preset_drop, backend.drop_headers.as_slice()].concat()),
                 transport: Transport::default(),
             },
             body: BodyRules {
-                set_fields: SetFields::new(&backend.set_fields),
+                set_fields: preset_fields.then(SetFields::new(&backend.set_fields)),
                 encode: EncodeOptions {
                     placement: model
                         .and_then(|model| model.mid_conversation_system)

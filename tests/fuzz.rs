@@ -273,7 +273,17 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 22] = [
+const PRESET_LINES: [&str; 32] = [
+    "drop_headers = [\"x-stainless-*\", \"@claude-code\", \"user-agent\", \"*\", \"\"]",
+    "drop_headers = [1, \"@x\"]",
+    "drop_headers = \"a b\"",
+    "[set_fields]",
+    "model = \"m\"",
+    "\"a..b\" = { c = [\"{v}\", nan, 1979-05-27] }",
+    "\"extra.agent\" = \"{version} {header:x-app} {nope\"",
+    "extra = {}",
+    "set_fields = [\"x\"]",
+    "[set_fields.messages]",
     "[variables]",
     "version = \"1.19.6\"",
     "preset = \"x\"",

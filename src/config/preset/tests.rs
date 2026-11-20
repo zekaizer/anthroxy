@@ -10,6 +10,8 @@ fn an_empty_file_is_a_preset_that_changes_nothing() {
     assert_eq!(preset.name, "client");
     assert!(preset.variables.is_empty());
     assert!(preset.headers.is_empty());
+    assert!(preset.drop_headers.is_empty());
+    assert!(preset.set_fields.bind(&preset.variables).is_empty());
 }
 
 #[test]
@@ -85,6 +87,28 @@ x-a = "{count} {preset}"
 }
 
 #[test]
+fn a_header_with_a_problem_of_its_own_still_answers_for_the_variables_it_names() {
+    let text = r#"
+[variables]
+note = "a\nb"
+
+[headers]
+"x name" = "{gone}"
+x-open = "{nope} {note} {header:x session}"
+"#;
+    assert_eq!(
+        problems(text),
+        [
+            "headers: `x name` is not a valid header name",
+            "headers: `x-open`: a `{header:…}` placeholder does not name a header",
+            "headers: `x name`: `{gone}` names no variable in [variables]",
+            "headers: `x-open`: `{nope}` names no variable in [variables]",
+            "variables.note: the default cannot be sent in a header",
+        ]
+    );
+}
+
+#[test]
 fn a_key_of_the_wrong_shape_is_a_problem_of_that_key() {
     assert_eq!(
         problems("variables = \"x\"\nheaders = [\"a\"]\n"),
@@ -134,6 +158,83 @@ fn a_placeholder_cannot_read_the_clients_credential() {
         problems("[headers]\nx-key = \"{header:authorization}\"\n"),
         [
             "headers: `x-key`: `{header:authorization}` would send the client's credential to the backend"
+        ]
+    );
+}
+
+#[test]
+fn drop_headers_obeys_the_rules_of_the_backend_key() {
+    let text = r#"
+drop_headers = ["x-stainless-*", "@claude-code", "@other", "USER-agent", "content-*", "a b", "host"]
+
+[headers]
+user-agent = "client/1"
+"#;
+    assert_eq!(
+        problems(text),
+        [
+            "drop_headers: `@other` is not a preset; the only one is `@claude-code`",
+            "drop_headers: `USER-agent` is set in `headers` for this preset; a header is forced or dropped, not both",
+            "drop_headers: `content-*` never reaches a backend anyway (`content-length`)",
+            "drop_headers: `content-*` says what the body is (`content-type`)",
+            "drop_headers: `a b` is not a header name or a `*` pattern",
+            "drop_headers: `host` never reaches a backend anyway",
+        ]
+    );
+    assert_eq!(
+        problems("drop_headers = \"x-app\"\n"),
+        ["drop_headers: must be a list of strings"]
+    );
+    assert_eq!(
+        problems("drop_headers = [1, \"host\", {}]\n"),
+        [
+            "drop_headers: entry 1 must be a string",
+            "drop_headers: entry 3 must be a string",
+            "drop_headers: `host` never reaches a backend anyway",
+        ],
+        "an entry of the wrong type does not hide the problem of another"
+    );
+}
+
+#[test]
+fn set_fields_cannot_reach_what_a_preset_leaves_alone() {
+    let text = r#"
+[variables]
+version = "1"
+
+[set_fields]
+model = "m"
+"stream.x" = true
+messages = []
+"a..b" = 1
+ratio = nan
+"extra.agent" = "c/{versoin} {header:x-app"
+"extra.note" = ["{os}", { deep = "{os} {version}" }]
+user = "u"
+"user.id" = "u"
+"#;
+    assert_eq!(
+        problems(text),
+        [
+            "set_fields: `a..b`: the path has an empty segment",
+            "set_fields: `extra.agent`: `{header:` is not closed by `}`",
+            "set_fields: `messages`: `messages` is not a preset's to change",
+            "set_fields: `model`: `model` is not a preset's to change",
+            "set_fields: `ratio`: a number that is not finite has no JSON form",
+            "set_fields: `stream.x`: `stream` is not a preset's to change",
+            "set_fields: `user` and `user.id` set the same field",
+            "set_fields: `extra.note`: `{os}` names no variable in [variables]",
+        ]
+    );
+    assert_eq!(
+        problems("set_fields = 1\n[variables]\nversion = \"1\"\n"),
+        ["set_fields: must be a table of body fields and values"]
+    );
+    assert_eq!(
+        problems("[set_fields]\n\"extra.note\" = [\"{os}\", { deep = \"{os} {version}\" }]\n"),
+        [
+            "set_fields: `extra.note`: `{os}` names no variable in [variables]",
+            "set_fields: `extra.note`: `{version}` names no variable in [variables]",
         ]
     );
 }

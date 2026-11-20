@@ -101,14 +101,15 @@ pub(super) fn check_forced_headers(
 }
 
 /// The problems of a `drop_headers` list written at `field`, beside a
-/// `headers` table that forces the names in `forced`. An entry must be a
-/// pattern, and must not take back what the rest says: a header that is
-/// forced, one the router drops anyway, or one the request cannot be read
-/// without.
+/// `headers` table that forces the names in `forced`; `owner` is what holds
+/// both, as a message names it (`this backend`). An entry must be a pattern,
+/// and must not take back what the rest says: a header that is forced, one
+/// the router drops anyway, or one the request cannot be read without.
 pub(super) fn check_drop_headers(
     field: &str,
     entries: &[String],
     forced: &[&str],
+    owner: &str,
     problems: &mut Vec<String>,
 ) {
     for entry in entries {
@@ -128,7 +129,7 @@ pub(super) fn check_drop_headers(
         };
         if let Some(forced) = forced.iter().find(|k| hits(&k.to_ascii_lowercase())) {
             problems.push(format!(
-                "{field}: `{shown}` is set in `headers` for this backend{}; a header is forced or dropped, not both",
+                "{field}: `{shown}` is set in `headers` for {owner}{}; a header is forced or dropped, not both",
                 caught(&forced.to_ascii_lowercase())
             ));
         }

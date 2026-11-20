@@ -15,8 +15,9 @@ use http::HeaderName;
 
 pub use library::{BindProblem, PresetLibrary};
 
-use super::Template;
+use super::set_fields::PresetFields;
 use super::template::PresetValue;
+use super::{SetFields, Template};
 
 /// A preset file whose every key and value passed the checks. An absent key
 /// holds what the router does without a preset.
@@ -27,6 +28,10 @@ pub struct Preset {
     pub variables: BTreeMap<String, String>,
     /// Every variable a value names is declared.
     headers: Vec<(HeaderName, PresetValue)>,
+    /// Every entry is a pattern [`super::DropHeaders::new`] takes.
+    pub drop_headers: Vec<String>,
+    /// Every variable a value names is declared.
+    set_fields: PresetFields,
 }
 
 /// Names only: a header value may be a key, and the value of a variable is
@@ -61,7 +66,7 @@ impl Preset {
 /// selects, as [`PresetLibrary::bind`] builds it.
 #[derive(Clone)]
 pub struct Emulation {
-    preset: Arc<Preset>,
+    pub preset: Arc<Preset>,
     /// Every declared variable: the value `emulate` gave, else the default.
     values: BTreeMap<String, String>,
 }
@@ -84,5 +89,10 @@ impl Emulation {
             .iter()
             .map(|(name, value)| (name.clone(), value.bind(&self.values)))
             .collect()
+    }
+
+    /// The preset's `set_fields` with every variable replaced by its value.
+    pub fn set_fields(&self) -> SetFields {
+        self.preset.set_fields.bind(&self.values)
     }
 }

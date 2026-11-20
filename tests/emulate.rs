@@ -224,3 +224,151 @@ async fn the_model_list_is_asked_for_with_the_preset_headers() {
         assert_eq!(received.header("user-agent"), Some("opencode/1.19.6"));
     }
 }
+
+#[tokio::test]
+async fn a_preset_names_client_headers_the_backend_does_not_receive() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(
+            &upstream,
+            "emulate = \"client\"\ndrop_headers = [\"x-app\", \"user-agent\"]",
+            "",
+        ),
+        &[(
+            "client",
+            r#"
+drop_headers = ["x-stainless-*", "@claude-code"]
+
+[headers]
+user-agent = "client/1"
+x-session-id = "{header:x-claude-code-session-id}"
+"#,
+        )],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let res = router
+        .post("/v1/messages", &chat("qwen"))
+        .header("x-claude-code-session-id", "abc-123")
+        .header("x-app", "cli")
+        .header("x-stainless-lang", "js")
+        .header("x-stainless-retry-count", "0")
+        .header("x-kept", "yes")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let received = upstream.last();
+    let stainless: Vec<&str> = received
+        .headers
+        .keys()
+        .map(|name| name.as_str())
+        .filter(|name| name.starts_with("x-stainless-"))
+        .collect();
+    assert_eq!(stainless, [] as [&str; 0]);
+    assert_eq!(received.header("x-claude-code-session-id"), None);
+    assert_eq!(
+        received.header("x-app"),
+        None,
+        "the backend's list applies beside the preset's"
+    );
+    assert_eq!(received.header("x-kept"), Some("yes"));
+    assert_eq!(
+        received.header("x-session-id"),
+        Some("abc-123"),
+        "a placeholder is read before the header it names is dropped"
+    );
+    assert_eq!(
+        received.header("user-agent"),
+        Some("client/1"),
+        "a header the preset sets is sent though the backend drops the client's"
+    );
+}
+
+#[tokio::test]
+async fn a_variable_only_a_body_field_names_holds_what_no_header_could() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(
+            &upstream,
+            "emulate = \"client\"",
+            "emulate = { preset = \"client\", note = \"three\\nfour\" }",
+        ),
+        &[(
+            "client",
+            "[variables]\nnote = \"one\\ntwo\"\n\n[set_fields]\n\"extra.note\" = \"{note}\"\n",
+        )],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let body = sent(&router, &upstream, &chat("qwen")).await.json();
+    assert_eq!(body["extra"]["note"], "one\ntwo");
+    let body = sent(&router, &upstream, &chat("other")).await.json();
+    assert_eq!(body["extra"]["note"], "three\nfour");
+}
+
+#[tokio::test]
+async fn the_status_lists_the_keys_the_backend_wrote_and_none_of_the_presets() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(
+            &upstream,
+            "emulate = \"client\"\ndrop_headers = [\"x-app\"]\nset_fields = { top_k = 20 }",
+            "",
+        ),
+        &[(
+            "client",
+            "drop_headers = [\"x-stainless-*\"]\n\n[set_fields]\ntool_choice = \"auto\"\ntop_k = 40\n",
+        )],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let status: Value = router
+        .get("/api/status")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let shown = &status["backends"][0];
+    assert_eq!(shown["set_fields"], json!(["top_k"]));
+    assert_eq!(shown["drop_headers"], json!(["x-app"]));
+}
+
+#[tokio::test]
+async fn a_preset_sets_body_fields_and_the_backends_value_wins() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(
+            &upstream,
+            "emulate = \"client\"\nset_fields = { \"extra.source\" = \"backend {version}\", top_k = 20 }",
+            "",
+        ),
+        &[(
+            "client",
+            r#"
+[variables]
+version = "1.19.6"
+
+[set_fields]
+tool_choice = "auto"
+top_k = 40
+"extra.source" = "preset"
+"extra.client" = "client/{version} {header:x-app}"
+"extra.session" = "{header:x-absent}"
+"#,
+        )],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let body = sent(&router, &upstream, &chat("qwen")).await.json();
+    assert_eq!(body["tool_choice"], "auto");
+    assert_eq!(body["top_k"], 20);
+    assert_eq!(
+        body["extra"],
+        json!({"client": "client/1.19.6 cli", "source": "backend {version}"}),
+        "a field whose client header is absent is left out; a variable is a preset's"
+    );
+    assert_eq!(body["model"], "qwen");
+}

@@ -125,6 +125,21 @@ impl PresetValue {
         Ok(Self(parts))
     }
 
+    /// Every variable `text` names, once for each time it does, whether or
+    /// not [`Self::parse`] takes `text`: for a value it takes, these are its
+    /// [`Self::variables`].
+    pub fn named_in(text: &str) -> Vec<String> {
+        let mut parts = Vec::new();
+        variables_in(text, &mut parts);
+        parts
+            .into_iter()
+            .filter_map(|part| match part {
+                PresetPart::Variable(name) => Some(name),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Whether the value depends on the request, and so may be left out.
     pub fn reads_client(&self) -> bool {
         self.0
@@ -357,6 +372,29 @@ mod tests {
             Some("opencode/1.19.6 (linux; cli) 1.19.6")
         );
         assert!(!PresetValue::parse("{version}").unwrap().reads_client());
+    }
+
+    #[test]
+    fn the_variables_of_a_text_are_those_of_the_value_it_parses_to() {
+        for text in [
+            "opencode/{version} ({os}; {header:x-app}) {version}",
+            "{a}{header:x-b}{{c}} {d",
+            "{header:x-a}",
+            "",
+        ] {
+            let value = PresetValue::parse(text).unwrap();
+            assert_eq!(
+                PresetValue::named_in(text),
+                value.variables().collect::<Vec<_>>(),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            PresetValue::named_in("{nope} {header:x session} {v}"),
+            ["nope", "v"],
+            "a placeholder that names no header hides none"
+        );
+        assert_eq!(PresetValue::named_in("{header:{v}"), ["v"]);
     }
 
     #[test]

@@ -135,6 +135,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             &format!("backends.{name}.drop_headers"),
             &backend.drop_headers,
             &forced,
+            "this backend",
             &mut problems,
         );
         if let Some(command) = &backend.header_command {
