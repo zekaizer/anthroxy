@@ -231,6 +231,15 @@ fn encode_message(message: &RequestMessage, options: &EncodeOptions, out: &mut V
             }
         },
     }
+    if message.role == Role::Assistant
+        && let Some(field) = &options.reasoning_field
+    {
+        // The blocks are one stream of reasoning cut where text came between.
+        let reasoning = message.reasoning.concat();
+        if !reasoning.is_empty() {
+            object.insert(field.clone(), json!(reasoning));
+        }
+    }
     if !tool_calls.is_empty() {
         object.insert("tool_calls".into(), Value::Array(tool_calls));
     }

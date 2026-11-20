@@ -669,3 +669,80 @@ async fn a_preset_writes_strict_on_every_tool_definition() {
         .collect();
     assert_eq!(strict, [&json!(true), &json!(true)]);
 }
+
+#[tokio::test]
+async fn a_preset_sends_the_reasoning_of_earlier_turns_back() {
+    let upstream = MockUpstream::start(|_| {
+        completion(
+            json!({
+                "role": "assistant",
+                "content": null,
+                "reasoning_content": "The user wants a.rs. I read it first.",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": "{\"path\":\"a.rs\"}"}
+                }]
+            }),
+            "tool_calls",
+        )
+    })
+    .await;
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"client\"", ""),
+        &[(
+            "client",
+            "reasoning_field = \"reasoning_content\"\ntool_only_content = \"empty\"\n",
+        )],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let mut request = chat_with_a_tool("qwen", None);
+    let res = router.post("/v1/messages", &request).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let mut turn: Value = res.json().await.unwrap();
+    assert_eq!(turn["content"][0]["type"], "thinking", "{turn}");
+    // Claude Code stores a block that came without a signature with an
+    // empty one, and sends the turn back followed by the tool's result.
+    turn["content"][0]["signature"] = json!("");
+    let messages = request["messages"].as_array_mut().unwrap();
+    messages.push(json!({"role": "assistant", "content": turn["content"]}));
+    messages.push(json!({"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "call_1", "content": "fn main() {}"}
+    ]}));
+    assert_eq!(
+        assistant_turn(&router, &upstream, &request).await,
+        concat!(
+            r#"{"role":"assistant","content":"","reasoning_content":"The user wants a.rs. I read it first.","#,
+            r#""tool_calls":[{"id":"call_1","type":"function","function":{"name":"Read","arguments":"{\"path\":\"a.rs\"}"}}]}"#
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_turn_without_reasoning_text_gets_no_reasoning_field() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"client\"", ""),
+        &[("client", "reasoning_field = \"reasoning_content\"\n")],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    for content in [
+        json!([{"type": "text", "text": "Hello"}]),
+        json!([
+            {"type": "thinking", "thinking": "", "signature": ""},
+            {"type": "redacted_thinking", "data": "opaque"},
+            {"type": "text", "text": "Hello"}
+        ]),
+    ] {
+        let mut request = chat("qwen");
+        let messages = request["messages"].as_array_mut().unwrap();
+        messages.push(json!({"role": "assistant", "content": content}));
+        messages.push(json!({"role": "user", "content": "again"}));
+        assert_eq!(
+            assistant_turn(&router, &upstream, &request).await,
+            r#"{"role":"assistant","content":"Hello"}"#
+        );
+    }
+}

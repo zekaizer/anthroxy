@@ -19,7 +19,7 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 11] = [
+const KEYS: [(&str, Reader); 12] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
@@ -31,6 +31,7 @@ const KEYS: [(&str, Reader); 11] = [
     ("default_tool_choice", default_tool_choice),
     ("tool_only_content", tool_only_content),
     ("tool_strict", tool_strict),
+    ("reasoning_field", reasoning_field),
 ];
 
 pub(super) fn parse(name: &str, text: &str) -> Result<Preset, Vec<String>> {
@@ -212,6 +213,20 @@ fn tool_strict(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<Stri
     preset.tool_strict = value.as_bool();
     if preset.tool_strict.is_none() {
         problems.push("tool_strict: must be `true` or `false`".to_owned());
+    }
+}
+
+/// Fields the encoder writes in an assistant message itself.
+const ASSISTANT_FIELDS: [&str; 3] = ["role", "content", "tool_calls"];
+
+fn reasoning_field(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    match value.as_str() {
+        None => problems.push("reasoning_field: must be a string".to_owned()),
+        Some("") => problems.push("reasoning_field: must not be empty".to_owned()),
+        Some(name) if ASSISTANT_FIELDS.contains(&name) => problems.push(format!(
+            "reasoning_field: `{name}` is a field every assistant message has"
+        )),
+        Some(name) => preset.reasoning_field = Some(name.to_owned()),
     }
 }
 

@@ -1521,3 +1521,69 @@ fn strict_is_written_on_every_tool_definition_when_chosen() {
     assert!(tools(Some(true)).ends_with(r#""strict":true}}]"#));
     assert!(!tools(None).contains("strict"));
 }
+
+#[test]
+fn a_turns_reasoning_is_written_under_the_field_chosen() {
+    let reasoned = |parts: Vec<Part>, reasoning: &[&str]| RequestMessage {
+        role: Role::Assistant,
+        parts,
+        reasoning: reasoning.iter().map(|text| (*text).to_owned()).collect(),
+    };
+    let call = Part::ToolUse {
+        id: "c1".into(),
+        name: "read".into(),
+        input: json!({}),
+    };
+    let request = request(vec![
+        reasoned(
+            vec![Part::Text("Reading".into()), call.clone()],
+            &["First, ", "the file."],
+        ),
+        reasoned(vec![call], &["plan"]),
+        reasoned(vec![Part::Text("Done".into())], &[]),
+        reasoned(vec![Part::Text("Done".into())], &["", ""]),
+        reasoned(vec![], &["only thought"]),
+        RequestMessage {
+            role: Role::User,
+            parts: vec![Part::Text("hi".into())],
+            reasoning: vec!["not a turn of the model".into()],
+        },
+    ]);
+    let messages = |field: Option<&str>| {
+        let options = EncodeOptions {
+            reasoning_field: field.map(str::to_owned),
+            ..Default::default()
+        };
+        let body = Value::Object(encode_request(&request, &options));
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+    };
+    let calls = r#""tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]"#;
+    assert_eq!(
+        messages(Some("reasoning_content")),
+        [
+            format!(
+                r#"{{"role":"assistant","content":"Reading","reasoning_content":"First, the file.",{calls}}}"#
+            ),
+            format!(r#"{{"role":"assistant","reasoning_content":"plan",{calls}}}"#),
+            r#"{"role":"assistant","content":"Done"}"#.to_owned(),
+            r#"{"role":"assistant","content":"Done"}"#.to_owned(),
+            r#"{"role":"assistant","content":"","reasoning_content":"only thought"}"#.to_owned(),
+            r#"{"role":"user","content":"hi"}"#.to_owned(),
+        ]
+    );
+    assert_eq!(
+        messages(Some("reasoning"))[1],
+        format!(r#"{{"role":"assistant","reasoning":"plan",{calls}}}"#)
+    );
+    assert!(
+        messages(None)
+            .iter()
+            .all(|message| !message.contains("plan")),
+        "no field, no reasoning"
+    );
+}

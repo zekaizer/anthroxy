@@ -42,6 +42,8 @@ pub struct Preset {
     pub default_tool_choice: Option<ToolChoiceDefault>,
     pub tool_only_content: ToolOnlyContent,
     pub tool_strict: Option<bool>,
+    /// Not empty, and not a field an assistant message already has.
+    pub reasoning_field: Option<String>,
 }
 
 /// Names only: a header value may be a key, and the value of a variable is

@@ -426,3 +426,29 @@ fn tool_strict_is_a_boolean() {
         ["tool_strict: must be `true` or `false`"]
     );
 }
+
+#[test]
+fn reasoning_field_names_a_field_of_its_own() {
+    let field = |text: &str| Preset::parse("client", text).unwrap().reasoning_field;
+    assert_eq!(
+        field("reasoning_field = \"reasoning_content\"\n").as_deref(),
+        Some("reasoning_content")
+    );
+    assert_eq!(field(""), None);
+    for taken in ["role", "content", "tool_calls"] {
+        assert_eq!(
+            problems(&format!("reasoning_field = \"{taken}\"\n")),
+            [format!(
+                "reasoning_field: `{taken}` is a field every assistant message has"
+            )]
+        );
+    }
+    assert_eq!(
+        problems("reasoning_field = \"\"\n"),
+        ["reasoning_field: must not be empty"]
+    );
+    assert_eq!(
+        problems("reasoning_field = true\n"),
+        ["reasoning_field: must be a string"]
+    );
+}

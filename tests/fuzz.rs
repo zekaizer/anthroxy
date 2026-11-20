@@ -273,7 +273,10 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 49] = [
+const PRESET_LINES: [&str; 52] = [
+    "reasoning_field = \"reasoning_content\"",
+    "reasoning_field = \"content\"",
+    "reasoning_field = [\"\"]",
     "tool_strict = false",
     "tool_strict = \"true\"",
     "tool_only_content = \"null\"",

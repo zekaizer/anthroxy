@@ -11,6 +11,9 @@ pub struct EncodeOptions {
     pub tool_only_content: ToolOnlyContent,
     /// Written as `strict` in every tool definition; `None` writes none.
     pub tool_strict: Option<bool>,
+    /// The assistant message field a turn's reasoning is written under;
+    /// `None` writes no reasoning.
+    pub reasoning_field: Option<String>,
 }
 
 /// Where a `Role::System` message that is not the first message goes.
