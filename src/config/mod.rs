@@ -12,6 +12,7 @@ pub(crate) mod env;
 mod error;
 pub mod example;
 mod header_command;
+mod header_rules;
 mod origin;
 mod schema;
 mod set_fields;

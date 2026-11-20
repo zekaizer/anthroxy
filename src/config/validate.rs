@@ -4,11 +4,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::view::redacted_url;
-use super::{
-    BackendConfig, BackendKind, Config, ConfigError, CredentialConfig, HeaderPattern, Template,
-    TemplateError, TokenConfig, V1Auth, origin,
-};
-use super::{header_command, set_fields};
+use super::{BackendKind, Config, ConfigError, CredentialConfig, TokenConfig, V1Auth, origin};
+use super::{header_command, header_rules, set_fields};
 use crate::openai::SystemPlacement;
 use crate::text::short;
 
@@ -124,63 +121,18 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
                 "backends.{name}.credential.timeout: 0 is not `no limit` here; it kills the command before it can print"
             ));
         }
-        // Header names are case-insensitive, table keys are not: two
-        // spellings would be one header set twice, the later undoing the
-        // earlier.
-        let mut spelled: HashMap<String, &str> = HashMap::new();
-        for header in backend.headers.keys() {
-            if let Some(first) = spelled.insert(header.to_ascii_lowercase(), header) {
-                problems.push(format!(
-                    "backends.{name}.headers: `{}` and `{}` are the same header",
-                    short(first),
-                    short(header)
-                ));
-            }
-        }
-        for (header, value) in &backend.headers {
-            if http::HeaderName::from_bytes(header.as_bytes()).is_err() {
-                problems.push(format!(
-                    "backends.{name}.headers: `{}` is not a valid header name",
-                    short(header)
-                ));
-            } else if CONNECTION_HEADERS.contains(&header.to_ascii_lowercase().as_str()) {
-                problems.push(format!(
-                    "backends.{name}.headers: `{}` describes the connection the router makes and cannot be set here", short(header)
-                ));
-            } else if http::HeaderValue::from_str(value).is_err() {
-                problems.push(format!(
-                    "backends.{name}.headers: `{}` has a value that cannot be sent in a header",
-                    short(header)
-                ));
-            } else {
-                match Template::parse(value) {
-                    // The value may be a key, and what follows `{header:` is
-                    // part of it: the problem quotes none of it.
-                    Err(TemplateError::NotAHeaderName(_)) => problems.push(format!(
-                        "backends.{name}.headers: `{}`: a `{{header:…}}` placeholder does not name a header",
-                        short(header)
-                    )),
-                    Err(problem) => problems.push(format!(
-                        "backends.{name}.headers: `{}`: {problem}",
-                        short(header)
-                    )),
-                    Ok(template) => {
-                        let required = REQUIRED
-                            .iter()
-                            .find(|(required, _)| header.eq_ignore_ascii_case(required));
-                        if let Some((_, why)) = required
-                            && template.reads_client()
-                        {
-                            problems.push(format!(
-                                "backends.{name}.headers: `{}` {why}; a value read from the client's request may be left out",
-                                short(header)
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        check_drop_headers(name, backend, &mut problems);
+        header_rules::check_forced_headers(
+            &format!("backends.{name}.headers"),
+            &backend.headers,
+            &mut problems,
+        );
+        let forced: Vec<&str> = backend.headers.keys().map(String::as_str).collect();
+        header_rules::check_drop_headers(
+            &format!("backends.{name}.drop_headers"),
+            &backend.drop_headers,
+            &forced,
+            &mut problems,
+        );
         if let Some(command) = &backend.header_command {
             header_command::check(name, command, &mut problems);
             if backend.kind == BackendKind::Passthrough {
@@ -331,20 +283,6 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
     }
 }
 
-/// Framing and hop-by-hop headers: the HTTP client owns them, so a value set
-/// here is either dropped or produces a request no backend can read. `host` is
-/// not one of them; overriding it is how some gateways are addressed.
-const CONNECTION_HEADERS: [&str; 8] = [
-    "content-length",
-    "transfer-encoding",
-    "connection",
-    "keep-alive",
-    "proxy-connection",
-    "te",
-    "trailer",
-    "upgrade",
-];
-
 /// Connections to one origin share a pool and the proxy is chosen per origin,
 /// so every backend on an origin must name the same proxy or none. Backends
 /// whose URL or proxy is already reported are left out.
@@ -407,63 +345,6 @@ fn check_url(field: &str, url: &str, problems: &mut Vec<String>) {
         }
         Ok(_) => {}
         Err(e) => problems.push(format!("{field}: `{shown}` is not a valid URL ({e})")),
-    }
-}
-
-/// Headers the router itself never forwards, so naming one to drop says
-/// nothing.
-const ALREADY_DROPPED: [&str; 7] = [
-    "host",
-    "content-length",
-    "authorization",
-    "x-api-key",
-    "accept-encoding",
-    "connection",
-    "proxy-authorization",
-];
-
-/// Headers the backend needs to read the request the router sends it.
-const REQUIRED: [(&str, &str); 1] = [("content-type", "says what the body is")];
-
-/// An entry must be a pattern, and must not take back what the rest of the
-/// backend says: a header it forces, one the router drops anyway, or one the
-/// request cannot be read without.
-fn check_drop_headers(name: &str, backend: &BackendConfig, problems: &mut Vec<String>) {
-    let field = format!("backends.{name}.drop_headers");
-    for entry in &backend.drop_headers {
-        let patterns = match HeaderPattern::parse(entry) {
-            Ok(patterns) => patterns,
-            Err(problem) => {
-                problems.push(format!("{field}: {problem}"));
-                continue;
-            }
-        };
-        let shown = entry.escape_debug();
-        let hits = |header: &str| patterns.iter().any(|pattern| pattern.matches(header));
-        // A pattern says which header it caught; a name is already the name.
-        let caught = |header: &str| match entry.eq_ignore_ascii_case(header) {
-            true => String::new(),
-            false => format!(" (`{header}`)"),
-        };
-        if let Some(forced) = backend
-            .headers
-            .keys()
-            .find(|k| hits(&k.to_ascii_lowercase()))
-        {
-            problems.push(format!(
-                "{field}: `{shown}` is set in `headers` for this backend{}; a header is forced or dropped, not both",
-                caught(&forced.to_ascii_lowercase())
-            ));
-        }
-        if let Some(header) = ALREADY_DROPPED.iter().find(|header| hits(header)) {
-            problems.push(format!(
-                "{field}: `{shown}` never reaches a backend anyway{}",
-                caught(header)
-            ));
-        }
-        if let Some((header, why)) = REQUIRED.iter().find(|(header, _)| hits(header)) {
-            problems.push(format!("{field}: `{shown}` {why}{}", caught(header)));
-        }
     }
 }
 

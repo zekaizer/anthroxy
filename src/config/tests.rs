@@ -452,6 +452,21 @@ fn a_header_the_backend_cannot_do_without_takes_no_placeholder() {
 }
 
 #[test]
+fn a_backend_header_must_be_one_the_router_can_send() {
+    let text = format!(
+        "{MINIMAL}\n[backends.local.headers]\n\"x name\" = \"1\"\n\"Transfer-Encoding\" = \"chunked\"\n\"x-line\" = \"a\\nb\"\n"
+    );
+    assert_eq!(
+        problems(&text),
+        [
+            "backends.local.headers: `Transfer-Encoding` describes the connection the router makes and cannot be set here",
+            "backends.local.headers: `x name` is not a valid header name",
+            "backends.local.headers: `x-line` has a value that cannot be sent in a header",
+        ]
+    );
+}
+
+#[test]
 fn a_backend_header_cannot_be_set_twice_under_two_spellings() {
     let text = format!(
         "{MINIMAL}\n[backends.local.headers]\n\"X-Session\" = \"{{header:x-a}}\"\n\"x-session\" = \"fixed\"\n\"x-other\" = \"1\"\n"
