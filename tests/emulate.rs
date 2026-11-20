@@ -505,3 +505,24 @@ async fn a_field_the_backend_sets_is_sent_though_the_preset_omits_it() {
         r#"{"user":"gateway","model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16,"stream":false}"#
     );
 }
+
+#[tokio::test]
+async fn a_preset_names_the_output_token_limit() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"main\"", "emulate = \"release\""),
+        &[
+            ("main", "max_tokens_field = \"max_completion_tokens\"\n"),
+            ("release", "max_tokens_field = \"max_tokens\"\n"),
+        ],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let body = sent(&router, &upstream, &chat("qwen")).await.json();
+    assert_eq!(body["max_completion_tokens"], 16);
+    assert_eq!(body.get("max_tokens"), None);
+
+    let body = sent(&router, &upstream, &chat("other")).await.json();
+    assert_eq!(body["max_tokens"], 16);
+    assert_eq!(body.get("max_completion_tokens"), None);
+}

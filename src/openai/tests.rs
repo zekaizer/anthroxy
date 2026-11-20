@@ -44,7 +44,11 @@ fn encoded(request: &Request) -> Value {
 }
 
 fn placed(request: &Request, placement: SystemPlacement) -> Value {
-    Value::Object(encode_request(request, &EncodeOptions { placement }))
+    let options = EncodeOptions {
+        placement,
+        ..Default::default()
+    };
+    Value::Object(encode_request(request, &options))
 }
 
 #[test]
@@ -1347,4 +1351,22 @@ fn an_index_too_large_for_the_ir_starts_its_own_call() {
         matches!(&events[0], Event::ToolCallStart { index: 1, name, .. } if name == "bash"),
         "{events:?}"
     );
+}
+
+#[test]
+fn the_output_token_limit_is_written_under_the_name_chosen() {
+    let mut request = request(vec![user(vec![Part::Text("hi".into())])]);
+    request.temperature = Some(0.5);
+    let options = EncodeOptions {
+        max_tokens_field: MaxTokensField::MaxCompletionTokens,
+        ..Default::default()
+    };
+    assert_eq!(
+        Value::Object(encode_request(&request, &options)).to_string(),
+        r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":100,"temperature":0.5,"stream":false}"#
+    );
+    request.max_tokens = None;
+    let body = Value::Object(encode_request(&request, &options));
+    assert_eq!(body.get("max_completion_tokens"), None);
+    assert_eq!(body.get("max_tokens"), None);
 }

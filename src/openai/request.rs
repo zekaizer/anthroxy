@@ -80,7 +80,7 @@ pub fn encode(request: &Request, options: &EncodeOptions) -> Map<String, Value> 
         body.insert("tool_choice".into(), choice);
     }
     if let Some(max_tokens) = request.max_tokens {
-        body.insert("max_tokens".into(), json!(max_tokens));
+        body.insert(options.max_tokens_field.name().into(), json!(max_tokens));
     }
     if let Some(temperature) = request.temperature {
         body.insert("temperature".into(), json!(temperature));

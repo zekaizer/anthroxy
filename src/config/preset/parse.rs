@@ -12,14 +12,14 @@ use crate::config::emulate::PRESET_KEY;
 use crate::config::header_rules;
 use crate::config::set_fields::{PresetFields, check_preset_path};
 use crate::config::template::{PresetValue, is_variable_name};
-use crate::text::short;
+use crate::text::{cut, short};
 
 /// Reads one key's value into the preset, or says what is wrong with it.
 type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 7] = [
+const KEYS: [(&str, Reader); 8] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
@@ -27,6 +27,7 @@ const KEYS: [(&str, Reader); 7] = [
     ("omit_fields", omit_fields),
     ("field_order", field_order),
     ("mid_conversation_system", mid_conversation_system),
+    ("max_tokens_field", max_tokens_field),
 ];
 
 pub(super) fn parse(name: &str, text: &str) -> Result<Preset, Vec<String>> {
@@ -188,6 +189,12 @@ fn mid_conversation_system(value: &toml::Value, preset: &mut Preset, problems: &
     preset.mid_conversation_system = one_of("mid_conversation_system", value, problems);
 }
 
+fn max_tokens_field(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    if let Some(field) = one_of("max_tokens_field", value, problems) {
+        preset.max_tokens_field = field;
+    }
+}
+
 /// A problem at `field` for each of `variables` the preset does not declare.
 fn undeclared<'a>(
     field: &str,
@@ -267,6 +274,14 @@ fn one_of<'a, T: Deserialize<'a>>(
     };
     let chosen: Result<T, serde::de::value::Error> = T::deserialize(text.into_deserializer());
     chosen
-        .map_err(|error| problems.push(format!("{field}: {}", short(&error.to_string()))))
+        .map_err(|error| {
+            let message = error.to_string();
+            // serde ends the message with the names it knows; the value
+            // before them is the file's and is cut apart from the list.
+            problems.push(match message.rsplit_once(", expected ") {
+                Some((_, allowed)) => format!("{field}: `{}` is not {allowed}", short(text)),
+                None => format!("{field}: {}", cut(&message, 200)),
+            });
+        })
         .ok()
 }

@@ -2,7 +2,7 @@
 
 use super::{Backend, ForcedHeaders, Transport};
 use crate::body_field::{BodyEdits, BodyField};
-use crate::config::{BackendConfig, DropHeaders, ModelConfig, PresetLibrary, SetFields};
+use crate::config::{BackendConfig, DropHeaders, ModelConfig, Preset, PresetLibrary, SetFields};
 use crate::openai::EncodeOptions;
 
 /// How requests along one route are written: the backend's `headers`,
@@ -71,16 +71,20 @@ impl Dialect {
             .and_then(|model| model.emulate.as_ref())
             .or(backend.emulate.as_ref())
             .map(|emulate| presets.bind(emulate).expect("validated emulate"));
-        let preset = emulation.as_ref().map(|emulation| &*emulation.preset);
         let (preset_headers, preset_fields) = match &emulation {
             Some(emulation) => (emulation.headers(), emulation.set_fields()),
             None => Default::default(),
         };
-        let preset_drop = preset.map_or(&[][..], |preset| &preset.drop_headers);
+        // Without `emulate`, a preset that says nothing.
+        let no_preset = Preset::default();
+        let preset = emulation
+            .as_ref()
+            .map_or(&no_preset, |emulation| &*emulation.preset);
+        let drop = [preset.drop_headers.as_slice(), &backend.drop_headers].concat();
         Self {
             headers: HeaderRules {
                 forced: ForcedHeaders::new(&backend.headers).over(preset_headers),
-                drop: DropHeaders::new(&[preset_drop, backend.drop_headers.as_slice()].concat()),
+                drop: DropHeaders::new(&drop),
                 transport: Transport::default(),
             },
             body: BodyRules {
@@ -89,11 +93,12 @@ impl Dialect {
                     placement: model
                         .and_then(|model| model.mid_conversation_system)
                         .or(backend.mid_conversation_system)
-                        .or(preset.and_then(|preset| preset.mid_conversation_system))
+                        .or(preset.mid_conversation_system)
                         .unwrap_or_default(),
+                    max_tokens_field: preset.max_tokens_field,
                 },
-                omit_fields: preset.map_or_else(Vec::new, |preset| preset.omit_fields.clone()),
-                field_order: preset.map_or_else(Vec::new, |preset| preset.field_order.clone()),
+                omit_fields: preset.omit_fields.clone(),
+                field_order: preset.field_order.clone(),
             },
         }
     }

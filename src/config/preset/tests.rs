@@ -1,5 +1,5 @@
 use super::*;
-use crate::openai::SystemPlacement;
+use crate::openai::{MaxTokensField, SystemPlacement};
 
 fn problems(text: &str) -> Vec<String> {
     Preset::parse("client", text).expect_err("a preset with problems")
@@ -259,9 +259,7 @@ fn mid_conversation_system_takes_the_values_of_the_backend_key() {
     );
     assert_eq!(
         problems("mid_conversation_system = \"first\"\n"),
-        [
-            "mid_conversation_system: unknown variant `first`, expected one of `keep`, `merge`, `user`"
-        ]
+        ["mid_conversation_system: `first` is not one of `keep`, `merge`, `user`"]
     );
     assert_eq!(
         problems("mid_conversation_system = 1\n"),
@@ -332,5 +330,37 @@ fn field_order_lists_top_level_fields_once() {
     assert_eq!(
         problems("field_order = \"model\"\n"),
         ["field_order: must be a list of strings"]
+    );
+}
+
+#[test]
+fn max_tokens_field_is_one_of_two_names() {
+    for (written, field) in [
+        ("max_tokens", MaxTokensField::MaxTokens),
+        ("max_completion_tokens", MaxTokensField::MaxCompletionTokens),
+    ] {
+        let text = format!("max_tokens_field = \"{written}\"\n");
+        assert_eq!(
+            Preset::parse("client", &text).unwrap().max_tokens_field,
+            field
+        );
+    }
+    assert_eq!(
+        Preset::parse("client", "").unwrap().max_tokens_field,
+        MaxTokensField::MaxTokens
+    );
+    assert_eq!(
+        problems("max_tokens_field = \"max_output_tokens\"\n"),
+        ["max_tokens_field: `max_output_tokens` is not `max_tokens` or `max_completion_tokens`"]
+    );
+}
+
+#[test]
+fn a_long_value_does_not_push_the_allowed_ones_out_of_the_message() {
+    let text = format!("max_tokens_field = \"{}\"\n", "x".repeat(300));
+    let found = problems(&text);
+    assert!(
+        found[0].ends_with("…` is not `max_tokens` or `max_completion_tokens`"),
+        "{found:?}"
     );
 }

@@ -273,7 +273,9 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 41] = [
+const PRESET_LINES: [&str; 43] = [
+    "max_tokens_field = \"max_completion_tokens\"",
+    "max_tokens_field = [\"max_tokens\"]",
     "omit_fields = [\"user\", \"a..b\", \"messages\", \"\"]",
     "omit_fields = [[\"user\"]]",
     "omit_fields = 1",
