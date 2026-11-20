@@ -1,6 +1,7 @@
 //! How the requests along one route are written.
 
 use super::{Backend, ForcedHeaders, Transport};
+use crate::body_field::{BodyEdits, BodyField};
 use crate::config::{BackendConfig, DropHeaders, ModelConfig, PresetLibrary, SetFields};
 use crate::openai::EncodeOptions;
 
@@ -35,6 +36,24 @@ pub struct BodyRules {
     pub set_fields: SetFields,
     /// `kind = "openai"`: how the translated body is written.
     pub encode: EncodeOptions,
+    /// `kind = "openai"`: fields of the translated body the backend does not
+    /// receive, as dot-separated paths.
+    pub omit_fields: Vec<String>,
+    /// `kind = "openai"`: top-level fields of the translated body that are
+    /// written first, in this order.
+    pub field_order: Vec<String>,
+}
+
+impl BodyRules {
+    /// What is done to the translated body once it is written; `set` is
+    /// [`Self::set_fields`] as one request fills them.
+    pub fn edits<'a>(&'a self, set: &'a [BodyField]) -> BodyEdits<'a> {
+        BodyEdits {
+            omit: &self.omit_fields,
+            set,
+            order: &self.field_order,
+        }
+    }
 }
 
 impl Dialect {
@@ -73,6 +92,8 @@ impl Dialect {
                         .or(preset.and_then(|preset| preset.mid_conversation_system))
                         .unwrap_or_default(),
                 },
+                omit_fields: preset.map_or_else(Vec::new, |preset| preset.omit_fields.clone()),
+                field_order: preset.map_or_else(Vec::new, |preset| preset.field_order.clone()),
             },
         }
     }

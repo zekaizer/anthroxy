@@ -33,6 +33,10 @@ pub struct Preset {
     pub drop_headers: Vec<String>,
     /// Every variable a value names is declared.
     set_fields: PresetFields,
+    /// Dot-separated paths, none under a field a preset leaves alone.
+    pub omit_fields: Vec<String>,
+    /// Top-level field names, each once.
+    pub field_order: Vec<String>,
     pub mid_conversation_system: Option<SystemPlacement>,
 }
 

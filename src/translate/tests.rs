@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::anthropic::{DecodeError, ErrorType};
-use crate::body_field::BodyField;
+use crate::body_field::{BodyEdits, BodyField};
 use crate::openai::ResponseError;
 
 fn chunk(delta: Value, finish: Option<&str>) -> String {
@@ -122,7 +122,7 @@ fn request_round_trips_through_the_ir() {
             &serde_json::to_vec(&body).unwrap(),
             "m",
             &Default::default(),
-            &[],
+            &Default::default(),
         )
         .unwrap(),
     )
@@ -139,7 +139,7 @@ fn request_round_trips_through_the_ir() {
         })
     );
     assert_eq!(
-        request(b"[]", "m", &Default::default(), &[]),
+        request(b"[]", "m", &Default::default(), &Default::default()),
         Err(DecodeError::NotAnObject)
     );
 }
@@ -166,7 +166,10 @@ fn configured_fields_are_set_in_the_translated_body() {
             &serde_json::to_vec(&body).unwrap(),
             "up",
             &Default::default(),
-            &fields,
+            &BodyEdits {
+                set: &fields,
+                ..Default::default()
+            },
         )
         .unwrap(),
     )

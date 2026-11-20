@@ -445,3 +445,63 @@ async fn the_backends_and_the_models_placement_win_over_the_presets() {
         json!({"role": "user", "content": "<system-reminder>\nLater.\n</system-reminder>"})
     );
 }
+
+/// A chat request the encoder writes `user` and `reasoning_effort` for.
+fn chat_with_user_and_effort(model: &str) -> Value {
+    json!({
+        "model": model,
+        "max_tokens": 16,
+        "stream": true,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"user_id": "u1"},
+        "output_config": {"effort": "high"}
+    })
+}
+
+#[tokio::test]
+async fn a_preset_omits_body_fields_and_orders_the_rest() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"client\"", ""),
+        &[(
+            "client",
+            r#"
+omit_fields = ["user", "reasoning_effort", "stream_options.include_usage"]
+field_order = ["model", "max_tokens", "messages", "tools", "tool_choice", "stream"]
+
+[set_fields]
+tool_choice = "auto"
+"#,
+        )],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let received = sent(&router, &upstream, &chat_with_user_and_effort("qwen")).await;
+    assert_eq!(
+        String::from_utf8_lossy(&received.body),
+        r#"{"model":"qwen","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"tool_choice":"auto","stream":true,"stream_options":{}}"#
+    );
+}
+
+#[tokio::test]
+async fn a_field_the_backend_sets_is_sent_though_the_preset_omits_it() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(
+            &upstream,
+            "emulate = \"client\"\nset_fields = { user = \"gateway\" }",
+            "",
+        ),
+        &[(
+            "client",
+            "omit_fields = [\"user\"]\nfield_order = [\"user\", \"model\"]\n",
+        )],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let received = sent(&router, &upstream, &chat("qwen")).await;
+    assert_eq!(
+        String::from_utf8_lossy(&received.body),
+        r#"{"user":"gateway","model":"qwen","messages":[{"role":"user","content":"hi"}],"max_tokens":16,"stream":false}"#
+    );
+}

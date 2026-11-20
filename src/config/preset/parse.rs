@@ -10,7 +10,7 @@ use serde::de::IntoDeserializer;
 use super::Preset;
 use crate::config::emulate::PRESET_KEY;
 use crate::config::header_rules;
-use crate::config::set_fields::PresetFields;
+use crate::config::set_fields::{PresetFields, check_preset_path};
 use crate::config::template::{PresetValue, is_variable_name};
 use crate::text::short;
 
@@ -19,11 +19,13 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 5] = [
+const KEYS: [(&str, Reader); 7] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
     ("set_fields", set_fields),
+    ("omit_fields", omit_fields),
+    ("field_order", field_order),
     ("mid_conversation_system", mid_conversation_system),
 ];
 
@@ -149,6 +151,37 @@ fn set_fields(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<Strin
         undeclared(&field, variables.into_iter(), preset, problems);
     }
     preset.set_fields = fields;
+}
+
+fn omit_fields(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    let Some(paths) = string_list("omit_fields", value, problems) else {
+        return;
+    };
+    for path in &paths {
+        if let Err(problem) = check_preset_path(path) {
+            problems.push(format!("omit_fields: `{}`: {problem}", short(path)));
+        }
+    }
+    preset.omit_fields = paths;
+}
+
+fn field_order(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    let Some(names) = string_list("field_order", value, problems) else {
+        return;
+    };
+    for (index, name) in names.iter().enumerate() {
+        let shown = short(name);
+        if name.is_empty() {
+            problems.push("field_order: a name must not be empty".to_owned());
+        } else if name.contains('.') {
+            problems.push(format!(
+                "field_order: `{shown}` is not a top-level field; only those are ordered"
+            ));
+        } else if names[..index].contains(name) {
+            problems.push(format!("field_order: `{shown}` is listed twice"));
+        }
+    }
+    preset.field_order = names;
 }
 
 fn mid_conversation_system(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {

@@ -13,6 +13,8 @@ fn an_empty_file_is_a_preset_that_changes_nothing() {
     assert!(preset.headers.is_empty());
     assert!(preset.drop_headers.is_empty());
     assert!(preset.set_fields.bind(&preset.variables).is_empty());
+    assert!(preset.omit_fields.is_empty());
+    assert!(preset.field_order.is_empty());
 }
 
 #[test]
@@ -264,5 +266,71 @@ fn mid_conversation_system_takes_the_values_of_the_backend_key() {
     assert_eq!(
         problems("mid_conversation_system = 1\n"),
         ["mid_conversation_system: must be a string"]
+    );
+}
+
+#[test]
+fn omit_fields_names_paths_a_preset_may_change() {
+    let preset = Preset::parse(
+        "client",
+        "omit_fields = [\"user\", \"stream_options.include_usage\"]\n",
+    )
+    .unwrap();
+    assert_eq!(preset.omit_fields, ["user", "stream_options.include_usage"]);
+    assert_eq!(
+        problems(
+            "omit_fields = [\"model\", \"messages.0\", \"stream\", \"a..b\", \"\", \"user\"]\n"
+        ),
+        [
+            "omit_fields: `model`: `model` is not a preset's to change",
+            "omit_fields: `messages.0`: `messages` is not a preset's to change",
+            "omit_fields: `stream`: `stream` is not a preset's to change",
+            "omit_fields: `a..b`: the path has an empty segment",
+            "omit_fields: ``: the path has an empty segment",
+        ]
+    );
+    assert_eq!(
+        problems("omit_fields = [\"model\", true]\n"),
+        [
+            "omit_fields: entry 2 must be a string",
+            "omit_fields: `model`: `model` is not a preset's to change",
+        ]
+    );
+    assert_eq!(
+        problems("omit_fields = { user = true }\n"),
+        ["omit_fields: must be a list of strings"]
+    );
+}
+
+#[test]
+fn field_order_lists_top_level_fields_once() {
+    let preset = Preset::parse(
+        "client",
+        "field_order = [\"model\", \"max_tokens\", \"messages\", \"stream\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        preset.field_order,
+        ["model", "max_tokens", "messages", "stream"],
+        "the fields a preset cannot change can still be placed"
+    );
+    assert_eq!(
+        problems("field_order = [\"model\", \"extra.a\", \"\", \"model\"]\n"),
+        [
+            "field_order: `extra.a` is not a top-level field; only those are ordered",
+            "field_order: a name must not be empty",
+            "field_order: `model` is listed twice",
+        ]
+    );
+    assert_eq!(
+        problems("field_order = [\"extra.a\", 3]\n"),
+        [
+            "field_order: entry 2 must be a string",
+            "field_order: `extra.a` is not a top-level field; only those are ordered",
+        ]
+    );
+    assert_eq!(
+        problems("field_order = \"model\"\n"),
+        ["field_order: must be a list of strings"]
     );
 }

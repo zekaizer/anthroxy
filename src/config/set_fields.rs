@@ -164,7 +164,7 @@ pub fn check(path: &str, value: &toml::Value) -> Result<(), FieldError> {
 }
 
 /// Whether a preset may change the field at the dotted `path`.
-fn check_preset_path(path: &str) -> Result<(), FieldError> {
+pub fn check_preset_path(path: &str) -> Result<(), FieldError> {
     match kept_root(path, &PRESET_KEPT)? {
         Some(kept) => Err(FieldError::PresetKept(kept)),
         None => Ok(()),

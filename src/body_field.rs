@@ -1,6 +1,6 @@
 //! What a backend's configuration sets in or removes from the request body it
 //! receives (`set_fields`, ADR-0019; `drop_fields`), in whichever format that
-//! body is.
+//! body is, and what a preset does to a translated one (ADR-0022).
 
 use serde_json::{Map, Value};
 
@@ -49,6 +49,37 @@ pub fn remove(object: &mut Map<String, Value>, path: &str) -> bool {
             Some(Value::Object(inner)) => remove(inner, rest),
             _ => false,
         },
+    }
+}
+
+/// What the configuration does to a body once it is written, in the order
+/// it is done: `omit` removed, `set` set in order, then the `order` fields
+/// put first.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BodyEdits<'a> {
+    /// Dot-separated paths, as [`remove`] reads them.
+    pub omit: &'a [String],
+    pub set: &'a [BodyField],
+    /// Top-level field names.
+    pub order: &'a [String],
+}
+
+impl BodyEdits<'_> {
+    pub fn apply(&self, object: &mut Map<String, Value>) {
+        for path in self.omit {
+            remove(object, path);
+        }
+        set_all(object, self.set);
+        if self.order.is_empty() {
+            return;
+        }
+        let mut rest = std::mem::take(object);
+        for name in self.order {
+            if let Some((name, value)) = rest.shift_remove_entry(name) {
+                object.insert(name, value);
+            }
+        }
+        object.extend(rest);
     }
 }
 
@@ -151,6 +182,62 @@ mod tests {
                 &[("extraData.sessionId", json!("s")), ("a.b.c", json!(true))]
             ),
             json!({"extraData": {"sessionId": "s"}, "a": {"b": {"c": true}}})
+        );
+    }
+
+    fn edited(body: Value, edits: &BodyEdits<'_>) -> String {
+        let Value::Object(mut object) = body else {
+            panic!("an object");
+        };
+        edits.apply(&mut object);
+        Value::Object(object).to_string()
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    #[test]
+    fn edits_omit_then_set_then_order() {
+        let set = [
+            BodyField {
+                path: vec!["user".into()],
+                value: json!("set"),
+            },
+            BodyField {
+                path: vec!["extra".into(), "a".into()],
+                value: json!(1),
+            },
+            BodyField {
+                path: vec!["extra".into(), "a".into()],
+                value: json!(2),
+            },
+        ];
+        let body = json!({
+            "model": "m", "messages": [], "user": "sent", "effort": "high",
+            "meta": {"keep": 1, "gone": 2}, "max_tokens": 5, "stream": true
+        });
+        assert_eq!(
+            edited(
+                body,
+                &BodyEdits {
+                    omit: &strings(&["user", "effort", "meta.gone", "absent"]),
+                    set: &set,
+                    order: &strings(&["model", "max_tokens", "absent", "extra", "messages"]),
+                }
+            ),
+            r#"{"model":"m","max_tokens":5,"extra":{"a":2},"messages":[],"meta":{"keep":1},"stream":true,"user":"set"}"#,
+            "a field omitted and then set is there, where a new field goes; \
+             a listed field the body lacks is skipped"
+        );
+    }
+
+    #[test]
+    fn no_edit_leaves_the_body_as_written() {
+        let body = json!({"model": "m", "messages": [], "stream": false});
+        assert_eq!(
+            edited(body.clone(), &BodyEdits::default()),
+            body.to_string()
         );
     }
 }

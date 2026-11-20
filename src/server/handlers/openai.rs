@@ -21,7 +21,7 @@ use crate::translate;
 use crate::upstream::{BodyRules, UpstreamResponse, is_event_stream};
 
 /// The upstream path and body for a client request to `client_path`, the
-/// body written per `rules` with `set` set in it: `rules.set_fields` as this
+/// body written and edited per `rules`. `set` is `rules.set_fields` as this
 /// request fills them. `count_tokens` has no counterpart and is refused here.
 pub fn prepare(
     body: &[u8],
@@ -38,12 +38,10 @@ pub fn prepare(
             path: path.to_owned(),
         });
     }
-    let translated =
-        translate::request(body, upstream_model, &rules.encode, set).map_err(|source| {
-            RouterError::Translate {
-                backend: backend.to_owned(),
-                source,
-            }
+    let translated = translate::request(body, upstream_model, &rules.encode, &rules.edits(set))
+        .map_err(|source| RouterError::Translate {
+            backend: backend.to_owned(),
+            source,
         })?;
     Ok((translate::CHAT_COMPLETIONS_PATH, Bytes::from(translated)))
 }
