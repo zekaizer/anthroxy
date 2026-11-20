@@ -372,3 +372,76 @@ top_k = 40
     );
     assert_eq!(body["model"], "qwen");
 }
+
+/// A conversation whose last message is a `system` message.
+fn chat_with_a_late_system_message(model: &str) -> Value {
+    json!({
+        "model": model,
+        "max_tokens": 16,
+        "system": "Lead.",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "Later."}
+        ]
+    })
+}
+
+#[tokio::test]
+async fn a_preset_places_a_later_system_message() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"client\"", ""),
+        &[("client", "mid_conversation_system = \"merge\"\n")],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let body = sent(&router, &upstream, &chat_with_a_late_system_message("qwen"))
+        .await
+        .json();
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"role": "system", "content": "Lead.\n\nLater."},
+            {"role": "user", "content": "hi"}
+        ])
+    );
+}
+
+#[tokio::test]
+async fn the_backends_and_the_models_placement_win_over_the_presets() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(
+            &upstream,
+            "emulate = \"client\"\nmid_conversation_system = \"keep\"",
+            "mid_conversation_system = \"user\"",
+        ),
+        &[("client", "mid_conversation_system = \"merge\"\n")],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let body = sent(&router, &upstream, &chat_with_a_late_system_message("qwen"))
+        .await
+        .json();
+    assert_eq!(
+        body["messages"],
+        json!([
+            {"role": "system", "content": "Lead."},
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "Later."}
+        ]),
+        "`keep` written on the backend is the backend's value"
+    );
+
+    let body = sent(
+        &router,
+        &upstream,
+        &chat_with_a_late_system_message("other"),
+    )
+    .await
+    .json();
+    assert_eq!(
+        body["messages"][2],
+        json!({"role": "user", "content": "<system-reminder>\nLater.\n</system-reminder>"})
+    );
+}

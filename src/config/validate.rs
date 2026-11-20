@@ -175,7 +175,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigError> {
             ));
         }
         if backend.kind != BackendKind::OpenAi
-            && backend.mid_conversation_system != SystemPlacement::Keep
+            && backend
+                .mid_conversation_system
+                .is_some_and(|placement| placement != SystemPlacement::Keep)
         {
             problems.push(format!(
                 "backends.{name}.mid_conversation_system: applies only to kind = \"openai\""

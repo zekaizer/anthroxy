@@ -239,11 +239,12 @@ pub struct BackendConfig {
     pub set_fields: BTreeMap<String, toml::Value>,
     /// `kind = "openai"` only: where a `system` message that is not the
     /// first message goes, for a chat template that refuses one anywhere
-    /// else (Qwen 3.5+). `keep` (default) sends it where it is, `merge`
-    /// appends its text to the leading system message, `user` sends it as a
-    /// user message wrapped in `<system-reminder>`.
+    /// else (Qwen 3.5+). `keep` sends it where it is, `merge` appends its
+    /// text to the leading system message, `user` sends it as a user message
+    /// wrapped in `<system-reminder>`. `None` when the file leaves it out:
+    /// the preset's value then applies, else `keep`.
     #[serde(default)]
-    pub mid_conversation_system: SystemPlacement,
+    pub mid_conversation_system: Option<SystemPlacement>,
     /// Proxy this backend is reached through (ADR-0012); unset connects
     /// directly.
     #[serde(default)]

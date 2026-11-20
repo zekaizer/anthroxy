@@ -273,7 +273,10 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 32] = [
+const PRESET_LINES: [&str; 35] = [
+    "mid_conversation_system = \"merge\"",
+    "mid_conversation_system = \"\\u0000\"",
+    "mid_conversation_system = { a = 1 }",
     "drop_headers = [\"x-stainless-*\", \"@claude-code\", \"user-agent\", \"*\", \"\"]",
     "drop_headers = [1, \"@x\"]",
     "drop_headers = \"a b\"",

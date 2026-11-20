@@ -52,14 +52,12 @@ impl Dialect {
             .and_then(|model| model.emulate.as_ref())
             .or(backend.emulate.as_ref())
             .map(|emulate| presets.bind(emulate).expect("validated emulate"));
-        let (preset_headers, preset_drop, preset_fields) = match &emulation {
-            Some(emulation) => (
-                emulation.headers(),
-                emulation.preset.drop_headers.as_slice(),
-                emulation.set_fields(),
-            ),
+        let preset = emulation.as_ref().map(|emulation| &*emulation.preset);
+        let (preset_headers, preset_fields) = match &emulation {
+            Some(emulation) => (emulation.headers(), emulation.set_fields()),
             None => Default::default(),
         };
+        let preset_drop = preset.map_or(&[][..], |preset| &preset.drop_headers);
         Self {
             headers: HeaderRules {
                 forced: ForcedHeaders::new(&backend.headers).over(preset_headers),
@@ -71,7 +69,9 @@ impl Dialect {
                 encode: EncodeOptions {
                     placement: model
                         .and_then(|model| model.mid_conversation_system)
-                        .unwrap_or(backend.mid_conversation_system),
+                        .or(backend.mid_conversation_system)
+                        .or(preset.and_then(|preset| preset.mid_conversation_system))
+                        .unwrap_or_default(),
                 },
             },
         }

@@ -1201,7 +1201,7 @@ fn a_problem_never_spans_lines_whatever_the_value() {
 }
 
 #[test]
-fn mid_conversation_system_parses_and_defaults_to_keep() {
+fn mid_conversation_system_parses_and_is_absent_when_left_out() {
     let text = r#"
 [server]
 token = "t"
@@ -1222,11 +1222,24 @@ backend = "a"
     let c: Config = toml::from_str(text).unwrap();
     assert_eq!(
         c.backends["a"].mid_conversation_system,
-        SystemPlacement::Merge
+        Some(SystemPlacement::Merge)
     );
     assert_eq!(
-        c.backends["b"].mid_conversation_system,
-        SystemPlacement::Keep
+        c.backends["b"].mid_conversation_system, None,
+        "left for a preset to say"
+    );
+}
+
+#[test]
+fn keep_may_be_written_on_a_backend_of_any_kind() {
+    let text = MINIMAL.replace(
+        "url = \"http://127.0.0.1:1234\"",
+        "url = \"http://127.0.0.1:1234\"\nmid_conversation_system = \"keep\"",
+    );
+    let c = parse(&text).unwrap();
+    assert_eq!(
+        c.backends["local"].mid_conversation_system,
+        Some(SystemPlacement::Keep)
     );
 }
 

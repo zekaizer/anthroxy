@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 
 use http::{HeaderName, HeaderValue};
+use serde::Deserialize;
+use serde::de::IntoDeserializer;
 
 use super::Preset;
 use crate::config::emulate::PRESET_KEY;
@@ -17,11 +19,12 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 4] = [
+const KEYS: [(&str, Reader); 5] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
     ("set_fields", set_fields),
+    ("mid_conversation_system", mid_conversation_system),
 ];
 
 pub(super) fn parse(name: &str, text: &str) -> Result<Preset, Vec<String>> {
@@ -148,6 +151,10 @@ fn set_fields(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<Strin
     preset.set_fields = fields;
 }
 
+fn mid_conversation_system(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    preset.mid_conversation_system = one_of("mid_conversation_system", value, problems);
+}
+
 /// A problem at `field` for each of `variables` the preset does not declare.
 fn undeclared<'a>(
     field: &str,
@@ -212,4 +219,21 @@ fn string_list(
         }
     }
     Some(entries)
+}
+
+/// `value` as one of the strings `T` names. One that is none of them is a
+/// problem that lists them.
+fn one_of<'a, T: Deserialize<'a>>(
+    field: &str,
+    value: &'a toml::Value,
+    problems: &mut Vec<String>,
+) -> Option<T> {
+    let Some(text) = value.as_str() else {
+        problems.push(format!("{field}: must be a string"));
+        return None;
+    };
+    let chosen: Result<T, serde::de::value::Error> = T::deserialize(text.into_deserializer());
+    chosen
+        .map_err(|error| problems.push(format!("{field}: {}", short(&error.to_string()))))
+        .ok()
 }

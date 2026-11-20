@@ -18,6 +18,7 @@ pub use library::{BindProblem, PresetLibrary};
 use super::set_fields::PresetFields;
 use super::template::PresetValue;
 use super::{SetFields, Template};
+use crate::openai::SystemPlacement;
 
 /// A preset file whose every key and value passed the checks. An absent key
 /// holds what the router does without a preset.
@@ -32,6 +33,7 @@ pub struct Preset {
     pub drop_headers: Vec<String>,
     /// Every variable a value names is declared.
     set_fields: PresetFields,
+    pub mid_conversation_system: Option<SystemPlacement>,
 }
 
 /// Names only: a header value may be a key, and the value of a variable is

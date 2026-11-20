@@ -1,4 +1,5 @@
 use super::*;
+use crate::openai::SystemPlacement;
 
 fn problems(text: &str) -> Vec<String> {
     Preset::parse("client", text).expect_err("a preset with problems")
@@ -236,5 +237,32 @@ user = "u"
             "set_fields: `extra.note`: `{os}` names no variable in [variables]",
             "set_fields: `extra.note`: `{version}` names no variable in [variables]",
         ]
+    );
+}
+
+#[test]
+fn mid_conversation_system_takes_the_values_of_the_backend_key() {
+    for (written, placement) in [
+        ("keep", SystemPlacement::Keep),
+        ("merge", SystemPlacement::Merge),
+        ("user", SystemPlacement::User),
+    ] {
+        let text = format!("mid_conversation_system = \"{written}\"\n");
+        let preset = Preset::parse("client", &text).unwrap();
+        assert_eq!(preset.mid_conversation_system, Some(placement));
+    }
+    assert_eq!(
+        Preset::parse("client", "").unwrap().mid_conversation_system,
+        None
+    );
+    assert_eq!(
+        problems("mid_conversation_system = \"first\"\n"),
+        [
+            "mid_conversation_system: unknown variant `first`, expected one of `keep`, `merge`, `user`"
+        ]
+    );
+    assert_eq!(
+        problems("mid_conversation_system = 1\n"),
+        ["mid_conversation_system: must be a string"]
     );
 }
