@@ -414,3 +414,15 @@ fn tool_only_content_is_one_of_three_words() {
         ["tool_only_content: `` is not one of `omitted`, `empty`, `null`"]
     );
 }
+
+#[test]
+fn tool_strict_is_a_boolean() {
+    let strict = |text: &str| Preset::parse("client", text).unwrap().tool_strict;
+    assert_eq!(strict("tool_strict = true\n"), Some(true));
+    assert_eq!(strict("tool_strict = false\n"), Some(false));
+    assert_eq!(strict(""), None);
+    assert_eq!(
+        problems("tool_strict = \"false\"\n"),
+        ["tool_strict: must be `true` or `false`"]
+    );
+}

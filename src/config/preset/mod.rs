@@ -41,6 +41,7 @@ pub struct Preset {
     pub max_tokens_field: MaxTokensField,
     pub default_tool_choice: Option<ToolChoiceDefault>,
     pub tool_only_content: ToolOnlyContent,
+    pub tool_strict: Option<bool>,
 }
 
 /// Names only: a header value may be a key, and the value of a variable is

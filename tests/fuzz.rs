@@ -273,7 +273,9 @@ fn configuration_parsing_survives_arbitrary_files() {
     }
 }
 
-const PRESET_LINES: [&str; 47] = [
+const PRESET_LINES: [&str; 49] = [
+    "tool_strict = false",
+    "tool_strict = \"true\"",
     "tool_only_content = \"null\"",
     "tool_only_content = 0",
     "default_tool_choice = \"required\"",

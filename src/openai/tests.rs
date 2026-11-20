@@ -1488,3 +1488,36 @@ fn a_turn_that_only_calls_tools_gets_the_content_chosen() {
         "only a turn with tool calls and no text is touched"
     );
 }
+
+#[test]
+fn strict_is_written_on_every_tool_definition_when_chosen() {
+    let mut request = request(vec![user(vec![Part::Text("hi".into())])]);
+    request.tools = vec![
+        Tool {
+            name: "read".into(),
+            description: Some("Read".into()),
+            parameters: json!({"type": "object", "properties": {}}),
+        },
+        Tool {
+            name: "bare".into(),
+            description: None,
+            parameters: json!({"type": "object", "properties": {}}),
+        },
+    ];
+    let tools = |tool_strict| {
+        let options = EncodeOptions {
+            tool_strict,
+            ..Default::default()
+        };
+        Value::Object(encode_request(&request, &options))["tools"].to_string()
+    };
+    assert_eq!(
+        tools(Some(false)),
+        concat!(
+            r#"[{"type":"function","function":{"name":"read","description":"Read","parameters":{"type":"object","properties":{}},"strict":false}},"#,
+            r#"{"type":"function","function":{"name":"bare","parameters":{"type":"object","properties":{}},"strict":false}}]"#
+        )
+    );
+    assert!(tools(Some(true)).ends_with(r#""strict":true}}]"#));
+    assert!(!tools(None).contains("strict"));
+}

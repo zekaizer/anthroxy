@@ -9,6 +9,8 @@ pub struct EncodeOptions {
     /// The `tool_choice` of a request that has tools and names none.
     pub default_tool_choice: Option<ToolChoiceDefault>,
     pub tool_only_content: ToolOnlyContent,
+    /// Written as `strict` in every tool definition; `None` writes none.
+    pub tool_strict: Option<bool>,
 }
 
 /// Where a `Role::System` message that is not the first message goes.

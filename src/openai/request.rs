@@ -65,6 +65,9 @@ pub fn encode(request: &Request, options: &EncodeOptions) -> Map<String, Value> 
                     function.insert("description".into(), json!(description));
                 }
                 function.insert("parameters".into(), with_properties(&tool.parameters));
+                if let Some(strict) = options.tool_strict {
+                    function.insert("strict".into(), json!(strict));
+                }
                 json!({"type": "function", "function": function})
             })
             .collect();

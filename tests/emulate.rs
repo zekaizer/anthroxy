@@ -630,3 +630,42 @@ async fn a_preset_writes_the_content_of_a_turn_that_only_calls_tools() {
         format!(r#"{{"role":"assistant",{READ_CALL}}}"#)
     );
 }
+
+#[tokio::test]
+async fn a_preset_writes_strict_on_every_tool_definition() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"loose\"", "emulate = \"strict\""),
+        &[
+            ("loose", "tool_strict = false\n"),
+            ("strict", "tool_strict = true\n"),
+        ],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+    let with_two_tools = |model: &str| {
+        let mut body = chat_with_a_tool(model, None);
+        let tools = body["tools"].as_array_mut().unwrap();
+        tools.push(json!({"name": "Bare", "input_schema": {"type": "object"}}));
+        body
+    };
+
+    let received = sent(&router, &upstream, &with_two_tools("qwen")).await;
+    assert_eq!(
+        received.json()["tools"].to_string(),
+        concat!(
+            r#"[{"type":"function","function":{"name":"Read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"strict":false}},"#,
+            r#"{"type":"function","function":{"name":"Bare","parameters":{"type":"object","properties":{}},"strict":false}}]"#
+        )
+    );
+
+    let body = sent(&router, &upstream, &with_two_tools("other"))
+        .await
+        .json();
+    let strict: Vec<&Value> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| &tool["function"]["strict"])
+        .collect();
+    assert_eq!(strict, [&json!(true), &json!(true)]);
+}

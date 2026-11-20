@@ -19,7 +19,7 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 10] = [
+const KEYS: [(&str, Reader); 11] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
@@ -30,6 +30,7 @@ const KEYS: [(&str, Reader); 10] = [
     ("max_tokens_field", max_tokens_field),
     ("default_tool_choice", default_tool_choice),
     ("tool_only_content", tool_only_content),
+    ("tool_strict", tool_strict),
 ];
 
 pub(super) fn parse(name: &str, text: &str) -> Result<Preset, Vec<String>> {
@@ -204,6 +205,13 @@ fn default_tool_choice(value: &toml::Value, preset: &mut Preset, problems: &mut 
 fn tool_only_content(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
     if let Some(content) = one_of("tool_only_content", value, problems) {
         preset.tool_only_content = content;
+    }
+}
+
+fn tool_strict(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    preset.tool_strict = value.as_bool();
+    if preset.tool_strict.is_none() {
+        problems.push("tool_strict: must be `true` or `false`".to_owned());
     }
 }
 

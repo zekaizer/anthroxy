@@ -98,6 +98,7 @@ impl Dialect {
                     max_tokens_field: preset.max_tokens_field,
                     default_tool_choice: preset.default_tool_choice,
                     tool_only_content: preset.tool_only_content,
+                    tool_strict: preset.tool_strict,
                 },
                 omit_fields: preset.omit_fields.clone(),
                 field_order: preset.field_order.clone(),
