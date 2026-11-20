@@ -22,6 +22,7 @@ use crate::anthropic;
 use crate::config::BackendKind;
 use crate::config::view::REDACTED;
 use crate::observability::{Recorder, RequestRecord};
+use crate::openai::EncodeOptions;
 use crate::routing::Routed;
 use crate::server::buffered::read_all;
 use crate::server::handlers::openai;
@@ -222,7 +223,9 @@ async fn handle(
             client_path,
             &backend.name,
             &route.upstream_model,
-            route.mid_conversation_system,
+            &EncodeOptions {
+                placement: route.mid_conversation_system,
+            },
             &set_fields,
         )?,
     };

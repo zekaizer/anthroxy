@@ -121,7 +121,7 @@ fn request_round_trips_through_the_ir() {
         &request(
             &serde_json::to_vec(&body).unwrap(),
             "m",
-            Default::default(),
+            &Default::default(),
             &[],
         )
         .unwrap(),
@@ -139,7 +139,7 @@ fn request_round_trips_through_the_ir() {
         })
     );
     assert_eq!(
-        request(b"[]", "m", Default::default(), &[]),
+        request(b"[]", "m", &Default::default(), &[]),
         Err(DecodeError::NotAnObject)
     );
 }
@@ -165,7 +165,7 @@ fn configured_fields_are_set_in_the_translated_body() {
         &request(
             &serde_json::to_vec(&body).unwrap(),
             "up",
-            Default::default(),
+            &Default::default(),
             &fields,
         )
         .unwrap(),

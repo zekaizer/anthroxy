@@ -4,27 +4,16 @@ use std::borrow::Cow;
 
 use serde_json::{Map, Value, json};
 
+use super::options::{EncodeOptions, SystemPlacement};
 use crate::ir::{Part, Request, RequestMessage, Role, ToolChoice};
 
 /// Text parts of one message are joined with a blank line.
 const TEXT_SEPARATOR: &str = "\n\n";
 
-/// Where a `Role::System` message that is not the first message goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SystemPlacement {
-    /// A `system` message where it is.
-    #[default]
-    Keep,
-    /// Its text appended to the leading `system` message.
-    Merge,
-    /// A `user` message where it is, wrapped in `<system-reminder>`.
-    User,
-}
-
 /// The body as a document: the caller writes it out, once it has set what the
 /// backend's configuration adds.
-pub fn encode(request: &Request, placement: SystemPlacement) -> Map<String, Value> {
+pub fn encode(request: &Request, options: &EncodeOptions) -> Map<String, Value> {
+    let placement = options.placement;
     let mut messages = Vec::new();
     let mut system = request.system.clone().unwrap_or_default();
     if placement == SystemPlacement::Merge {

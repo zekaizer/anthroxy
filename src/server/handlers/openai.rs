@@ -12,8 +12,7 @@ use tracing::Span;
 use crate::activity::Exchange;
 use crate::body_field::BodyField;
 use crate::observability::Recorder;
-use crate::openai::ResponseError;
-use crate::openai::SystemPlacement;
+use crate::openai::{EncodeOptions, ResponseError};
 use crate::server::RouterError;
 use crate::server::buffered::read_all;
 use crate::server::ping::{PING_INTERVAL, Pings};
@@ -29,7 +28,7 @@ pub fn prepare(
     client_path: &str,
     backend: &str,
     upstream_model: &str,
-    placement: SystemPlacement,
+    options: &EncodeOptions,
     set_fields: &[BodyField],
 ) -> Result<(&'static str, Bytes), RouterError> {
     let path = client_path.split('?').next().unwrap_or(client_path);
@@ -40,7 +39,7 @@ pub fn prepare(
         });
     }
     let translated =
-        translate::request(body, upstream_model, placement, set_fields).map_err(|source| {
+        translate::request(body, upstream_model, options, set_fields).map_err(|source| {
             RouterError::Translate {
                 backend: backend.to_owned(),
                 source,

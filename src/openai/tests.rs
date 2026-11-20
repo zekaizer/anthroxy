@@ -38,7 +38,11 @@ fn assistant(parts: Vec<Part>) -> RequestMessage {
 }
 
 fn encoded(request: &Request) -> Value {
-    Value::Object(encode_request(request, SystemPlacement::Keep))
+    Value::Object(encode_request(request, &EncodeOptions::default()))
+}
+
+fn placed(request: &Request, placement: SystemPlacement) -> Value {
+    Value::Object(encode_request(request, &EncodeOptions { placement }))
 }
 
 #[test]
@@ -824,10 +828,7 @@ fn with_mid_conversation_system() -> Request {
 
 #[test]
 fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
-    let body = Value::Object(encode_request(
-        &with_mid_conversation_system(),
-        SystemPlacement::Merge,
-    ));
+    let body = placed(&with_mid_conversation_system(), SystemPlacement::Merge);
     assert_eq!(
         body["messages"],
         json!([
@@ -838,7 +839,7 @@ fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
     );
     let mut r = with_mid_conversation_system();
     r.system = None;
-    let body = Value::Object(encode_request(&r, SystemPlacement::Merge));
+    let body = placed(&r, SystemPlacement::Merge);
     assert_eq!(
         body["messages"][0],
         json!({"role": "system", "content": "env changed"})
@@ -847,10 +848,7 @@ fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
 
 #[test]
 fn user_sends_a_mid_conversation_system_as_a_user_message() {
-    let body = Value::Object(encode_request(
-        &with_mid_conversation_system(),
-        SystemPlacement::User,
-    ));
+    let body = placed(&with_mid_conversation_system(), SystemPlacement::User);
     assert_eq!(
         body["messages"],
         json!([
@@ -872,7 +870,7 @@ fn a_leading_system_message_stays_system_under_user_placement() {
         user(vec![Part::Text("hi".into())]),
     ]);
     r.system = None;
-    let body = Value::Object(encode_request(&r, SystemPlacement::User));
+    let body = placed(&r, SystemPlacement::User);
     assert_eq!(
         body["messages"],
         json!([
@@ -892,7 +890,7 @@ fn merge_skips_an_empty_system_message() {
         },
     ]);
     r.system = Some("top".into());
-    let body = Value::Object(encode_request(&r, SystemPlacement::Merge));
+    let body = placed(&r, SystemPlacement::Merge);
     assert_eq!(
         body["messages"][0],
         json!({"role": "system", "content": "top"})
