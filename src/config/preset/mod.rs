@@ -18,7 +18,7 @@ pub use library::{BindProblem, PresetLibrary};
 use super::set_fields::PresetFields;
 use super::template::PresetValue;
 use super::{SetFields, Template};
-use crate::openai::{MaxTokensField, SystemPlacement};
+use crate::openai::{MaxTokensField, SystemPlacement, ToolChoiceDefault};
 
 /// A preset file whose every key and value passed the checks. An absent key
 /// holds what the router does without a preset.
@@ -39,6 +39,7 @@ pub struct Preset {
     pub field_order: Vec<String>,
     pub mid_conversation_system: Option<SystemPlacement>,
     pub max_tokens_field: MaxTokensField,
+    pub default_tool_choice: Option<ToolChoiceDefault>,
 }
 
 /// Names only: a header value may be a key, and the value of a variable is

@@ -526,3 +526,46 @@ async fn a_preset_names_the_output_token_limit() {
     assert_eq!(body["max_tokens"], 16);
     assert_eq!(body.get("max_completion_tokens"), None);
 }
+
+/// `chat` with one tool, and `tool_choice` when given.
+fn chat_with_a_tool(model: &str, tool_choice: Option<Value>) -> Value {
+    let mut body = chat(model);
+    body["tools"] = json!([{
+        "name": "Read",
+        "description": "Read a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}
+    }]);
+    if let Some(choice) = tool_choice {
+        body["tool_choice"] = choice;
+    }
+    body
+}
+
+#[tokio::test]
+async fn a_preset_gives_the_tool_choice_of_a_request_with_tools_that_names_none() {
+    let upstream = backend().await;
+    let dir = ConfigDir::new(
+        &config(&upstream, "emulate = \"client\"", ""),
+        &[("client", "default_tool_choice = \"auto\"\n")],
+    );
+    let router = TestRouter::start_at(&dir.config()).await;
+
+    let body = sent(&router, &upstream, &chat_with_a_tool("qwen", None))
+        .await
+        .json();
+    assert_eq!(body["tool_choice"], "auto");
+
+    let body = sent(&router, &upstream, &chat("qwen")).await.json();
+    assert_eq!(
+        body.get("tool_choice"),
+        None,
+        "a request without tools gets no default"
+    );
+
+    let named = chat_with_a_tool("qwen", Some(json!({"type": "any"})));
+    let body = sent(&router, &upstream, &named).await.json();
+    assert_eq!(
+        body["tool_choice"], "required",
+        "what Claude Code named is kept"
+    );
+}

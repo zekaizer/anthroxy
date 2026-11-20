@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use serde_json::{Map, Value, json};
 
-use super::options::{EncodeOptions, SystemPlacement};
+use super::options::{EncodeOptions, SystemPlacement, ToolChoiceDefault};
 use crate::ir::{Part, Request, RequestMessage, Role, ToolChoice};
 
 /// Text parts of one message are joined with a blank line.
@@ -70,13 +70,24 @@ pub fn encode(request: &Request, options: &EncodeOptions) -> Map<String, Value> 
             .collect();
         body.insert("tools".into(), Value::Array(tools));
     }
-    if let Some(choice) = &request.tool_choice {
-        let choice = match choice {
-            ToolChoice::Auto => json!("auto"),
-            ToolChoice::Required => json!("required"),
-            ToolChoice::None => json!("none"),
-            ToolChoice::Tool(name) => json!({"type": "function", "function": {"name": name}}),
-        };
+    let default_choice = options
+        .default_tool_choice
+        .filter(|_| !request.tools.is_empty())
+        .map(|choice| match choice {
+            ToolChoiceDefault::Auto => json!("auto"),
+            ToolChoiceDefault::Required => json!("required"),
+            ToolChoiceDefault::None => json!("none"),
+        });
+    let choice = match &request.tool_choice {
+        Some(ToolChoice::Auto) => Some(json!("auto")),
+        Some(ToolChoice::Required) => Some(json!("required")),
+        Some(ToolChoice::None) => Some(json!("none")),
+        Some(ToolChoice::Tool(name)) => {
+            Some(json!({"type": "function", "function": {"name": name}}))
+        }
+        None => default_choice,
+    };
+    if let Some(choice) = choice {
         body.insert("tool_choice".into(), choice);
     }
     if let Some(max_tokens) = request.max_tokens {

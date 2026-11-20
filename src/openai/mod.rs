@@ -16,6 +16,6 @@ pub use chunk::{ChunkDecoder, MAX_CALLS, MAX_PENDING_ARGUMENTS};
 pub use common::ParseError;
 pub use error::decode as decode_error;
 pub use models::decode as decode_models;
-pub use options::{EncodeOptions, MaxTokensField, SystemPlacement};
+pub use options::{EncodeOptions, MaxTokensField, SystemPlacement, ToolChoiceDefault};
 pub use request::encode as encode_request;
 pub use response::{ResponseError, decode as decode_response};

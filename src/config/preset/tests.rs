@@ -1,5 +1,5 @@
 use super::*;
-use crate::openai::{MaxTokensField, SystemPlacement};
+use crate::openai::{MaxTokensField, SystemPlacement, ToolChoiceDefault};
 
 fn problems(text: &str) -> Vec<String> {
     Preset::parse("client", text).expect_err("a preset with problems")
@@ -362,5 +362,32 @@ fn a_long_value_does_not_push_the_allowed_ones_out_of_the_message() {
     assert!(
         found[0].ends_with("…` is not `max_tokens` or `max_completion_tokens`"),
         "{found:?}"
+    );
+}
+
+#[test]
+fn default_tool_choice_is_one_of_three_words() {
+    for (written, choice) in [
+        ("auto", ToolChoiceDefault::Auto),
+        ("required", ToolChoiceDefault::Required),
+        ("none", ToolChoiceDefault::None),
+    ] {
+        let text = format!("default_tool_choice = \"{written}\"\n");
+        assert_eq!(
+            Preset::parse("client", &text).unwrap().default_tool_choice,
+            Some(choice)
+        );
+    }
+    assert_eq!(
+        Preset::parse("client", "").unwrap().default_tool_choice,
+        None
+    );
+    assert_eq!(
+        problems("default_tool_choice = \"any\"\n"),
+        ["default_tool_choice: `any` is not one of `auto`, `required`, `none`"]
+    );
+    assert_eq!(
+        problems("default_tool_choice = { type = \"auto\" }\n"),
+        ["default_tool_choice: must be a string"]
     );
 }

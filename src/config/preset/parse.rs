@@ -19,7 +19,7 @@ type Reader = fn(&toml::Value, &mut Preset, &mut Vec<String>);
 
 /// Every preset key with what reads it, in the order they are read: a later
 /// reader may check against what an earlier one stored.
-const KEYS: [(&str, Reader); 8] = [
+const KEYS: [(&str, Reader); 9] = [
     ("variables", variables),
     ("headers", headers),
     ("drop_headers", drop_headers),
@@ -28,6 +28,7 @@ const KEYS: [(&str, Reader); 8] = [
     ("field_order", field_order),
     ("mid_conversation_system", mid_conversation_system),
     ("max_tokens_field", max_tokens_field),
+    ("default_tool_choice", default_tool_choice),
 ];
 
 pub(super) fn parse(name: &str, text: &str) -> Result<Preset, Vec<String>> {
@@ -193,6 +194,10 @@ fn max_tokens_field(value: &toml::Value, preset: &mut Preset, problems: &mut Vec
     if let Some(field) = one_of("max_tokens_field", value, problems) {
         preset.max_tokens_field = field;
     }
+}
+
+fn default_tool_choice(value: &toml::Value, preset: &mut Preset, problems: &mut Vec<String>) {
+    preset.default_tool_choice = one_of("default_tool_choice", value, problems);
 }
 
 /// A problem at `field` for each of `variables` the preset does not declare.

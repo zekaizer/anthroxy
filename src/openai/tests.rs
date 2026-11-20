@@ -1370,3 +1370,53 @@ fn the_output_token_limit_is_written_under_the_name_chosen() {
     assert_eq!(body.get("max_completion_tokens"), None);
     assert_eq!(body.get("max_tokens"), None);
 }
+
+#[test]
+fn a_default_tool_choice_applies_to_a_request_with_tools_that_names_none() {
+    let tool = Tool {
+        name: "read".into(),
+        description: None,
+        parameters: json!({"type": "object", "properties": {}}),
+    };
+    let encoded = |tools: Vec<Tool>, choice: Option<ToolChoice>, default| {
+        let mut request = request(vec![user(vec![Part::Text("hi".into())])]);
+        request.tools = tools;
+        request.tool_choice = choice;
+        let options = EncodeOptions {
+            default_tool_choice: Some(default),
+            ..Default::default()
+        };
+        Value::Object(encode_request(&request, &options))
+    };
+    assert_eq!(
+        encoded(vec![tool.clone()], None, ToolChoiceDefault::Auto).to_string(),
+        r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"read","parameters":{"type":"object","properties":{}}}}],"tool_choice":"auto","max_tokens":100,"stream":false}"#
+    );
+    assert_eq!(
+        encoded(vec![tool.clone()], None, ToolChoiceDefault::Required)["tool_choice"],
+        "required"
+    );
+    assert_eq!(
+        encoded(vec![tool.clone()], None, ToolChoiceDefault::None)["tool_choice"],
+        "none"
+    );
+    assert_eq!(
+        encoded(vec![], None, ToolChoiceDefault::Auto).get("tool_choice"),
+        None,
+        "a request without tools gets no default"
+    );
+    assert_eq!(
+        encoded(
+            vec![tool],
+            Some(ToolChoice::Required),
+            ToolChoiceDefault::Auto
+        )["tool_choice"],
+        "required",
+        "what the client named is written"
+    );
+    assert_eq!(
+        encoded(vec![], Some(ToolChoice::None), ToolChoiceDefault::Auto)["tool_choice"],
+        "none",
+        "with or without tools"
+    );
+}

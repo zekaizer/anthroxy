@@ -96,6 +96,7 @@ impl Dialect {
                         .or(preset.mid_conversation_system)
                         .unwrap_or_default(),
                     max_tokens_field: preset.max_tokens_field,
+                    default_tool_choice: preset.default_tool_choice,
                 },
                 omit_fields: preset.omit_fields.clone(),
                 field_order: preset.field_order.clone(),

@@ -6,6 +6,8 @@
 pub struct EncodeOptions {
     pub placement: SystemPlacement,
     pub max_tokens_field: MaxTokensField,
+    /// The `tool_choice` of a request that has tools and names none.
+    pub default_tool_choice: Option<ToolChoiceDefault>,
 }
 
 /// Where a `Role::System` message that is not the first message goes.
@@ -37,4 +39,13 @@ impl MaxTokensField {
             MaxTokensField::MaxCompletionTokens => "max_completion_tokens",
         }
     }
+}
+
+/// A `tool_choice` the encoder writes when the request names none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolChoiceDefault {
+    Auto,
+    Required,
+    None,
 }
