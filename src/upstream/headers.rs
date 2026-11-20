@@ -7,7 +7,7 @@ use http::header::{
     HeaderName, HeaderValue, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
 };
 
-use super::Backend;
+use super::Target;
 use crate::config::view::REDACTED;
 use crate::config::{BackendKind, CredentialHeader, Template, X_API_KEY};
 
@@ -123,15 +123,17 @@ pub(super) fn is_hop_by_hop(name: &HeaderName) -> bool {
 /// client's own value under that name (ADR-0019). `anthropic_beta` flags are
 /// merged into the client's list. An `openai` backend gets no
 /// `anthropic-version` or `anthropic-beta` at all (ADR-0010).
-pub fn upstream_headers(client: &HeaderMap, backend: &Backend) -> HeaderMap {
-    let mut out = HeaderMap::with_capacity(client.len() + backend.headers.len() + 1);
+pub fn upstream_headers(client: &HeaderMap, target: Target<'_>) -> HeaderMap {
+    let backend = target.backend();
+    let forced = &target.headers().forced;
+    let mut out = HeaderMap::with_capacity(client.len() + forced.len() + 1);
     for (name, value) in client {
-        if dropped(name, backend).is_some() {
+        if dropped(name, target).is_some() {
             continue;
         }
         out.append(name.clone(), value.clone());
     }
-    for (name, value) in backend.headers.resolve(client) {
+    for (name, value) in forced.resolve(client) {
         match value {
             Some(value) => {
                 out.insert(name.clone(), value);
@@ -196,8 +198,9 @@ pub enum DropReason {
     Overridden,
 }
 
-/// Whether the client's `name` reaches `backend`, and why not.
-fn dropped(name: &HeaderName, backend: &Backend) -> Option<DropReason> {
+/// Whether the client's `name` reaches `target`, and why not.
+fn dropped(name: &HeaderName, target: Target<'_>) -> Option<DropReason> {
+    let backend = target.backend();
     if is_hop_by_hop(name) || *name == HOST || *name == CONTENT_LENGTH {
         return Some(DropReason::Framing);
     }
@@ -212,8 +215,9 @@ fn dropped(name: &HeaderName, backend: &Backend) -> Option<DropReason> {
     {
         return Some(DropReason::BackendKind);
     }
-    backend
-        .drop_headers
+    target
+        .headers()
+        .drop
         .matches(name)
         .then_some(DropReason::DropHeaders)
 }
@@ -230,15 +234,15 @@ pub struct DroppedHeader {
 /// [`upstream_headers`] filters out, and what its `headers` overwrite. Values
 /// are the client's own and are shown as sent, except its credential, which
 /// is the router's token and is of no use to any report.
-pub fn dropped_headers(client: &HeaderMap, backend: &Backend) -> Vec<DroppedHeader> {
+pub fn dropped_headers(client: &HeaderMap, target: Target<'_>) -> Vec<DroppedHeader> {
     let mut out: Vec<DroppedHeader> = Vec::new();
     for (name, value) in client {
-        let reason = match dropped(name, backend) {
+        let reason = match dropped(name, target) {
             Some(reason) => reason,
             // `anthropic_beta` merges the client's flags in rather than
             // replacing them, so a beta header the backend adds to is not one
             // it overrode.
-            None if backend.headers.contains_key(name) => DropReason::Overridden,
+            None if target.headers().forced.contains_key(name) => DropReason::Overridden,
             None => continue,
         };
         let value = match reason {
@@ -300,12 +304,13 @@ impl SecretView {
 /// a secret and is shown as `view` says; `body_len` is 0 for a request that
 /// carries no body, which is then sent without `content-length`.
 pub fn sent_headers(
-    backend: &Backend,
+    target: Target<'_>,
     headers: &HeaderMap,
     credential: Option<(&CredentialHeader, String)>,
     body_len: usize,
     view: SecretView,
 ) -> Vec<SentHeader> {
+    let backend = target.backend();
     let mut sent: BTreeMap<String, (String, HeaderSource)> = BTreeMap::new();
     for name in headers.keys() {
         let value = headers
@@ -314,7 +319,7 @@ pub fn sent_headers(
             .map(header_text)
             .collect::<Vec<_>>()
             .join(", ");
-        let (value, source) = if backend.headers.contains_key(name) {
+        let (value, source) = if target.headers().forced.contains_key(name) {
             (view.show(&value), HeaderSource::Backend)
         } else if *name == AUTHORIZATION || *name == X_API_KEY {
             // The client's own credential, forwarded by a passthrough

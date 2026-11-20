@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crate::config::{BackendKind, Config};
-use crate::openai::SystemPlacement;
-use crate::upstream::{Backend, BackendBuildError};
+use crate::upstream::{Backend, BackendBuildError, Dialect, Target};
 
 /// One exposed model and where it goes.
 #[derive(Debug, Clone)]
@@ -15,9 +14,14 @@ pub struct Route {
     pub upstream_model: String,
     pub display_name: String,
     pub aliases: Vec<String>,
-    /// Where a mid-conversation system message goes on an `openai` backend:
-    /// the model's setting, else the backend's.
-    pub mid_conversation_system: SystemPlacement,
+    /// How requests this route makes are written.
+    pub dialect: Arc<Dialect>,
+}
+
+impl Route {
+    pub fn target(&self) -> Target<'_> {
+        Target::new(&self.backend, &self.dialect.headers)
+    }
 }
 
 /// Why a request matched a route.
@@ -54,7 +58,11 @@ impl Registry {
     pub fn from_config(config: &Config) -> Result<Registry, BackendBuildError> {
         let mut backends = BTreeMap::new();
         for (name, cfg) in &config.backends {
-            backends.insert(name.clone(), Arc::new(Backend::from_config(name, cfg)?));
+            let dialect = Arc::new(Dialect::new(cfg, None));
+            backends.insert(
+                name.clone(),
+                Arc::new(Backend::from_config(name, cfg, dialect)?),
+            );
         }
         let routes: Vec<Route> = config
             .models
@@ -65,9 +73,7 @@ impl Registry {
                 upstream_model: m.upstream_model.clone().unwrap_or_else(|| m.id.clone()),
                 display_name: m.display_name.clone().unwrap_or_else(|| m.id.clone()),
                 aliases: m.aliases.clone(),
-                mid_conversation_system: m
-                    .mid_conversation_system
-                    .unwrap_or(backends[&m.backend].mid_conversation_system),
+                dialect: Arc::new(Dialect::new(&config.backends[&m.backend], Some(m))),
             })
             .collect();
         let mut by_name = HashMap::new();

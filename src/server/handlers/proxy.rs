@@ -22,7 +22,6 @@ use crate::anthropic;
 use crate::config::BackendKind;
 use crate::config::view::REDACTED;
 use crate::observability::{Recorder, RequestRecord};
-use crate::openai::EncodeOptions;
 use crate::routing::Routed;
 use crate::server::buffered::read_all;
 use crate::server::handlers::openai;
@@ -189,7 +188,9 @@ async fn handle(
         body_bytes = body.len(),
         "routed"
     );
-    let set_fields = backend.set_fields.resolve(&parts.headers);
+    let target = route.target();
+    let body_rules = &route.dialect.body;
+    let set_fields = body_rules.set_fields.resolve(&parts.headers);
     // The translated body names the upstream model itself and takes
     // `set_fields` once it is written; only a relayed body needs either here.
     let anthropic_kind = backend.kind == BackendKind::Anthropic;
@@ -223,13 +224,11 @@ async fn handle(
             client_path,
             &backend.name,
             &route.upstream_model,
-            &EncodeOptions {
-                placement: route.mid_conversation_system,
-            },
+            body_rules,
             &set_fields,
         )?,
     };
-    let headers = upstream_headers(&parts.headers, backend);
+    let headers = upstream_headers(&parts.headers, target);
     let recorder = state.body_log.as_ref().map(|log| {
         let record = request_record(
             request_id,
@@ -336,7 +335,7 @@ async fn handle(
         // Hints are read from the prefix the exchange keeps, so no error body
         // can grow a hint past that.
         let text = String::from_utf8_lossy(&raw[..raw.len().min(ERROR_BODY_BYTES)]);
-        let set_paths = backend.set_fields.paths();
+        let set_paths = body_rules.set_fields.paths();
         note(exchange, |e| {
             e.upstream_error(
                 &raw,
@@ -491,7 +490,7 @@ fn request_record(
         backend: route.backend.name.clone(),
         stream,
         request_headers: sent_headers(
-            &route.backend,
+            route.target(),
             headers,
             route
                 .backend
@@ -502,7 +501,7 @@ fn request_record(
             body.len(),
             SecretView::Redacted,
         ),
-        dropped_headers: dropped_headers(client_headers, &route.backend),
+        dropped_headers: dropped_headers(client_headers, route.target()),
         session: client_headers
             .get(SESSION_ID)
             .and_then(|value| value.to_str().ok())

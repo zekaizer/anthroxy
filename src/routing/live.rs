@@ -92,7 +92,7 @@ impl LiveCatalog {
             upstream_model: m.id.clone(),
             display_name: m.display_name.clone(),
             aliases: Vec::new(),
-            mid_conversation_system: self.backend.mid_conversation_system,
+            dialect: Arc::clone(&self.backend.dialect),
         })
     }
 
@@ -110,7 +110,12 @@ impl LiveCatalog {
         } else {
             self.backend.name.clone()
         };
-        let complete = self.backend.headers.filled_by(client_headers);
+        let complete = self
+            .backend
+            .dialect
+            .headers
+            .forced
+            .filled_by(client_headers);
         // The lock is held across the pull, so concurrent misses share one
         // fetch instead of each asking the backend.
         let mut cache = self.cache.lock().await;
@@ -157,7 +162,7 @@ impl LiveCatalog {
         upstream: &UpstreamClient,
         client_headers: &HeaderMap,
     ) -> Result<Vec<ModelObject>, crate::upstream::UpstreamError> {
-        let headers = upstream_headers(client_headers, &self.backend);
+        let headers = upstream_headers(client_headers, self.backend.target());
         let upstream = upstream
             .send(UpstreamRequest {
                 backend: &self.backend,

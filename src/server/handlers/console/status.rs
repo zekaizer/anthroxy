@@ -27,7 +27,7 @@ pub async fn status(
                 "credential": backend.credential.status(),
                 "header_command": backend.header_command.as_ref().map(|command| command.status()),
                 "drop_fields": backend.drop_fields,
-                "set_fields": backend.set_fields.paths(),
+                "set_fields": backend.dialect.body.set_fields.paths(),
                 "drop_headers": snapshot
                     .config
                     .backends

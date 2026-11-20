@@ -2,6 +2,7 @@
 
 mod backend;
 mod client;
+mod dialect;
 mod header_command;
 mod headers;
 pub mod network;
@@ -17,6 +18,7 @@ pub use client::{
     ClientBuildError, Origin, UpstreamClient, UpstreamError, UpstreamRequest, UpstreamResponse,
     describe, http_client,
 };
+pub use dialect::{BodyRules, Dialect, HeaderRules, Target};
 pub use header_command::{
     HeaderCommand, HeaderCommandError, HeaderCommandStatus, HeaderRun, parse_output,
 };

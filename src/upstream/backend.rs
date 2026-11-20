@@ -1,8 +1,9 @@
+use std::sync::Arc;
+
+use super::dialect::{Dialect, Target};
 use super::header_command::HeaderCommand;
-use super::headers::ForcedHeaders;
-use crate::config::{BackendConfig, BackendKind, DropHeaders, SetFields};
+use crate::config::{BackendConfig, BackendKind};
 use crate::credential::{self, CredentialError, CredentialSource};
-use crate::openai::SystemPlacement;
 
 /// A configured backend with its resolved credential source.
 #[derive(Debug)]
@@ -16,24 +17,18 @@ pub struct Backend {
     /// Path the probe fetches the model list from.
     pub models_path: String,
     pub credential: Box<dyn CredentialSource>,
-    /// Headers forced onto every upstream request.
-    pub headers: ForcedHeaders,
     /// Headers computed for every attempt (ADR-0021).
     pub header_command: Option<HeaderCommand>,
     /// Beta flags merged into `anthropic-beta`.
     pub anthropic_beta: Vec<String>,
-    /// Client headers this backend never sees.
-    pub drop_headers: DropHeaders,
     /// Body paths removed before forwarding.
     pub drop_fields: Vec<String>,
-    /// Body fields set in what the backend receives.
-    pub set_fields: SetFields,
-    /// `kind = "openai"`: where a mid-conversation system message goes.
-    pub mid_conversation_system: SystemPlacement,
     /// `kind = "passthrough"`: send the client's `Authorization` / `x-api-key`.
     pub forwards_client_auth: bool,
     /// Serve `GET {url}{models_path}` as Anthropic model identity.
     pub live_models: bool,
+    /// How a request no route makes is written: the model list, a probe.
+    pub dialect: Arc<Dialect>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -50,8 +45,13 @@ impl Backend {
         crate::config::view::redacted_url(&self.url)
     }
 
-    /// Assumes `config` passed validation (header names and values are valid).
-    pub fn from_config(name: &str, config: &BackendConfig) -> Result<Self, BackendBuildError> {
+    /// `dialect` is the one built for `config` without a model. Assumes
+    /// `config` passed validation.
+    pub fn from_config(
+        name: &str,
+        config: &BackendConfig,
+        dialect: Arc<Dialect>,
+    ) -> Result<Self, BackendBuildError> {
         let credential =
             credential::build(&config.credential).map_err(|source| BackendBuildError {
                 backend: name.to_owned(),
@@ -66,14 +66,16 @@ impl Backend {
                 HeaderCommand::new(command, credential.header().map(|header| header.name))
             }),
             credential,
-            headers: ForcedHeaders::new(&config.headers),
             anthropic_beta: config.anthropic_beta.clone(),
-            drop_headers: DropHeaders::new(&config.drop_headers),
             drop_fields: config.drop_fields.clone(),
-            set_fields: SetFields::new(&config.set_fields),
-            mid_conversation_system: config.mid_conversation_system,
             forwards_client_auth: config.kind == BackendKind::Passthrough,
             live_models: config.kind == BackendKind::Passthrough || config.live_models,
+            dialect,
         })
+    }
+
+    /// For a request no route makes: the model list, a probe.
+    pub fn target(&self) -> Target<'_> {
+        Target::new(self, &self.dialect.headers)
     }
 }
