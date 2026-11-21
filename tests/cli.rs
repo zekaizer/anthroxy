@@ -986,15 +986,16 @@ fn a_console_restart_runs_the_router_again_in_the_same_process() {
         .spawn()
         .unwrap();
     let url = wait_for_banner(&mut child).url;
-    let started = |url: &str| {
-        let status = http_send("GET", &format!("{url}/api/status"), Some(TOKEN));
-        let body = &status[status.find("\r\n\r\n").unwrap() + 4..];
-        serde_json::from_str::<serde_json::Value>(body).unwrap()["started_at"]
+    // `None` while the router is not answering: a restart refuses and resets
+    // connections on its way down.
+    let started = |url: &str| -> Option<String> {
+        let status = try_http_send("GET", &format!("{url}/api/status"), Some(TOKEN)).ok()?;
+        let (_, body) = status.split_once("\r\n\r\n")?;
+        serde_json::from_str::<serde_json::Value>(body).ok()?["started_at"]
             .as_str()
-            .unwrap()
-            .to_owned()
+            .map(str::to_owned)
     };
-    let before = started(&url);
+    let before = started(&url).expect("the router answers /api/status");
 
     let answer = http_send("POST", &format!("{url}/api/restart"), Some(TOKEN));
     assert!(answer.starts_with("HTTP/1.1 202"), "{answer}");
@@ -1005,12 +1006,10 @@ fn a_console_restart_runs_the_router_again_in_the_same_process() {
         if let Ok(Some(status)) = child.try_wait() {
             panic!("the process exited instead: {status}");
         }
-        if let Ok(stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
-            drop(stream);
-            let after = started(&url);
-            if after != before {
-                break after;
-            }
+        if let Some(after) = started(&url)
+            && after != before
+        {
+            break after;
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -1083,24 +1082,28 @@ fn http_get(url: &str, token: Option<&str>) -> String {
 
 /// `method` with no body, the whole response as text.
 fn http_send(method: &str, url: &str, token: Option<&str>) -> String {
+    try_http_send(method, url, token).unwrap()
+}
+
+/// As [`http_send`], for a server that may not be answering.
+fn try_http_send(method: &str, url: &str, token: Option<&str>) -> std::io::Result<String> {
     use std::io::Read;
     let without_scheme = url.strip_prefix("http://").unwrap();
     let (host, path) = without_scheme
         .split_once('/')
         .map(|(h, p)| (h, format!("/{p}")))
         .unwrap();
-    let mut stream = std::net::TcpStream::connect(host).unwrap();
+    let mut stream = std::net::TcpStream::connect(host)?;
     let auth = token
         .map(|t| format!("x-api-key: {t}\r\n"))
         .unwrap_or_default();
     write!(
         stream,
         "{method} {path} HTTP/1.1\r\nHost: {host}\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n"
-    )
-    .unwrap();
+    )?;
     let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
-    response
+    stream.read_to_string(&mut response)?;
+    Ok(response)
 }
 
 #[tokio::test(flavor = "multi_thread")]
