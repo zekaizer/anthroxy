@@ -397,7 +397,15 @@ async fn a_recorded_exchange_names_its_recording() {
     let view = finished(&router, &id).await;
     let entry = view.recording.expect("a recorded exchange names its entry");
     assert!(entry.ends_with(&id), "{entry}");
-    assert!(dir.path().join("bodies").join(&entry).is_dir());
+    // The recorder creates the entry off the request path.
+    let recorded = dir.path().join("bodies").join(&entry);
+    for _ in 0..300 {
+        if recorded.is_dir() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the recording never appeared at {}", recorded.display());
 }
 
 #[tokio::test]
