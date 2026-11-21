@@ -11,6 +11,8 @@ use serde::Deserialize;
 
 use super::byte_size;
 use super::credential_header::CredentialHeader;
+use super::emulate::EmulateConfig;
+use super::preset::PresetLibrary;
 use super::token::TokenConfig;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +31,10 @@ pub struct Config {
     pub routing: RoutingConfig,
     #[serde(default)]
     pub stats: StatsConfig,
+    /// The presets `emulate` may name. Not a key of the file: the built-in
+    /// ones and, for a file loaded from disk, `presets/` beside it.
+    #[serde(skip)]
+    pub presets: PresetLibrary,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -233,11 +239,12 @@ pub struct BackendConfig {
     pub set_fields: BTreeMap<String, toml::Value>,
     /// `kind = "openai"` only: where a `system` message that is not the
     /// first message goes, for a chat template that refuses one anywhere
-    /// else (Qwen 3.5+). `keep` (default) sends it where it is, `merge`
-    /// appends its text to the leading system message, `user` sends it as a
-    /// user message wrapped in `<system-reminder>`.
+    /// else (Qwen 3.5+). `keep` sends it where it is, `merge` appends its
+    /// text to the leading system message, `user` sends it as a user message
+    /// wrapped in `<system-reminder>`. `None` when the file leaves it out:
+    /// the preset's value then applies, else `keep`.
     #[serde(default)]
-    pub mid_conversation_system: SystemPlacement,
+    pub mid_conversation_system: Option<SystemPlacement>,
     /// Proxy this backend is reached through (ADR-0012); unset connects
     /// directly.
     #[serde(default)]
@@ -246,6 +253,10 @@ pub struct BackendConfig {
     /// (ADR-0021).
     #[serde(default)]
     pub header_command: Option<HeaderCommandConfig>,
+    /// `kind = "openai"` only: the client emulation preset requests to this
+    /// backend are written by (ADR-0022).
+    #[serde(default)]
+    pub emulate: Option<EmulateConfig>,
 }
 
 /// `backends.<name>.header_command` (ADR-0021).
@@ -350,6 +361,9 @@ pub struct ModelConfig {
     /// Overrides the backend's `mid_conversation_system` for this model.
     #[serde(default)]
     pub mid_conversation_system: Option<SystemPlacement>,
+    /// Replaces the backend's `emulate` for requests this entry routes.
+    #[serde(default)]
+    pub emulate: Option<EmulateConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

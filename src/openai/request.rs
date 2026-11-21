@@ -4,27 +4,16 @@ use std::borrow::Cow;
 
 use serde_json::{Map, Value, json};
 
+use super::options::{EncodeOptions, SystemPlacement, ToolChoiceDefault, ToolOnlyContent};
 use crate::ir::{Part, Request, RequestMessage, Role, ToolChoice};
 
 /// Text parts of one message are joined with a blank line.
 const TEXT_SEPARATOR: &str = "\n\n";
 
-/// Where a `Role::System` message that is not the first message goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SystemPlacement {
-    /// A `system` message where it is.
-    #[default]
-    Keep,
-    /// Its text appended to the leading `system` message.
-    Merge,
-    /// A `user` message where it is, wrapped in `<system-reminder>`.
-    User,
-}
-
 /// The body as a document: the caller writes it out, once it has set what the
 /// backend's configuration adds.
-pub fn encode(request: &Request, placement: SystemPlacement) -> Map<String, Value> {
+pub fn encode(request: &Request, options: &EncodeOptions) -> Map<String, Value> {
+    let placement = options.placement;
     let mut messages = Vec::new();
     let mut system = request.system.clone().unwrap_or_default();
     if placement == SystemPlacement::Merge {
@@ -51,7 +40,7 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Map<String, Valu
         match (message.role, placement) {
             (Role::System, SystemPlacement::Merge) => {}
             (Role::System, SystemPlacement::User) if leading => {
-                encode_message(message, &mut messages)
+                encode_message(message, options, &mut messages)
             }
             // Marked the way Claude Code marks its own system notes inside a
             // user turn, so the model does not answer it as user input.
@@ -59,7 +48,7 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Map<String, Valu
                 "role": "user",
                 "content": format!("<system-reminder>\n{}\n</system-reminder>", text_of(message)),
             })),
-            _ => encode_message(message, &mut messages),
+            _ => encode_message(message, options, &mut messages),
         }
     }
     let mut body = Map::new();
@@ -76,22 +65,36 @@ pub fn encode(request: &Request, placement: SystemPlacement) -> Map<String, Valu
                     function.insert("description".into(), json!(description));
                 }
                 function.insert("parameters".into(), with_properties(&tool.parameters));
+                if let Some(strict) = options.tool_strict {
+                    function.insert("strict".into(), json!(strict));
+                }
                 json!({"type": "function", "function": function})
             })
             .collect();
         body.insert("tools".into(), Value::Array(tools));
     }
-    if let Some(choice) = &request.tool_choice {
-        let choice = match choice {
-            ToolChoice::Auto => json!("auto"),
-            ToolChoice::Required => json!("required"),
-            ToolChoice::None => json!("none"),
-            ToolChoice::Tool(name) => json!({"type": "function", "function": {"name": name}}),
-        };
+    let default_choice = options
+        .default_tool_choice
+        .filter(|_| !request.tools.is_empty())
+        .map(|choice| match choice {
+            ToolChoiceDefault::Auto => json!("auto"),
+            ToolChoiceDefault::Required => json!("required"),
+            ToolChoiceDefault::None => json!("none"),
+        });
+    let choice = match &request.tool_choice {
+        Some(ToolChoice::Auto) => Some(json!("auto")),
+        Some(ToolChoice::Required) => Some(json!("required")),
+        Some(ToolChoice::None) => Some(json!("none")),
+        Some(ToolChoice::Tool(name)) => {
+            Some(json!({"type": "function", "function": {"name": name}}))
+        }
+        None => default_choice,
+    };
+    if let Some(choice) = choice {
         body.insert("tool_choice".into(), choice);
     }
     if let Some(max_tokens) = request.max_tokens {
-        body.insert("max_tokens".into(), json!(max_tokens));
+        body.insert(options.max_tokens_field.name().into(), json!(max_tokens));
     }
     if let Some(temperature) = request.temperature {
         body.insert("temperature".into(), json!(temperature));
@@ -134,7 +137,7 @@ fn text_of(message: &RequestMessage) -> String {
     texts.join(TEXT_SEPARATOR)
 }
 
-fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
+fn encode_message(message: &RequestMessage, options: &EncodeOptions, out: &mut Vec<Value>) {
     let emitted_before = out.len();
     let mut pieces: Vec<Piece> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
@@ -218,7 +221,24 @@ fn encode_message(message: &RequestMessage, out: &mut Vec<Value>) {
         (None, true) => {
             object.insert("content".into(), json!(""));
         }
-        (None, false) => {}
+        (None, false) => match options.tool_only_content {
+            ToolOnlyContent::Omitted => {}
+            ToolOnlyContent::Empty => {
+                object.insert("content".into(), json!(""));
+            }
+            ToolOnlyContent::Null => {
+                object.insert("content".into(), Value::Null);
+            }
+        },
+    }
+    if message.role == Role::Assistant
+        && let Some(field) = &options.reasoning_field
+    {
+        // The blocks are one stream of reasoning cut where text came between.
+        let reasoning = message.reasoning.concat();
+        if !reasoning.is_empty() {
+            object.insert(field.clone(), json!(reasoning));
+        }
     }
     if !tool_calls.is_empty() {
         object.insert("tool_calls".into(), Value::Array(tool_calls));

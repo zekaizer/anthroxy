@@ -14,7 +14,7 @@ use tokio_rustls::rustls::{ServerConfig, crypto};
 use tokio_rustls::server::TlsStream;
 
 /// A CA nobody else trusts, plus a server certificate for `127.0.0.1` it
-/// signed.
+/// signed. The server offers `h2` and `http/1.1`.
 pub struct TestCa {
     /// The CA certificate as an operator would receive it.
     pub pem: String,
@@ -37,7 +37,7 @@ impl TestCa {
             .unwrap()
             .signed_by(&server_key, &issuer)
             .unwrap();
-        let server =
+        let mut server =
             ServerConfig::builder_with_provider(Arc::new(crypto::ring::default_provider()))
                 .with_safe_default_protocol_versions()
                 .unwrap()
@@ -47,6 +47,7 @@ impl TestCa {
                     PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
                 )
                 .unwrap();
+        server.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         Self {
             pem: ca_cert.pem(),
             server: Arc::new(server),

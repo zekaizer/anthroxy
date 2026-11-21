@@ -13,24 +13,23 @@ use crate::activity::Exchange;
 use crate::body_field::BodyField;
 use crate::observability::Recorder;
 use crate::openai::ResponseError;
-use crate::openai::SystemPlacement;
 use crate::server::RouterError;
 use crate::server::buffered::read_all;
 use crate::server::ping::{PING_INTERVAL, Pings};
 use crate::server::relay::Relay;
 use crate::translate;
-use crate::upstream::{UpstreamResponse, is_event_stream};
+use crate::upstream::{BodyRules, UpstreamResponse, is_event_stream};
 
-/// The upstream path and body for a client request to `client_path`, with
-/// `set_fields` set in the body. `count_tokens` has no counterpart and is
-/// refused here.
+/// The upstream path and body for a client request to `client_path`, the
+/// body written and edited per `rules`. `set` is `rules.set_fields` as this
+/// request fills them. `count_tokens` has no counterpart and is refused here.
 pub fn prepare(
     body: &[u8],
     client_path: &str,
     backend: &str,
     upstream_model: &str,
-    placement: SystemPlacement,
-    set_fields: &[BodyField],
+    rules: &BodyRules,
+    set: &[BodyField],
 ) -> Result<(&'static str, Bytes), RouterError> {
     let path = client_path.split('?').next().unwrap_or(client_path);
     if path != "/v1/messages" {
@@ -39,12 +38,10 @@ pub fn prepare(
             path: path.to_owned(),
         });
     }
-    let translated =
-        translate::request(body, upstream_model, placement, set_fields).map_err(|source| {
-            RouterError::Translate {
-                backend: backend.to_owned(),
-                source,
-            }
+    let translated = translate::request(body, upstream_model, &rules.encode, &rules.edits(set))
+        .map_err(|source| RouterError::Translate {
+            backend: backend.to_owned(),
+            source,
         })?;
     Ok((translate::CHAT_COMPLETIONS_PATH, Bytes::from(translated)))
 }

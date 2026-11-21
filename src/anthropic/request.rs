@@ -7,7 +7,7 @@ use std::fmt;
 use serde::Deserialize;
 use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
 
-use crate::body_field::{BodyField, set_all};
+use crate::body_field::{BodyField, remove, set_all};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RequestPeek {
@@ -79,15 +79,15 @@ pub fn peek(body: &[u8]) -> Result<RequestPeek, PeekError> {
 }
 
 /// Returns `body` with `model` replaced when `model` is given, every path in
-/// `drop_fields` removed and then every one of `set_fields` set (ADR-0019).
+/// `drop_fields` removed ([`remove`]) and then every one of `set_fields` set
+/// (ADR-0019).
 /// For an Anthropic backend (`for_anthropic`),
 /// unsigned `thinking` blocks are removed too (ADR-0010: the router's own
 /// thinking blocks, which an Anthropic backend rejects; an assistant message
 /// left empty by that goes with them) and tool call ids are put in the form
 /// it accepts (ADR-0013). Other fields and their order stay intact;
 /// `Ok(None)` when nothing changed, so the caller forwards the original
-/// bytes. A path is dot-separated object keys; one whose prefix is missing
-/// or not an object removes nothing.
+/// bytes.
 ///
 /// Reading the whole document is stricter than [`peek`], which skips values it
 /// does not need: a body nested deeper than serde's recursion limit gets here
@@ -119,7 +119,7 @@ pub fn rewrite(
         serde_json::from_slice(body).map_err(PeekError::NotJson)?;
     let mut changed = false;
     for path in drop_fields {
-        changed |= remove_path(&mut value, path);
+        changed |= remove(&mut value, path);
     }
     if let Some(model) = model {
         value.insert(
@@ -143,17 +143,6 @@ pub fn rewrite(
 
 const THINKING: &str = "\"thinking\"";
 const TOOL_USE: &str = "\"tool_use\"";
-
-/// Whether `path` named an existing field, which is now gone.
-fn remove_path(object: &mut serde_json::Map<String, serde_json::Value>, path: &str) -> bool {
-    match path.split_once('.') {
-        None => object.shift_remove(path).is_some(),
-        Some((head, rest)) => match object.get_mut(head) {
-            Some(serde_json::Value::Object(inner)) => remove_path(inner, rest),
-            _ => false,
-        },
-    }
-}
 
 /// Whether any unsigned `thinking` block, or a message emptied by removing
 /// one, is now gone. Signed `thinking` and `redacted_thinking` blocks stay.

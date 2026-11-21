@@ -4,8 +4,10 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod body_log;
+pub mod config_dir;
 pub mod mock_upstream;
 pub mod openai;
+pub mod raw_upstream;
 pub mod router;
 pub mod tls;
 

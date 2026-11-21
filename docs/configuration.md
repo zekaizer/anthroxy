@@ -55,6 +55,7 @@ kind = "openai"
 url = "https://llm.example.corp"
 credential = { kind = "env", name = "INHOUSE_API_KEY" }
 # set_fields = { "chat_template_kwargs.enable_thinking" = false }   # body fields this backend is given
+# emulate = "opencode"                       # write requests the way that client does (openai kind only)
 
 [backends.grok]                              # xAI Chat Completions + OAuth helper
 kind = "openai"
@@ -241,6 +242,17 @@ default_model = "qwen"           # unknown model ids go here; omit to reject the
   `anthropic-version`/`anthropic-beta` are not sent to it. `check` still probes
   `GET /v1/models`, so a server without that endpoint fails `check` while
   `serve` works. See [Translation](translation.md) for the exact mapping.
+- `emulate` names a client emulation preset for a `kind = "openai"` backend.
+  The request is then written the way that client writes it: its headers,
+  their order and case, the protocol, the body fields and their order, and the
+  shape of the messages. `emulate = "opencode"` uses the built-in preset, and
+  a table gives a preset variable another value
+  (`emulate = { preset = "opencode", version = "1.20.0" }`). A `[[models]]`
+  entry may carry the key to replace its backend's. A key written on the
+  backend (`headers`, `drop_headers`, `set_fields`,
+  `mid_conversation_system`) wins over the preset's. The key is refused on any
+  other kind. See [Client emulation presets](emulation.md) for the preset file
+  and every key in it.
 
 ### Credentials
 

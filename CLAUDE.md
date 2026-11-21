@@ -36,20 +36,23 @@ cargo fmt
 - One module per responsibility, one file per concern; add a file rather than
   growing one:
   - `config/` — TOML schema, `${ENV}` expansion, validation, the `init` example,
-    client environment rendering, redacted view, TOML fragments.
+    client environment rendering, redacted view, TOML fragments, `emulate` and
+    the client emulation presets it names (`preset/`: the reader, the library,
+    the built-in `opencode.toml`).
   - `anthropic/` — wire types the router emits or inspects (errors, model list,
     `model` peek/rewrite) and the Messages API ↔ IR codecs.
   - `ir/` — the intermediate representation between chat APIs: request document,
     response events, folded message. Names no wire format.
   - `openai/` — IR ↔ OpenAI Chat Completions codecs (request, chunk, completion,
-    error body).
+    error body) and the choices the request encoder is given.
   - `sse/` — incremental server-sent events parser.
   - `translate/` — composes the codecs; the only module that knows both wire
     formats. `Translator` adapts an upstream byte stream.
   - `routing/` — model id/alias → backend + upstream model.
   - `credential/` — `CredentialSource` trait; fixed and command-backed sources.
-  - `upstream/` — backend registry, header translation, header command, retry
-    policy, HTTP client, probe.
+  - `upstream/` — backend registry, the dialect a route's requests are written
+    in (a backend's keys over its preset), header translation and order, header
+    command, retry policy, HTTP clients by transport, probe.
   - `server/` — axum app: accepting connections, request id span, client auth,
     handlers (`health`, `models`, `proxy`, `openai` for `kind = "openai"`
     backends, `console/` for the web console's `/api/` routes with its page
@@ -65,17 +68,18 @@ cargo fmt
   - `cli/` — clap grammar and one file per subcommand.
   - `text.rs` — escaping and cutting for anything the router did not choose that
     reaches a message or a log line.
-  - `body_field.rs` — a field the configuration sets in the request body a
-    backend receives, whichever format that body is in.
+  - `body_field.rs` — what the configuration sets, removes and puts in order
+    in the request body a backend receives, whichever format that body is in.
   - `private_fs.rs` — owner-only directory creation, writes and appends for
     files that hold what a user sent or did; the count of writes still queued,
     which a stop waits for.
 - `scripts/` — helpers that are not the binary: `console-check` drives the web
   console and says where to look.
 - `tests/` — black-box tests:
-  `proxy.rs`/`body_log.rs`/`openai.rs`/`activity.rs`/`console.rs`/`reload.rs`
-  against a mock backend in `tests/support/`, `cli.rs` against the binary,
-  `fuzz.rs` over every decoder that reads bytes the router did not write.
+  `proxy.rs`/`body_log.rs`/`openai.rs`/`emulate.rs`/`activity.rs`/`console.rs`/
+  `reload.rs` against a mock backend in `tests/support/`, `cli.rs` against the
+  binary, `fuzz.rs` over every decoder that reads bytes the router did not
+  write.
 - `docs/adr/` — architecture decision records.
 - `.local/` — gitignored personal notes. Never cite them from code or committed
   docs.
@@ -122,6 +126,9 @@ link or code span that does not fit are left as they are.
 - `docs/console-design.md` — read before changing `server/console/assets/`: the
   token scales, the badge taxonomy, what colour is allowed to mean, and how a
   change is checked (`scripts/console-check`).
+- `docs/emulation.md` — read before changing what `emulate` accepts, how a
+  preset is loaded or what it does to a request; it is the user-facing
+  reference for every preset key.
 - `docs/translation.md` — read before changing `ir/`, `openai/`, `translate/` or
   the Anthropic codecs: how an `openai` backend is served and what the IR is
   for.

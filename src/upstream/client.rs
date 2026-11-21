@@ -1,7 +1,6 @@
 //! Sends one client request to a backend, with credential refresh and retry.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -10,25 +9,29 @@ use http::{HeaderMap, Method, StatusCode};
 
 use super::header_command::{Attempt, HeaderCommandError};
 use super::{
-    Backend, BodyClock, BodyError, Decision, RetryPolicy, TimedBody, TimeoutClock, Timeouts,
+    Backend, BodyClock, BodyError, ClientBuildError, Decision, HttpClients, RetryPolicy, Target,
+    TimedBody, TimeoutClock, Timeouts, Transport,
 };
-use crate::config::{BackendConfig, UpstreamConfig, origin};
+use crate::config::{BackendConfig, UpstreamConfig};
 use crate::credential::CredentialError;
 
 #[derive(Debug)]
 pub struct UpstreamClient {
-    http: reqwest::Client,
+    clients: HttpClients,
     retry: RetryPolicy,
     timeouts: Timeouts,
 }
 
 pub struct UpstreamRequest<'a> {
-    pub backend: &'a Backend,
+    /// The backend and the header rules of the route this request travels:
+    /// [`crate::routing::Route::target`] for a chat request,
+    /// [`Backend::target`] for a request no route makes.
+    pub target: Target<'a>,
     pub method: Method,
     /// Path and query exactly as the client sent them, e.g. `/v1/messages`.
     pub path_and_query: &'a str,
-    /// Already translated by [`super::upstream_headers`]; the credential is
-    /// added per attempt.
+    /// Built by [`super::upstream_headers`] from the same `target`; the
+    /// credential is added per attempt.
     pub headers: HeaderMap,
     pub body: Bytes,
     /// Whether the client asked for an event stream. Chooses the stream clocks.
@@ -130,104 +133,21 @@ pub fn describe(error: &reqwest::Error) -> String {
     text
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ClientBuildError {
-    #[error("cannot read upstream.ca_certificate {}: {source}", path.display())]
-    ReadCaCertificate {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("upstream.ca_certificate {}: {source}", path.display())]
-    ParseCaCertificate {
-        path: PathBuf,
-        #[source]
-        source: reqwest::Error,
-    },
-    #[error("upstream.ca_certificate {} holds no certificate", path.display())]
-    NoCaCertificate { path: PathBuf },
-    #[error("cannot build HTTP client: {0}")]
-    Http(#[from] reqwest::Error),
-}
-
-/// How every backend is reached: the configured timeouts, the extra trust
-/// anchors from `ca_certificate`, no redirects, since a redirect would resend
-/// the body and the credential elsewhere, and no proxy but the one a backend
-/// names (ADR-0012), since `http_proxy` in the environment would do the same
-/// to every backend at once. Assumes `backends` passed validation.
-pub fn http_client(
-    config: &UpstreamConfig,
-    backends: &BTreeMap<String, BackendConfig>,
-) -> Result<reqwest::ClientBuilder, ClientBuildError> {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(config.connect_timeout)
-        .tcp_keepalive(Duration::from_secs(60))
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none());
-    let proxies = proxies(backends);
-    if !proxies.is_empty() {
-        builder = builder.proxy(reqwest::Proxy::custom(move |url| {
-            origin(url).and_then(|origin| proxies.get(&origin).cloned())
-        }));
-    }
-    if let Some(path) = &config.ca_certificate {
-        for certificate in ca_certificates(path)? {
-            builder = builder.add_root_certificate(certificate);
-        }
-    }
-    Ok(builder)
-}
-
-/// Proxy by backend origin. A backend URL reqwest cannot parse is never
-/// requested, so it needs no entry.
-fn proxies(backends: &BTreeMap<String, BackendConfig>) -> HashMap<String, reqwest::Url> {
-    backends
-        .values()
-        .filter_map(|backend| {
-            let proxy = backend.proxy.as_deref()?;
-            let origin = origin(&reqwest::Url::parse(&backend.url).ok()?)?;
-            let proxy = reqwest::Url::parse(proxy).expect("validated proxy url");
-            Some((origin, proxy))
-        })
-        .collect()
-}
-
-/// Every certificate in the PEM bundle at `path`; an empty bundle is an
-/// error because it silently trusts nothing.
-fn ca_certificates(path: &Path) -> Result<Vec<reqwest::Certificate>, ClientBuildError> {
-    let pem = std::fs::read(path).map_err(|source| ClientBuildError::ReadCaCertificate {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|source| {
-        ClientBuildError::ParseCaCertificate {
-            path: path.to_path_buf(),
-            source,
-        }
-    })?;
-    if certificates.is_empty() {
-        return Err(ClientBuildError::NoCaCertificate {
-            path: path.to_path_buf(),
-        });
-    }
-    Ok(certificates)
-}
-
 impl UpstreamClient {
     pub fn from_config(
         config: &UpstreamConfig,
         backends: &BTreeMap<String, BackendConfig>,
     ) -> Result<Self, ClientBuildError> {
         Ok(Self {
-            http: http_client(config, backends)?.build()?,
+            clients: HttpClients::build(config, backends, None, Transport::ALL)?,
             retry: RetryPolicy::from_config(config),
             timeouts: Timeouts::from_config(config),
         })
     }
 
-    pub fn new(http: reqwest::Client, retry: RetryPolicy) -> Self {
+    pub fn new(clients: HttpClients, retry: RetryPolicy) -> Self {
         Self {
-            http,
+            clients,
             retry,
             timeouts: Timeouts::default(),
         }
@@ -242,7 +162,9 @@ impl UpstreamClient {
         &self,
         request: UpstreamRequest<'_>,
     ) -> Result<UpstreamResponse, UpstreamError> {
-        let backend = request.backend;
+        let backend = request.target.backend();
+        let rules = request.target.headers();
+        let http = self.clients.get(rules.transport);
         let url = format!("{}{}", backend.url, request.path_and_query);
         // Logged instead of `url`, whose userinfo reqwest sends as basic auth.
         let shown = shown_target(backend, request.path_and_query);
@@ -303,12 +225,16 @@ impl UpstreamClient {
             } else {
                 TimeoutClock::NonStream
             };
-            let send = self
-                .http
-                .request(request.method.clone(), &url)
-                .headers(headers)
-                .body(request.body.clone())
-                .send();
+            let send = async {
+                let mut built = http
+                    .request(request.method.clone(), &url)
+                    .headers(headers)
+                    .body(request.body.clone())
+                    .build()?;
+                // Last: what this attempt and the builder added is placed too.
+                rules.order.arrange(&mut built);
+                http.execute(built).await
+            };
             let outcome = match tokio::time::timeout_at(header_deadline, send).await {
                 Ok(outcome) => outcome,
                 Err(_) => {

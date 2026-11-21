@@ -5,7 +5,9 @@
 accepted; the clause that a body without the text `"thinking"` is not parsed
 superseded by ADR-0013; "no `ping`" superseded by ADR-0014; the
 `[backend <name>, HTTP <status>]` prefix on error messages superseded by
-ADR-0020
+ADR-0020; "`thinking` and `redacted_thinking` blocks in the history are not
+sent either" superseded by ADR-0022 for a backend whose preset names a
+reasoning field
 
 Supersedes the body relay rules of ADR-0003 ("bodies are streamed chunk by
 chunk, no SSE parsing", "nothing else in the body is read") for backends with

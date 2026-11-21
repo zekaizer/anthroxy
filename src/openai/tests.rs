@@ -27,6 +27,7 @@ fn user(parts: Vec<Part>) -> RequestMessage {
     RequestMessage {
         role: Role::User,
         parts,
+        reasoning: vec![],
     }
 }
 
@@ -34,11 +35,20 @@ fn assistant(parts: Vec<Part>) -> RequestMessage {
     RequestMessage {
         role: Role::Assistant,
         parts,
+        reasoning: vec![],
     }
 }
 
 fn encoded(request: &Request) -> Value {
-    Value::Object(encode_request(request, SystemPlacement::Keep))
+    Value::Object(encode_request(request, &EncodeOptions::default()))
+}
+
+fn placed(request: &Request, placement: SystemPlacement) -> Value {
+    let options = EncodeOptions {
+        placement,
+        ..Default::default()
+    };
+    Value::Object(encode_request(request, &options))
 }
 
 #[test]
@@ -794,6 +804,7 @@ fn mid_conversation_system_messages_stay_in_place() {
         RequestMessage {
             role: Role::System,
             parts: vec![Part::Text("env changed".into()), Part::Text("again".into())],
+            reasoning: vec![],
         },
         assistant(vec![Part::Text("ok".into())]),
     ]);
@@ -815,6 +826,7 @@ fn with_mid_conversation_system() -> Request {
         RequestMessage {
             role: Role::System,
             parts: vec![Part::Text("env changed".into())],
+            reasoning: vec![],
         },
         assistant(vec![Part::Text("ok".into())]),
     ]);
@@ -824,10 +836,7 @@ fn with_mid_conversation_system() -> Request {
 
 #[test]
 fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
-    let body = Value::Object(encode_request(
-        &with_mid_conversation_system(),
-        SystemPlacement::Merge,
-    ));
+    let body = placed(&with_mid_conversation_system(), SystemPlacement::Merge);
     assert_eq!(
         body["messages"],
         json!([
@@ -838,7 +847,7 @@ fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
     );
     let mut r = with_mid_conversation_system();
     r.system = None;
-    let body = Value::Object(encode_request(&r, SystemPlacement::Merge));
+    let body = placed(&r, SystemPlacement::Merge);
     assert_eq!(
         body["messages"][0],
         json!({"role": "system", "content": "env changed"})
@@ -847,10 +856,7 @@ fn merge_appends_mid_conversation_system_text_to_the_leading_system() {
 
 #[test]
 fn user_sends_a_mid_conversation_system_as_a_user_message() {
-    let body = Value::Object(encode_request(
-        &with_mid_conversation_system(),
-        SystemPlacement::User,
-    ));
+    let body = placed(&with_mid_conversation_system(), SystemPlacement::User);
     assert_eq!(
         body["messages"],
         json!([
@@ -868,11 +874,12 @@ fn a_leading_system_message_stays_system_under_user_placement() {
         RequestMessage {
             role: Role::System,
             parts: vec![Part::Text("top".into())],
+            reasoning: vec![],
         },
         user(vec![Part::Text("hi".into())]),
     ]);
     r.system = None;
-    let body = Value::Object(encode_request(&r, SystemPlacement::User));
+    let body = placed(&r, SystemPlacement::User);
     assert_eq!(
         body["messages"],
         json!([
@@ -889,10 +896,11 @@ fn merge_skips_an_empty_system_message() {
         RequestMessage {
             role: Role::System,
             parts: vec![],
+            reasoning: vec![],
         },
     ]);
     r.system = Some("top".into());
-    let body = Value::Object(encode_request(&r, SystemPlacement::Merge));
+    let body = placed(&r, SystemPlacement::Merge);
     assert_eq!(
         body["messages"][0],
         json!({"role": "system", "content": "top"})
@@ -1342,5 +1350,240 @@ fn an_index_too_large_for_the_ir_starts_its_own_call() {
     assert!(
         matches!(&events[0], Event::ToolCallStart { index: 1, name, .. } if name == "bash"),
         "{events:?}"
+    );
+}
+
+#[test]
+fn the_output_token_limit_is_written_under_the_name_chosen() {
+    let mut request = request(vec![user(vec![Part::Text("hi".into())])]);
+    request.temperature = Some(0.5);
+    let options = EncodeOptions {
+        max_tokens_field: MaxTokensField::MaxCompletionTokens,
+        ..Default::default()
+    };
+    assert_eq!(
+        Value::Object(encode_request(&request, &options)).to_string(),
+        r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":100,"temperature":0.5,"stream":false}"#
+    );
+    request.max_tokens = None;
+    let body = Value::Object(encode_request(&request, &options));
+    assert_eq!(body.get("max_completion_tokens"), None);
+    assert_eq!(body.get("max_tokens"), None);
+}
+
+#[test]
+fn a_default_tool_choice_applies_to_a_request_with_tools_that_names_none() {
+    let tool = Tool {
+        name: "read".into(),
+        description: None,
+        parameters: json!({"type": "object", "properties": {}}),
+    };
+    let encoded = |tools: Vec<Tool>, choice: Option<ToolChoice>, default| {
+        let mut request = request(vec![user(vec![Part::Text("hi".into())])]);
+        request.tools = tools;
+        request.tool_choice = choice;
+        let options = EncodeOptions {
+            default_tool_choice: Some(default),
+            ..Default::default()
+        };
+        Value::Object(encode_request(&request, &options))
+    };
+    assert_eq!(
+        encoded(vec![tool.clone()], None, ToolChoiceDefault::Auto).to_string(),
+        r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"read","parameters":{"type":"object","properties":{}}}}],"tool_choice":"auto","max_tokens":100,"stream":false}"#
+    );
+    assert_eq!(
+        encoded(vec![tool.clone()], None, ToolChoiceDefault::Required)["tool_choice"],
+        "required"
+    );
+    assert_eq!(
+        encoded(vec![tool.clone()], None, ToolChoiceDefault::None)["tool_choice"],
+        "none"
+    );
+    assert_eq!(
+        encoded(vec![], None, ToolChoiceDefault::Auto).get("tool_choice"),
+        None,
+        "a request without tools gets no default"
+    );
+    assert_eq!(
+        encoded(
+            vec![tool],
+            Some(ToolChoice::Required),
+            ToolChoiceDefault::Auto
+        )["tool_choice"],
+        "required",
+        "what the client named is written"
+    );
+    assert_eq!(
+        encoded(vec![], Some(ToolChoice::None), ToolChoiceDefault::Auto)["tool_choice"],
+        "none",
+        "with or without tools"
+    );
+}
+
+#[test]
+fn a_turn_that_only_calls_tools_gets_the_content_chosen() {
+    let request = request(vec![
+        assistant(vec![Part::ToolUse {
+            id: "c1".into(),
+            name: "read".into(),
+            input: json!({}),
+        }]),
+        assistant(vec![
+            Part::Text("Reading".into()),
+            Part::ToolUse {
+                id: "c2".into(),
+                name: "read".into(),
+                input: json!({}),
+            },
+        ]),
+        assistant(vec![]),
+    ]);
+    let messages = |tool_only_content| {
+        let options = EncodeOptions {
+            tool_only_content,
+            ..Default::default()
+        };
+        let body = Value::Object(encode_request(&request, &options));
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+    };
+    let call = |id: &str| {
+        format!(
+            r#""tool_calls":[{{"id":"{id}","type":"function","function":{{"name":"read","arguments":"{{}}"}}}}]"#
+        )
+    };
+    let with_text = format!(
+        r#"{{"role":"assistant","content":"Reading",{}}}"#,
+        call("c2")
+    );
+    let no_parts = r#"{"role":"assistant","content":""}"#.to_owned();
+    assert_eq!(
+        messages(ToolOnlyContent::Omitted),
+        [
+            format!(r#"{{"role":"assistant",{}}}"#, call("c1")),
+            with_text.clone(),
+            no_parts.clone()
+        ]
+    );
+    assert_eq!(
+        messages(ToolOnlyContent::Empty),
+        [
+            format!(r#"{{"role":"assistant","content":"",{}}}"#, call("c1")),
+            with_text.clone(),
+            no_parts.clone()
+        ]
+    );
+    assert_eq!(
+        messages(ToolOnlyContent::Null),
+        [
+            format!(r#"{{"role":"assistant","content":null,{}}}"#, call("c1")),
+            with_text,
+            no_parts
+        ],
+        "only a turn with tool calls and no text is touched"
+    );
+}
+
+#[test]
+fn strict_is_written_on_every_tool_definition_when_chosen() {
+    let mut request = request(vec![user(vec![Part::Text("hi".into())])]);
+    request.tools = vec![
+        Tool {
+            name: "read".into(),
+            description: Some("Read".into()),
+            parameters: json!({"type": "object", "properties": {}}),
+        },
+        Tool {
+            name: "bare".into(),
+            description: None,
+            parameters: json!({"type": "object", "properties": {}}),
+        },
+    ];
+    let tools = |tool_strict| {
+        let options = EncodeOptions {
+            tool_strict,
+            ..Default::default()
+        };
+        Value::Object(encode_request(&request, &options))["tools"].to_string()
+    };
+    assert_eq!(
+        tools(Some(false)),
+        concat!(
+            r#"[{"type":"function","function":{"name":"read","description":"Read","parameters":{"type":"object","properties":{}},"strict":false}},"#,
+            r#"{"type":"function","function":{"name":"bare","parameters":{"type":"object","properties":{}},"strict":false}}]"#
+        )
+    );
+    assert!(tools(Some(true)).ends_with(r#""strict":true}}]"#));
+    assert!(!tools(None).contains("strict"));
+}
+
+#[test]
+fn a_turns_reasoning_is_written_under_the_field_chosen() {
+    let reasoned = |parts: Vec<Part>, reasoning: &[&str]| RequestMessage {
+        role: Role::Assistant,
+        parts,
+        reasoning: reasoning.iter().map(|text| (*text).to_owned()).collect(),
+    };
+    let call = Part::ToolUse {
+        id: "c1".into(),
+        name: "read".into(),
+        input: json!({}),
+    };
+    let request = request(vec![
+        reasoned(
+            vec![Part::Text("Reading".into()), call.clone()],
+            &["First, ", "the file."],
+        ),
+        reasoned(vec![call], &["plan"]),
+        reasoned(vec![Part::Text("Done".into())], &[]),
+        reasoned(vec![Part::Text("Done".into())], &["", ""]),
+        reasoned(vec![], &["only thought"]),
+        RequestMessage {
+            role: Role::User,
+            parts: vec![Part::Text("hi".into())],
+            reasoning: vec!["not a turn of the model".into()],
+        },
+    ]);
+    let messages = |field: Option<&str>| {
+        let options = EncodeOptions {
+            reasoning_field: field.map(str::to_owned),
+            ..Default::default()
+        };
+        let body = Value::Object(encode_request(&request, &options));
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+    };
+    let calls = r#""tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]"#;
+    assert_eq!(
+        messages(Some("reasoning_content")),
+        [
+            format!(
+                r#"{{"role":"assistant","content":"Reading","reasoning_content":"First, the file.",{calls}}}"#
+            ),
+            format!(r#"{{"role":"assistant","reasoning_content":"plan",{calls}}}"#),
+            r#"{"role":"assistant","content":"Done"}"#.to_owned(),
+            r#"{"role":"assistant","content":"Done"}"#.to_owned(),
+            r#"{"role":"assistant","content":"","reasoning_content":"only thought"}"#.to_owned(),
+            r#"{"role":"user","content":"hi"}"#.to_owned(),
+        ]
+    );
+    assert_eq!(
+        messages(Some("reasoning"))[1],
+        format!(r#"{{"role":"assistant","reasoning":"plan",{calls}}}"#)
+    );
+    assert!(
+        messages(None)
+            .iter()
+            .all(|message| !message.contains("plan")),
+        "no field, no reasoning"
     );
 }

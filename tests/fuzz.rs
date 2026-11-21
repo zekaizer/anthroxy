@@ -149,7 +149,7 @@ fn the_request_decoder_survives_arbitrary_tools_and_tool_results() {
         let bytes = text.as_bytes();
         let _ = anthropic::decode(bytes);
         let _ = anthropic::summarize(bytes);
-        let _ = translate::request(bytes, "m", Default::default(), &[]);
+        let _ = translate::request(bytes, "m", &Default::default(), &Default::default());
         let _ = case;
     }
 }
@@ -176,7 +176,7 @@ fn decoders_survive_arbitrary_documents() {
         let _ = openai::decode_response(bytes);
         let _ = openai::decode_models(bytes);
         let _ = openai::decode_error(Some(500), bytes);
-        let _ = translate::request(bytes, "m", Default::default(), &[]);
+        let _ = translate::request(bytes, "m", &Default::default(), &Default::default());
         let _ = translate::response(bytes, "m");
         let _ = translate::document_events(bytes, "m");
         let _ = translate::models(anthroxy::config::BackendKind::OpenAi, bytes);
@@ -270,5 +270,80 @@ fn configuration_parsing_survives_arbitrary_files() {
             .collect();
         let text = lines.join("\n");
         let _ = anthroxy::config::Config::parse(&text, env);
+    }
+}
+
+const PRESET_LINES: [&str; 61] = [
+    "header_case = \"title\"",
+    "header_case = \"Title\"",
+    "header_case = true",
+    "header_order = [\"authorization\", \"host\", \"Host\", \"a b\", \"\", \"host\"]",
+    "header_order = [[\"accept\"]]",
+    "header_order = \"accept\"",
+    "http_version = \"1.1\"",
+    "http_version = \"2\"",
+    "http_version = 1.1",
+    "reasoning_field = \"reasoning_content\"",
+    "reasoning_field = \"content\"",
+    "reasoning_field = [\"\"]",
+    "tool_strict = false",
+    "tool_strict = \"true\"",
+    "tool_only_content = \"null\"",
+    "tool_only_content = 0",
+    "default_tool_choice = \"required\"",
+    "default_tool_choice = false",
+    "max_tokens_field = \"max_completion_tokens\"",
+    "max_tokens_field = [\"max_tokens\"]",
+    "omit_fields = [\"user\", \"a..b\", \"messages\", \"\"]",
+    "omit_fields = [[\"user\"]]",
+    "omit_fields = 1",
+    "field_order = [\"model\", \"model\", \"a.b\", \"\"]",
+    "field_order = [1.5]",
+    "field_order = \"model\"",
+    "mid_conversation_system = \"merge\"",
+    "mid_conversation_system = \"\\u0000\"",
+    "mid_conversation_system = { a = 1 }",
+    "drop_headers = [\"x-stainless-*\", \"@claude-code\", \"user-agent\", \"*\", \"\"]",
+    "drop_headers = [1, \"@x\"]",
+    "drop_headers = \"a b\"",
+    "[set_fields]",
+    "model = \"m\"",
+    "\"a..b\" = { c = [\"{v}\", nan, 1979-05-27] }",
+    "\"extra.agent\" = \"{version} {header:x-app} {nope\"",
+    "extra = {}",
+    "set_fields = [\"x\"]",
+    "[set_fields.messages]",
+    "[variables]",
+    "version = \"1.19.6\"",
+    "preset = \"x\"",
+    "bad-name = \"\"",
+    "v = 1",
+    "v = \"a\\nb\"",
+    "[headers]",
+    "user-agent = \"opencode/{version}\"",
+    "x-session-id = \"ses_{header:x-claude-code-session-id}{v}{\"",
+    "x-open = \"{header:x\"",
+    "x-key = \"{header:authorization}{{v}}\"",
+    "\"x y\" = \"{}\"",
+    "content-length = \"1\"",
+    "Content-Type = \"{header:a}\"",
+    "X-A = \"{한}\"",
+    "x-a = 3",
+    "headers = \"x\"",
+    "variables = []",
+    "unknown = { a = [1] }",
+    "[headers.user-agent]",
+    "[[headers]]",
+    "= \"",
+];
+
+#[test]
+fn preset_parsing_survives_arbitrary_files() {
+    let mut rng = Rng(0x0e30_1a7e);
+    for _ in 0..8_000u32 {
+        let lines: Vec<&str> = (0..rng.upto(10) + 1)
+            .map(|_| *rng.pick(&PRESET_LINES))
+            .collect();
+        let _ = anthroxy::config::Preset::parse("fuzz", &lines.join("\n"));
     }
 }

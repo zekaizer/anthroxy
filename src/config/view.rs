@@ -6,16 +6,18 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use super::{
-    CommandOutput, Config, CredentialConfig, CredentialHeader, HeaderCommandConfig, LogFormat,
-    TokenConfig,
+    CommandOutput, Config, CredentialConfig, CredentialHeader, EmulateConfig, HeaderCommandConfig,
+    LogFormat, PresetLibrary, TokenConfig,
 };
+use crate::openai::SystemPlacement;
 
 pub const REDACTED: &str = "<redacted>";
 
 /// A literal `server.token`, `static` credential values, every forced header
 /// value, every `header_command.env` value and the userinfo of a proxy URL
 /// are redacted; the rest is shown as
-/// loaded, `${ENV}` expanded.
+/// loaded, `${ENV}` expanded. `emulate` is shown with the value of every
+/// variable of its preset. Assumes `config` passed validation.
 pub fn masked(config: &Config) -> Value {
     let backends: Map<String, Value> = config
         .backends
@@ -39,9 +41,13 @@ pub fn masked(config: &Config) -> Value {
                     "drop_headers": backend.drop_headers,
                     "drop_fields": backend.drop_fields,
                     "set_fields": backend.set_fields,
-                    "mid_conversation_system": backend.mid_conversation_system,
+                    // Left out beside `emulate`, the preset's value applies.
+                    "mid_conversation_system": backend.mid_conversation_system.or(
+                        backend.emulate.is_none().then(SystemPlacement::default)
+                    ),
                     "proxy": backend.proxy.as_deref().map(redacted_url),
                     "header_command": backend.header_command.as_ref().map(header_command),
+                    "emulate": backend.emulate.as_ref().map(|key| emulate(key, &config.presets)),
                 }),
             )
         })
@@ -57,6 +63,7 @@ pub fn masked(config: &Config) -> Value {
                 "display_name": model.display_name,
                 "aliases": model.aliases,
                 "mid_conversation_system": model.mid_conversation_system,
+                "emulate": model.emulate.as_ref().map(|key| emulate(key, &config.presets)),
             })
         })
         .collect();
@@ -167,6 +174,13 @@ fn credential(config: &CredentialConfig) -> Value {
             "header": header_shape(header),
         }),
     }
+}
+
+/// The preset `key` names and every variable it declares, each with the value
+/// in effect.
+fn emulate(key: &EmulateConfig, presets: &PresetLibrary) -> Value {
+    let emulation = presets.bind(key).expect("validated emulate");
+    json!({"preset": emulation.preset.name, "variables": emulation.values()})
 }
 
 /// The command as written, `${NAME}` included; `env` values are redacted, as

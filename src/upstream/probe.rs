@@ -72,7 +72,7 @@ pub async fn probe(client: &UpstreamClient, backend: &Backend) -> Probe {
     let request = list_request(backend, &backend.models_path);
     let shown = credential.as_ref().map(|c| (c.header(), c.masked_value()));
     let request_headers = sent_headers(
-        backend,
+        backend.target(),
         &request.headers,
         shown,
         request.body.len(),
@@ -141,6 +141,7 @@ async fn fill_native_context(client: &UpstreamClient, backend: &Backend, models:
 }
 
 fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> {
+    let target = backend.target();
     // What Claude Code always sends; backend `headers` still override.
     let mut base = HeaderMap::new();
     base.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
@@ -149,10 +150,10 @@ fn list_request<'a>(backend: &'a Backend, path: &'a str) -> UpstreamRequest<'a> 
         HeaderValue::from_static("application/json"),
     );
     UpstreamRequest {
-        backend,
+        target,
         method: Method::GET,
         path_and_query: path,
-        headers: upstream_headers(&base, backend),
+        headers: upstream_headers(&base, target),
         body: Bytes::new(),
         stream: false,
         origin: Origin::default(),
@@ -177,15 +178,16 @@ mod tests {
     use tokio::sync::Barrier;
 
     use crate::config::{BackendConfig, BackendKind, CredentialConfig, CredentialHeader};
+    use crate::upstream::tests::built;
     use crate::upstream::{HeaderSource, RetryPolicy};
 
     fn client() -> UpstreamClient {
-        UpstreamClient::new(reqwest::Client::new(), RetryPolicy::never())
+        UpstreamClient::new(reqwest::Client::new().into(), RetryPolicy::never())
     }
 
     #[test]
     fn a_probe_has_no_client_to_read_a_forced_header_from() {
-        let backend = Backend::from_config(
+        let backend = built(
             "gw",
             &BackendConfig {
                 kind: BackendKind::Anthropic,
@@ -212,9 +214,9 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
-        )
-        .unwrap();
+        );
         let request = list_request(&backend, "/v1/models");
         assert!(request.headers.get("x-session-id").is_none());
         assert_eq!(request.headers["x-fixed"], "1");
@@ -226,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn passthrough_is_not_probed() {
-        let backend = Backend::from_config(
+        let backend = built(
             "account",
             &BackendConfig {
                 kind: BackendKind::Passthrough,
@@ -242,9 +244,9 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
-        )
-        .unwrap();
+        );
         let probe = super::probe(&client(), &backend).await;
         match probe.models {
             Some(ModelsProbe::Skipped { reason }) => {
@@ -272,7 +274,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Backend::from_config(
+        built(
             name,
             &BackendConfig {
                 kind: BackendKind::Anthropic,
@@ -288,9 +290,9 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         )
-        .unwrap()
     }
 
     #[tokio::test]
@@ -329,7 +331,7 @@ mod tests {
         let authority = listener.local_addr().unwrap().to_string();
         let url = format!("http://{authority}");
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let backend = Backend::from_config(
+        let backend = built(
             "gw",
             &BackendConfig {
                 kind: BackendKind::Anthropic,
@@ -355,9 +357,9 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
-        )
-        .unwrap();
+        );
 
         let probe = probe(&client(), &backend).await;
         let sent: Vec<(&str, &str, HeaderSource)> = probe
@@ -422,7 +424,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let backend = Backend::from_config(
+        let backend = built(
             "gw",
             &BackendConfig {
                 kind: BackendKind::OpenAi,
@@ -438,9 +440,9 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
-        )
-        .unwrap();
+        );
 
         match probe(&client(), &backend).await.models {
             Some(ModelsProbe::Answered {
@@ -479,7 +481,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Backend::from_config(
+        built(
             "lmstudio",
             &BackendConfig {
                 kind: BackendKind::OpenAi,
@@ -495,9 +497,9 @@ mod tests {
                 mid_conversation_system: Default::default(),
                 proxy: None,
                 header_command: None,
+                emulate: None,
             },
         )
-        .unwrap()
     }
 
     #[tokio::test]

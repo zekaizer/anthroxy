@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, Method, Uri};
+use axum::http::{HeaderMap, Method, Uri, Version};
 use axum::response::Response;
 use axum::routing::any;
 
@@ -13,6 +13,8 @@ use super::tls::TestCa;
 /// One request as the backend saw it.
 #[derive(Debug, Clone)]
 pub struct Received {
+    /// The HTTP version the request arrived in.
+    pub version: Version,
     pub method: Method,
     pub path_and_query: String,
     pub headers: HeaderMap,
@@ -61,8 +63,9 @@ impl MockUpstream {
         }
     }
 
-    /// HTTPS with a certificate signed by a CA generated for this backend;
-    /// returns that CA as PEM.
+    /// HTTPS with a certificate signed by a CA generated for this backend,
+    /// speaking HTTP/2 or HTTP/1.1 as the client chooses; returns that CA as
+    /// PEM.
     pub async fn start_tls(
         handler: impl Fn(&Received) -> Response + Send + Sync + 'static,
     ) -> (Self, String) {
@@ -114,12 +117,14 @@ fn app(
 
 async fn record(
     State(state): State<MockState>,
+    version: Version,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let received = Received {
+        version,
         method,
         path_and_query: uri
             .path_and_query()

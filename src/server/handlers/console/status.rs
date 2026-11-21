@@ -8,7 +8,7 @@ use axum::response::Response;
 use serde_json::{Value, json};
 
 use super::live;
-use crate::config::view;
+use crate::config::{SetFields, view};
 use crate::server::{AppState, Snapshot};
 
 pub async fn status(
@@ -20,6 +20,8 @@ pub async fn status(
         .registry
         .backends()
         .map(|backend| {
+            // The keys the backend wrote; a preset's are named by `emulate`.
+            let own = snapshot.config.backends.get(&backend.name);
             json!({
                 "name": backend.name,
                 "kind": backend.kind,
@@ -27,11 +29,10 @@ pub async fn status(
                 "credential": backend.credential.status(),
                 "header_command": backend.header_command.as_ref().map(|command| command.status()),
                 "drop_fields": backend.drop_fields,
-                "set_fields": backend.set_fields.paths(),
-                "drop_headers": snapshot
-                    .config
-                    .backends
-                    .get(&backend.name)
+                "set_fields": own
+                    .map(|config| SetFields::new(&config.set_fields).paths())
+                    .unwrap_or_default(),
+                "drop_headers": own
                     .map(|config| config.drop_headers.clone())
                     .unwrap_or_default(),
                 "anthropic_beta": backend.anthropic_beta,

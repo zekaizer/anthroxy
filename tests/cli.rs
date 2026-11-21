@@ -238,6 +238,86 @@ fn check_names_a_backends_header_command() {
 }
 
 #[test]
+fn check_and_models_show_the_preset_in_effect() {
+    use support::config_dir::ConfigDir;
+    use support::openai::config_with_openai_backend;
+
+    let preset = "[variables]\nversion = \"1.19.6\"\nos = \"linux\"\n\n[headers]\nuser-agent = \"client/{version} ({os})\"\n";
+    let stats = tempfile::tempdir().unwrap();
+    let emulating = |backend: &str, other: &str| {
+        let text = config_with_openai_backend("http://127.0.0.1:1", other).replace(
+            "kind = \"openai\"",
+            &format!("kind = \"openai\"\n{backend}"),
+        );
+        ConfigDir::new(
+            &with_stats_in(stats.path(), text),
+            &[("client", preset), ("plain", "")],
+        )
+    };
+
+    let dir = emulating(
+        "emulate = \"client\"",
+        "emulate = { preset = \"client\", version = \"1.20.0\" }",
+    );
+    let path = dir.config();
+    for probe in [&["--no-probe"][..], &["--timeout", "2s"][..]] {
+        bin()
+            .args(["--config", path.to_str().unwrap(), "check"])
+            .args(probe)
+            .assert()
+            .stdout(predicate::str::contains(
+                "       emulate: client (os = linux, version = 1.19.6)\n",
+            ))
+            .stdout(
+                predicate::str::is_match(
+                    r"qwen +mock +qwen-32b +Qwen +claude-haiku-4-5 +client \(os = linux, version = 1\.19\.6\)\n",
+                )
+                .unwrap(),
+            )
+            .stdout(
+                predicate::str::is_match(
+                    r"other +mock +other +other +- +client \(os = linux, version = 1\.20\.0\)\n",
+                )
+                .unwrap(),
+            );
+    }
+    bin()
+        .args(["--config", path.to_str().unwrap(), "models"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"aliases +emulate\n").unwrap())
+        .stdout(predicate::str::contains(
+            "client (os = linux, version = 1.20.0)",
+        ));
+
+    let dir = emulating("", "emulate = \"plain\"");
+    bin()
+        .args([
+            "--config",
+            dir.config().to_str().unwrap(),
+            "check",
+            "--no-probe",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("       emulate:").not())
+        .stdout(
+            predicate::str::is_match(r"qwen +mock +qwen-32b +Qwen +claude-haiku-4-5 +-\n").unwrap(),
+        )
+        .stdout(predicate::str::is_match(r"other +mock +other +other +- +plain\n").unwrap());
+
+    let dir = emulating("", "");
+    for command in [&["check", "--no-probe"][..], &["models"][..]] {
+        bin()
+            .args(["--config", dir.config().to_str().unwrap()])
+            .args(command)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("emulate").not());
+    }
+}
+
+#[test]
 fn check_reports_an_unreadable_ca_certificate() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(

@@ -1,5 +1,8 @@
 //! `{header:<name>}` in a value a backend is sent: read off the client's
-//! request each time (ADR-0019).
+//! request each time (ADR-0019). A preset's values also take `{<variable>}`,
+//! replaced once when the preset is bound (ADR-0022).
+
+use std::collections::BTreeMap;
 
 use http::{HeaderMap, HeaderName};
 
@@ -82,6 +85,124 @@ impl Template {
             }
         }
         Some(out)
+    }
+}
+
+/// A value as a preset writes it: literal text, `{header:<name>}` and
+/// `{<variable>}`. Only a preset has this form; a backend's own values go
+/// through [`Template::parse`], where `{name}` stays literal text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetValue(Vec<PresetPart>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PresetPart {
+    Text(String),
+    Header(HeaderName),
+    /// Written `{name}`; a name passes [`is_variable_name`].
+    Variable(String),
+}
+
+/// Letters, digits and `_`, at least one.
+pub fn is_variable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+impl PresetValue {
+    /// `{header:` placeholders under [`Template::parse`]'s rules; in the text
+    /// between them every `{name}` is a variable, and any other brace is
+    /// text.
+    pub fn parse(text: &str) -> Result<Self, TemplateError> {
+        let mut parts = Vec::new();
+        for part in Template::parse(text)?.0 {
+            match part {
+                Part::Header(name) => parts.push(PresetPart::Header(name)),
+                Part::Text(text) => variables_in(&text, &mut parts),
+            }
+        }
+        Ok(Self(parts))
+    }
+
+    /// Every variable `text` names, once for each time it does, whether or
+    /// not [`Self::parse`] takes `text`: for a value it takes, these are its
+    /// [`Self::variables`].
+    pub fn named_in(text: &str) -> Vec<String> {
+        let mut parts = Vec::new();
+        variables_in(text, &mut parts);
+        parts
+            .into_iter()
+            .filter_map(|part| match part {
+                PresetPart::Variable(name) => Some(name),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether the value depends on the request, and so may be left out.
+    pub fn reads_client(&self) -> bool {
+        self.0
+            .iter()
+            .any(|part| matches!(part, PresetPart::Header(_)))
+    }
+
+    /// Every variable the value names, once for each time it does.
+    pub fn variables(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().filter_map(|part| match part {
+            PresetPart::Variable(name) => Some(name.as_str()),
+            _ => None,
+        })
+    }
+
+    /// The value with every variable replaced by its value in `values`, as
+    /// text: what a variable holds is never read for placeholders. Assumes
+    /// `values` has every one of [`Self::variables`].
+    pub fn bind(&self, values: &BTreeMap<String, String>) -> Template {
+        fn text(parts: &mut Vec<Part>, more: &str) {
+            match parts.last_mut() {
+                Some(Part::Text(text)) => text.push_str(more),
+                _ if more.is_empty() => {}
+                _ => parts.push(Part::Text(more.to_owned())),
+            }
+        }
+        let mut parts = Vec::new();
+        for part in &self.0 {
+            match part {
+                PresetPart::Text(literal) => text(&mut parts, literal),
+                PresetPart::Variable(name) => text(&mut parts, &values[name]),
+                PresetPart::Header(name) => parts.push(Part::Header(name.clone())),
+            }
+        }
+        Template(parts)
+    }
+}
+
+/// `text` cut at its `{name}` variables.
+fn variables_in(text: &str, parts: &mut Vec<PresetPart>) {
+    let mut literal = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let name = after.find('}').map(|close| &after[..close]);
+        match name.filter(|name| is_variable_name(name)) {
+            Some(name) => {
+                literal.push_str(&rest[..open]);
+                if !literal.is_empty() {
+                    parts.push(PresetPart::Text(std::mem::take(&mut literal)));
+                }
+                parts.push(PresetPart::Variable(name.to_owned()));
+                rest = &after[name.len() + 1..];
+            }
+            None => {
+                literal.push_str(&rest[..=open]);
+                rest = after;
+            }
+        }
+    }
+    literal.push_str(rest);
+    if !literal.is_empty() {
+        parts.push(PresetPart::Text(literal));
     }
 }
 
@@ -222,5 +343,106 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    fn bound(text: &str, values: &[(&str, &str)]) -> Template {
+        let values = values
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        PresetValue::parse(text).unwrap().bind(&values)
+    }
+
+    #[test]
+    fn a_preset_value_takes_variables_beside_client_headers() {
+        let value =
+            PresetValue::parse("opencode/{version} ({os}; {header:x-app}) {version}").unwrap();
+        assert_eq!(
+            value.variables().collect::<Vec<_>>(),
+            ["version", "os", "version"]
+        );
+        assert!(value.reads_client());
+        let template = value.bind(
+            &[("version", "1.19.6"), ("os", "linux")]
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .into(),
+        );
+        assert_eq!(
+            template.render(&client(&[("x-app", "cli")])).as_deref(),
+            Some("opencode/1.19.6 (linux; cli) 1.19.6")
+        );
+        assert!(!PresetValue::parse("{version}").unwrap().reads_client());
+    }
+
+    #[test]
+    fn the_variables_of_a_text_are_those_of_the_value_it_parses_to() {
+        for text in [
+            "opencode/{version} ({os}; {header:x-app}) {version}",
+            "{a}{header:x-b}{{c}} {d",
+            "{header:x-a}",
+            "",
+        ] {
+            let value = PresetValue::parse(text).unwrap();
+            assert_eq!(
+                PresetValue::named_in(text),
+                value.variables().collect::<Vec<_>>(),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            PresetValue::named_in("{nope} {header:x session} {v}"),
+            ["nope", "v"],
+            "a placeholder that names no header hides none"
+        );
+        assert_eq!(PresetValue::named_in("{header:{v}"), ["v"]);
+    }
+
+    #[test]
+    fn a_bound_value_is_the_template_its_text_would_parse_to() {
+        assert_eq!(
+            bound("a-{v}-{header:x-app}{v}", &[("v", "1")]),
+            Template::parse("a-1-{header:x-app}1").unwrap()
+        );
+        assert_eq!(bound("{v}", &[("v", "")]), Template::parse("").unwrap());
+    }
+
+    #[test]
+    fn what_a_variable_holds_is_text() {
+        let template = bound("{v}", &[("v", "{header:x-app} {v}")]);
+        assert!(!template.reads_client());
+        assert_eq!(
+            template.render(&client(&[("x-app", "cli")])).as_deref(),
+            Some("{header:x-app} {v}")
+        );
+    }
+
+    #[test]
+    fn a_brace_that_is_not_a_name_is_text_in_a_preset_value_too() {
+        for text in [
+            "{{ messages }}",
+            "{\"a\":1}",
+            "{}",
+            "{a-b}",
+            "{a b}",
+            "{open",
+            "close}",
+            "{한}",
+        ] {
+            let value = PresetValue::parse(text).unwrap();
+            assert_eq!(value.variables().count(), 0, "{text}");
+            assert_eq!(
+                value
+                    .bind(&BTreeMap::new())
+                    .render(&HeaderMap::new())
+                    .as_deref(),
+                Some(text)
+            );
+        }
+        let value = PresetValue::parse("{{v}} {a{v}").unwrap();
+        assert_eq!(value.variables().collect::<Vec<_>>(), ["v", "v"]);
+        assert_eq!(
+            PresetValue::parse("{v}{header:x session}"),
+            Err(TemplateError::NotAHeaderName("x session".into()))
+        );
     }
 }

@@ -1,18 +1,28 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
 use crate::config::view::REDACTED;
-use crate::config::{BackendConfig, BackendKind, CredentialConfig, UpstreamConfig};
+use crate::config::{
+    BackendConfig, BackendKind, CredentialConfig, EmulateConfig, PresetLibrary, UpstreamConfig,
+};
 use crate::upstream::{DropReason, dropped_headers};
+
+/// The backend `config` describes, with the dialect of a request no route
+/// makes.
+pub(super) fn built(name: &str, config: &BackendConfig) -> Backend {
+    let dialect = Dialect::new(config, None, &PresetLibrary::default());
+    Backend::from_config(name, config, Arc::new(dialect)).unwrap()
+}
 
 fn backend(beta: &[&str], headers: &[(&str, &str)]) -> Backend {
     backend_of_kind(BackendKind::Anthropic, beta, headers)
 }
 
 fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -> Backend {
-    Backend::from_config(
+    built(
         "b",
         &BackendConfig {
             kind,
@@ -31,13 +41,13 @@ fn backend_of_kind(kind: BackendKind, beta: &[&str], headers: &[(&str, &str)]) -
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     )
-    .unwrap()
 }
 
 fn backend_with_drops(drops: &[&str]) -> Backend {
-    Backend::from_config(
+    built(
         "b",
         &BackendConfig {
             kind: BackendKind::Anthropic,
@@ -53,13 +63,13 @@ fn backend_with_drops(drops: &[&str]) -> Backend {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     )
-    .unwrap()
 }
 
 fn backend_forcing(headers: &[(&str, &str)], drops: &[&str]) -> Backend {
-    Backend::from_config(
+    built(
         "b",
         &BackendConfig {
             kind: BackendKind::Anthropic,
@@ -78,9 +88,9 @@ fn backend_forcing(headers: &[(&str, &str)], drops: &[&str]) -> Backend {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
     )
-    .unwrap()
 }
 
 fn client_headers() -> HeaderMap {
@@ -113,7 +123,7 @@ fn client_headers() -> HeaderMap {
 
 #[test]
 fn upstream_headers_drop_hop_by_hop_and_client_auth() {
-    let out = upstream_headers(&client_headers(), &backend(&[], &[]));
+    let out = upstream_headers(&client_headers(), backend(&[], &[]).target());
     for dropped in [
         "host",
         "content-length",
@@ -145,7 +155,7 @@ fn upstream_headers_drop_hop_by_hop_and_client_auth() {
 fn passthrough_keeps_the_client_authorization() {
     let out = upstream_headers(
         &client_headers(),
-        &backend_of_kind(BackendKind::Passthrough, &[], &[]),
+        backend_of_kind(BackendKind::Passthrough, &[], &[]).target(),
     );
     assert_eq!(out["authorization"], "Bearer client-token");
     assert_eq!(out["x-api-key"], "client-token");
@@ -155,13 +165,13 @@ fn passthrough_keeps_the_client_authorization() {
 #[test]
 fn a_forwarded_client_credential_is_recorded_as_a_secret() {
     let backend = backend_of_kind(BackendKind::Passthrough, &[], &[]);
-    let headers = upstream_headers(&client_headers(), &backend);
-    let sent = sent_headers(&backend, &headers, None, 0, SecretView::Redacted);
+    let headers = upstream_headers(&client_headers(), backend.target());
+    let sent = sent_headers(backend.target(), &headers, None, 0, SecretView::Redacted);
     for name in ["authorization", "x-api-key"] {
         let header = sent.iter().find(|h| h.name == name).unwrap();
         assert_eq!(header.value, REDACTED, "{name}");
     }
-    let masked = sent_headers(&backend, &headers, None, 0, SecretView::Masked);
+    let masked = sent_headers(backend.target(), &headers, None, 0, SecretView::Masked);
     let auth = masked.iter().find(|h| h.name == "authorization").unwrap();
     assert!(!auth.value.contains("client-token"), "{}", auth.value);
 }
@@ -170,10 +180,11 @@ fn a_forwarded_client_credential_is_recorded_as_a_secret() {
 fn upstream_headers_apply_backend_overrides() {
     let out = upstream_headers(
         &client_headers(),
-        &backend(
+        backend(
             &[],
             &[("anthropic-version", "2024-01-01"), ("x-extra", "1")],
-        ),
+        )
+        .target(),
     );
     assert_eq!(
         out["anthropic-version"], "2024-01-01",
@@ -196,7 +207,7 @@ fn a_forced_header_reads_the_client_request_as_it_arrived() {
         ],
         &["@claude-code", "user-agent"],
     );
-    let out = upstream_headers(&client, &backend);
+    let out = upstream_headers(&client, backend.target());
     assert_eq!(out["x-session-id"], "cc-abc-123");
     assert!(out["x-session-id"].is_sensitive());
     assert_eq!(
@@ -215,7 +226,7 @@ fn a_forced_header_carries_a_value_outside_ascii_as_the_client_sent_it() {
         HeaderValue::from_bytes("홍길동".as_bytes()).unwrap(),
     );
     let backend = backend_forcing(&[("x-gateway-user", "{header:x-user-name}")], &[]);
-    let out = upstream_headers(&client, &backend);
+    let out = upstream_headers(&client, backend.target());
     assert_eq!(out["x-gateway-user"].as_bytes(), "홍길동".as_bytes());
 }
 
@@ -227,10 +238,10 @@ fn a_forced_header_with_nothing_to_read_is_not_sent_and_neither_is_the_client_s(
         &[("x-session-id", "{header:x-claude-code-session-id}")],
         &[],
     );
-    let out = upstream_headers(&client, &backend);
+    let out = upstream_headers(&client, backend.target());
     assert!(out.get("x-session-id").is_none(), "{out:?}");
 
-    let dropped = dropped_headers(&client, &backend);
+    let dropped = dropped_headers(&client, backend.target());
     let entry = dropped
         .iter()
         .find(|h| h.name == "x-session-id")
@@ -239,7 +250,7 @@ fn a_forced_header_with_nothing_to_read_is_not_sent_and_neither_is_the_client_s(
         (entry.value.as_str(), entry.reason),
         ("from-client", DropReason::Overridden)
     );
-    let sent = sent_headers(&backend, &out, None, 0, SecretView::Redacted);
+    let sent = sent_headers(backend.target(), &out, None, 0, SecretView::Redacted);
     assert!(sent.iter().all(|h| h.name != "x-session-id"), "{sent:?}");
 }
 
@@ -263,7 +274,7 @@ fn a_backend_shown_for_debugging_keeps_its_forced_header_values_out() {
 #[test]
 fn upstream_headers_drop_what_the_backend_named() {
     let backend = backend_with_drops(&["x-stainless-*", "User-Agent"]);
-    let out = upstream_headers(&client_headers(), &backend);
+    let out = upstream_headers(&client_headers(), backend.target());
     assert!(out.get("x-stainless-retry-count").is_none(), "{out:?}");
     assert!(
         out.get("user-agent").is_none(),
@@ -277,7 +288,7 @@ fn the_claude_code_preset_drops_what_claude_code_adds() {
     let mut client = client_headers();
     client.append("x-app", HeaderValue::from_static("cli"));
     client.append("x-claude-code-session-id", HeaderValue::from_static("s-1"));
-    let out = upstream_headers(&client, &backend_with_drops(&["@claude-code"]));
+    let out = upstream_headers(&client, backend_with_drops(&["@claude-code"]).target());
     for gone in [
         "x-stainless-retry-count",
         "x-app",
@@ -295,7 +306,7 @@ fn the_claude_code_preset_drops_what_claude_code_adds() {
 fn every_header_the_backend_does_not_see_says_why() {
     let mut client = client_headers();
     client.append("x-app", HeaderValue::from_static("cli"));
-    let backend = Backend::from_config(
+    let backend = built(
         "b",
         &BackendConfig {
             kind: BackendKind::OpenAi,
@@ -311,11 +322,11 @@ fn every_header_the_backend_does_not_see_says_why() {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
-    )
-    .unwrap();
+    );
 
-    let dropped = dropped_headers(&client, &backend);
+    let dropped = dropped_headers(&client, backend.target());
     let reason = |name: &str| {
         dropped
             .iter()
@@ -345,9 +356,10 @@ fn every_header_the_backend_does_not_see_says_why() {
     // Together the two reports are every header the client sent. A name the
     // backend forces is in the upstream map carrying the backend's value, so
     // it only counts as forwarded when the backend left it alone.
-    let sent = upstream_headers(&client, &backend);
+    let sent = upstream_headers(&client, backend.target());
     for name in client.keys() {
-        let forwarded = sent.contains_key(name) && !backend.headers.contains_key(name);
+        let forwarded =
+            sent.contains_key(name) && !backend.dialect.headers.forced.contains_key(name);
         assert!(
             forwarded || dropped.iter().any(|h| h.name == name.as_str()),
             "{name} is in neither report"
@@ -355,11 +367,84 @@ fn every_header_the_backend_does_not_see_says_why() {
     }
 }
 
+/// A `kind = "openai"` backend that emulates the preset `text` describes,
+/// with `values` for its variables.
+fn backend_emulating(text: &str, values: &[(&str, &str)]) -> Backend {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("client.toml"), text).unwrap();
+    let presets = PresetLibrary::with_dir(dir.path());
+    let config = BackendConfig {
+        kind: BackendKind::OpenAi,
+        url: "http://backend".into(),
+        models_path: BackendConfig::default_models_path(),
+        live_models: false,
+        credential: CredentialConfig::None,
+        headers: Default::default(),
+        anthropic_beta: Vec::new(),
+        drop_headers: Vec::new(),
+        drop_fields: Vec::new(),
+        set_fields: Default::default(),
+        mid_conversation_system: Default::default(),
+        proxy: None,
+        header_command: None,
+        emulate: Some(EmulateConfig {
+            preset: "client".into(),
+            values: values
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+        }),
+    };
+    let dialect = Dialect::new(&config, None, &presets);
+    Backend::from_config("b", &config, Arc::new(dialect)).unwrap()
+}
+
+#[test]
+fn a_preset_header_is_reported_as_a_forced_header() {
+    let backend = backend_emulating("[headers]\nuser-agent = \"client/1\"\n", &[]);
+
+    let client = client_headers();
+    let dropped = dropped_headers(&client, backend.target());
+    let overridden = dropped.iter().find(|h| h.name == "user-agent").unwrap();
+    assert_eq!(
+        (overridden.value.as_str(), overridden.reason),
+        ("claude-cli/2.0", DropReason::Overridden)
+    );
+    let headers = upstream_headers(&client, backend.target());
+    assert_eq!(headers["user-agent"], "client/1");
+    let sent = sent_headers(backend.target(), &headers, None, 0, SecretView::Redacted);
+    let shown = sent.iter().find(|h| h.name == "user-agent").unwrap();
+    assert_eq!(
+        (shown.value.as_str(), shown.source),
+        (REDACTED, HeaderSource::Backend)
+    );
+}
+
+#[test]
+fn a_backend_shown_for_debugging_keeps_its_preset_header_values_out() {
+    let backend = backend_emulating(
+        "[variables]\ntenant = \"default-tenant\"\nbuild = \"default-build\"\n\n[headers]\nx-client-api-key = \"llm_secret-value {tenant} {build}\"\n",
+        &[("tenant", "given-tenant")],
+    );
+    let shown = format!("{backend:?}");
+    for secret in [
+        "llm_secret-value",
+        "default-tenant",
+        "default-build",
+        "given-tenant",
+    ] {
+        assert!(!shown.contains(secret), "`{secret}` in {shown}");
+    }
+    for name in ["x-client-api-key", "client", "tenant", "build"] {
+        assert!(shown.contains(name), "`{name}` not in {shown}");
+    }
+}
+
 #[test]
 fn upstream_headers_merge_beta_flags_without_duplicates() {
     let out = upstream_headers(
         &client_headers(),
-        &backend(&["oauth-2025-04-20", "claude-code-20250219"], &[]),
+        backend(&["oauth-2025-04-20", "claude-code-20250219"], &[]).target(),
     );
     assert_eq!(
         out["anthropic-beta"],
@@ -368,7 +453,7 @@ fn upstream_headers_merge_beta_flags_without_duplicates() {
 
     let mut no_beta = client_headers();
     no_beta.remove("anthropic-beta");
-    let out = upstream_headers(&no_beta, &backend(&["oauth-2025-04-20"], &[]));
+    let out = upstream_headers(&no_beta, backend(&["oauth-2025-04-20"], &[]).target());
     assert_eq!(out["anthropic-beta"], "oauth-2025-04-20");
 }
 
@@ -376,7 +461,7 @@ fn upstream_headers_merge_beta_flags_without_duplicates() {
 fn upstream_headers_for_openai_backends_carry_no_anthropic_headers() {
     let out = upstream_headers(
         &client_headers(),
-        &backend_of_kind(BackendKind::OpenAi, &[], &[("x-extra", "1")]),
+        backend_of_kind(BackendKind::OpenAi, &[], &[("x-extra", "1")]).target(),
     );
     for dropped in ["anthropic-version", "anthropic-beta"] {
         assert!(!out.contains_key(dropped), "{dropped} should be dropped");
@@ -398,7 +483,7 @@ fn upstream_headers_merge_every_beta_header_the_client_sent() {
         "anthropic-beta",
         HeaderValue::from_static("context-1m-2025-08-07,claude-code-20250219"),
     );
-    let out = upstream_headers(&client, &backend(&["oauth-2025-04-20"], &[]));
+    let out = upstream_headers(&client, backend(&["oauth-2025-04-20"], &[]).target());
     assert_eq!(
         out.get_all("anthropic-beta").iter().count(),
         1,
@@ -520,6 +605,82 @@ async fn retry_policy_retries_connection_refused_but_not_timeouts() {
     assert_eq!(policy.on_transport_error(1, &closed), Decision::GiveUp);
 }
 
+/// The head of a request sent over `transport` to a backend that answers 200.
+async fn head_sent_over(transport: Transport) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = BackendConfig {
+        kind: BackendKind::Anthropic,
+        url: format!("http://{}", listener.local_addr().unwrap()),
+        models_path: BackendConfig::default_models_path(),
+        live_models: false,
+        credential: CredentialConfig::None,
+        headers: Default::default(),
+        anthropic_beta: Vec::new(),
+        drop_headers: Vec::new(),
+        drop_fields: Vec::new(),
+        set_fields: Default::default(),
+        mid_conversation_system: Default::default(),
+        proxy: None,
+        header_command: None,
+        emulate: None,
+    };
+    let dialect = Dialect {
+        emulation: None,
+        headers: HeaderRules {
+            transport,
+            ..Default::default()
+        },
+        body: Default::default(),
+    };
+    let backend = Backend::from_config("b", &config, Arc::new(dialect)).unwrap();
+    let served = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut buf = [0u8; 1024];
+        while !head.ends_with(b"\r\n\r\n") {
+            let read = socket.read(&mut buf).await.unwrap();
+            assert!(read > 0, "closed before the head ended");
+            head.extend_from_slice(&buf[..read]);
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        String::from_utf8(head).unwrap()
+    });
+    let client =
+        UpstreamClient::from_config(&UpstreamConfig::default(), &Default::default()).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-request-source", HeaderValue::from_static("cli"));
+    let sent = client
+        .send(UpstreamRequest {
+            target: backend.target(),
+            method: http::Method::GET,
+            path_and_query: "/v1/models",
+            headers,
+            body: bytes::Bytes::new(),
+            stream: false,
+            origin: Origin::default(),
+        })
+        .await;
+    assert!(sent.is_ok(), "{:?}", sent.err());
+    served.await.unwrap()
+}
+
+#[tokio::test]
+async fn a_request_is_sent_by_the_client_of_its_transport() {
+    let head = head_sent_over(Transport::default()).await;
+    assert!(head.contains("\r\nx-request-source: cli\r\n"), "{head}");
+    let head = head_sent_over(Transport {
+        http1_only: true,
+        title_case: true,
+    })
+    .await;
+    assert!(head.contains("\r\nX-Request-Source: cli\r\n"), "{head}");
+}
+
 #[test]
 fn ca_certificate_must_be_a_readable_pem_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -529,17 +690,17 @@ fn ca_certificate_must_be_a_readable_pem_file() {
     };
 
     let missing = dir.path().join("missing.pem");
-    let error =
-        http_client(&with(&missing), &Default::default()).expect_err("a missing file is an error");
+    let error = UpstreamClient::from_config(&with(&missing), &Default::default())
+        .expect_err("a missing file is an error");
     assert!(error.to_string().contains("missing.pem"), "{error}");
 
     let empty = dir.path().join("empty.pem");
     std::fs::write(&empty, "no certificate here\n").unwrap();
-    let error = http_client(&with(&empty), &Default::default())
+    let error = UpstreamClient::from_config(&with(&empty), &Default::default())
         .expect_err("a file without a certificate is an error");
     assert!(error.to_string().contains("empty.pem"), "{error}");
 
-    assert!(http_client(&UpstreamConfig::default(), &Default::default()).is_ok());
+    assert!(UpstreamClient::from_config(&UpstreamConfig::default(), &Default::default()).is_ok());
 }
 
 #[test]
@@ -567,7 +728,7 @@ fn the_backoff_has_a_ceiling() {
 
 #[test]
 fn the_logged_request_target_keeps_the_url_userinfo_out() {
-    let backend = Backend::from_config(
+    let backend = built(
         "gw",
         &BackendConfig {
             kind: BackendKind::Anthropic,
@@ -583,9 +744,9 @@ fn the_logged_request_target_keeps_the_url_userinfo_out() {
             mid_conversation_system: Default::default(),
             proxy: None,
             header_command: None,
+            emulate: None,
         },
-    )
-    .unwrap();
+    );
     assert_eq!(
         super::client::shown_target(&backend, "/v1/messages"),
         "https://<redacted>@gw.corp/v1/messages"
@@ -595,8 +756,8 @@ fn the_logged_request_target_keeps_the_url_userinfo_out() {
 #[test]
 fn a_forced_host_is_reported_as_the_backend_s_not_the_url_s() {
     let backend = backend(&[], &[("host", "gateway.example.corp")]);
-    let headers = upstream_headers(&client_headers(), &backend);
-    let sent = sent_headers(&backend, &headers, None, 0, SecretView::Masked);
+    let headers = upstream_headers(&client_headers(), backend.target());
+    let sent = sent_headers(backend.target(), &headers, None, 0, SecretView::Masked);
     let host = sent.iter().find(|h| h.name == "host").unwrap();
     // What went on the wire: the forced value, which the HTTP client keeps.
     assert_eq!(
@@ -604,4 +765,119 @@ fn a_forced_host_is_reported_as_the_backend_s_not_the_url_s() {
         ("gate…corp", HeaderSource::Backend)
     );
     assert_eq!(sent.iter().filter(|h| h.name == "host").count(), 1);
+}
+
+fn names(headers: &HeaderMap) -> Vec<&str> {
+    headers.keys().map(|name| name.as_str()).collect()
+}
+
+/// The headers a request to `url` with `headers` and a body of `body_len`
+/// bytes leaves with, once put in the order `listed`.
+fn arranged(listed: &[&'static str], url: &str, headers: &HeaderMap, body_len: usize) -> HeaderMap {
+    let order = HeaderOrder::new(
+        listed
+            .iter()
+            .map(|name| http::HeaderName::from_static(name))
+            .collect(),
+    );
+    let mut request = reqwest::Client::new()
+        .post(url)
+        .headers(headers.clone())
+        .body(vec![b'.'; body_len])
+        .build()
+        .unwrap();
+    order.arrange(&mut request);
+    request.headers().clone()
+}
+
+#[test]
+fn listed_headers_come_first_and_the_others_keep_their_order() {
+    let mut headers = HeaderMap::new();
+    for (name, value) in [
+        ("accept", "a"),
+        ("x-b", "1"),
+        ("content-type", "c"),
+        ("x-a", "2"),
+        ("authorization", "k"),
+    ] {
+        headers.append(name, HeaderValue::from_static(value));
+    }
+    headers.append("x-b", HeaderValue::from_static("3"));
+    let listed = ["authorization", "x-absent", "content-type", "x-b"];
+
+    let placed = arranged(&listed, "http://backend:8080", &headers, 12);
+    assert_eq!(
+        names(&placed),
+        [
+            "authorization",
+            "content-type",
+            "x-b",
+            "accept",
+            "x-a",
+            "host",
+            "content-length"
+        ],
+        "what the HTTP client adds follows, as it would write it"
+    );
+    let repeated: Vec<_> = placed.get_all("x-b").iter().collect();
+    assert_eq!(repeated, ["1", "3"], "every value of a name is kept");
+
+    let unchanged = arranged(&[], "http://backend:8080", &headers, 12);
+    assert_eq!(
+        names(&unchanged),
+        ["accept", "x-b", "content-type", "x-a", "authorization"],
+        "without an order the request is left to the HTTP client"
+    );
+}
+
+#[test]
+fn what_the_http_client_adds_stands_where_the_list_names_it() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-a", HeaderValue::from_static("1"));
+    let listed = ["x-a", "accept", "authorization"];
+
+    let placed = arranged(&listed, "http://user:pw@Backend:8080/v1", &headers, 0);
+    assert_eq!(names(&placed), ["x-a", "accept", "authorization", "host"]);
+    assert_eq!(placed["accept"], "*/*");
+    assert_eq!(placed["authorization"], "Basic dXNlcjpwdw==");
+    assert_eq!(placed["host"], "backend:8080", "as the URL is parsed");
+
+    headers.insert("accept", HeaderValue::from_static("text/plain"));
+    headers.insert("authorization", HeaderValue::from_static("Bearer k"));
+    let placed = arranged(&listed, "http://user:pw@backend/v1", &headers, 0);
+    assert_eq!(names(&placed), ["x-a", "accept", "authorization", "host"]);
+    assert_eq!(placed["accept"], "text/plain");
+    assert_eq!(
+        placed["authorization"], "Bearer k",
+        "the request's own value is the one sent"
+    );
+}
+
+#[test]
+fn host_and_content_length_stand_where_the_list_names_them() {
+    let mut headers = HeaderMap::new();
+    headers.insert("accept", HeaderValue::from_static("a"));
+    headers.insert("x-a", HeaderValue::from_static("1"));
+    let listed = ["content-length", "accept", "host"];
+
+    let placed = arranged(&listed, "https://backend:8443", &headers, 12);
+    assert_eq!(names(&placed), ["content-length", "accept", "host", "x-a"]);
+    assert_eq!(placed["content-length"], "12");
+    assert_eq!(placed["host"], "backend:8443");
+
+    let placed = arranged(&listed, "https://backend:443", &headers, 0);
+    assert_eq!(
+        names(&placed),
+        ["accept", "host", "x-a"],
+        "a request without a body has no content-length to place"
+    );
+    assert_eq!(placed["host"], "backend", "the default port is left off");
+
+    headers.insert("host", HeaderValue::from_static("gateway.example.corp"));
+    let placed = arranged(&listed, "http://backend", &headers, 0);
+    assert_eq!(names(&placed), ["accept", "host", "x-a"]);
+    assert_eq!(
+        placed["host"], "gateway.example.corp",
+        "a host the backend forces is the one placed"
+    );
 }

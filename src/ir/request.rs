@@ -27,6 +27,9 @@ pub struct Request {
 pub struct Message {
     pub role: Role,
     pub parts: Vec<Part>,
+    /// The text of the turn's reasoning blocks, in the order they came.
+    /// Assistant turns only; an encoder with no place for it drops it.
+    pub reasoning: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
